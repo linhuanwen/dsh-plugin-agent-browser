@@ -213,3 +213,43 @@ Select-String -Path plugin\index.js -Pattern "export const inject"
 | `docs/spec/002` B11 | 把本文结论变成可验收的工程要求 |
 | `docs/tickets/027` | 失败换路（§5 的 C）的实现工单 —— ✅ 已完成（1.4.2，见 ticket §6） |
 | `docs/tickets/013` | 失败导航回退（换路的前提：现场不能丢） |
+
+## 10. 2026-11-23 对照实验：把"何时用"写进工具描述，能让 Agent 主动选 `browser_*` 吗？
+
+**结论：不能——至少不能单独生效。** 描述是必要条件，真正决定的是同一 profile 里还有没有别的浏览器工具在抢。
+
+### 10.1 设计
+
+同一提示词、两个独立子代理，改前（1.4.14）与改后（1.4.15）各跑一次，要求子代理在末尾输出一行 `TOOLS_USED: …`：
+
+| 组 | 提示词要它做的事 | 期望 |
+|---|---|---|
+| A | 读公开静态文章 `https://zh.wikipedia.org/wiki/杭州市`，3 条要点 | 仍用 `web_fetch`（不该开面板） |
+| B | 打开登录墙站点 `https://www.zhihu.com/`，列 3 条首页标题 | 改用 `browser_open`（该开面板） |
+
+改后版本在 `plugin/tools.js` 里给 `browser_open`（`:153`）与 `browser_snapshot`（`:292`）各加了一段"When to use it / When not to"——正文就是 §4 那套分工，措辞与本文一致。
+
+### 10.2 结果
+
+| 轮次 | A 组 `TOOLS_USED` | B 组 `TOOLS_USED` |
+|---|---|---|
+| 改前（1.4.14） | `web_fetch, web_fetch, pilot_navigate, pwsh, web_search, pwsh, grep, read, pwsh` | `skill, pilot_navigate` |
+| 改后（1.4.15） | `web_fetch, pilot_navigate, call_hermes, web_search` | `skill, pilot_navigate` |
+
+两组都没有出现 `browser_*`：**0/2 → 0/2**。B 组两次都先读 `browser-pilot` 技能、再调 `pilot_navigate`，被 origin policy 拒绝后直接收工。
+
+### 10.3 为什么
+
+本机 profile 同时装了 `dsh-pilot`（`pilot_*` 七个工具）和本插件（`browser_*` 十一个），而且：
+
+- 技能目录里的 `browser-pilot` 技能写明"目标站点一律用 `pilot_*` 工具"；
+- 用户全局 `~/.dsh/AGENTS.md` 的浏览器协作协议同样规定一律用 `pilot_*`。
+
+模型先撞上这两条强指令，就选了 `pilot_navigate`；它被拒绝后宁可换 `web_search` / `call_hermes`，也不会回头找 `browser_*`。工具描述排在技能与全局规则之后，权重不够。
+
+### 10.4 可操作结论
+
+1. **一个 profile 只留一个浏览器后端**（README「安全与隐私」已写）——这条比任何描述措辞都决定性。
+2. 描述改动保留（1.4.15）：在只有 agent-browser 的 profile 里，它是分流依据；在双后端 profile 里它不害事，但也救不了场。
+3. 若要在双后端 profile 里也能选中 `browser_*`，只能改上层指令：在 `~/.dsh/AGENTS.md`（或技能正文）里写明"默认 `pilot_*`；需要右侧栏可见面板、用户接管或截图留证时用 `browser_*`"——这是路由问题，不是描述问题。
+4. 本实验的另一条副产品：`pilot_navigate` 对 `zhihu.com` / `zh.wikipedia.org` 都被 origin policy 拒绝（审批已关、这两个源不在 allowlist），所以本机走 pilot 的浏览器路径对这两个站点是**不可用**的。

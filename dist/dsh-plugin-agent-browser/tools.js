@@ -155,7 +155,12 @@ export function browserOpenTool(ctx, bridge, sites, options = {}) {
       'Open a URL in the visible browser panel beside the conversation and wait until it is loaded. '
       + 'Pass `path` instead of `url` to open an HTML file from the workspace (e.g. a prototype or a chart): '
       + 'it is served read-only over loopback from the session working directory. '
-      + 'Use this before any other browser tool. The panel is a real browser the user can watch and take over.',
+      + 'Use this before any other browser tool. The panel is a real browser the user can watch and take over. '
+      + 'When to use it: the page needs the user\'s own logged-in session (dashboard, orders, mail, member-only '
+      + 'content), needs JavaScript or clicking/typing/scrolling to reach the content, needs a file download, or '
+      + 'needs a screenshot as evidence. When not to: a public static article — `web_fetch` returns clean Markdown '
+      + 'in one call without opening the panel; find its URL with `web_search` first and come back here only if '
+      + 'that fails (403, login wall, empty JavaScript shell).',
     parameters: {
       type: 'object',
       properties: {
@@ -294,7 +299,9 @@ export function browserSnapshotTool(ctx, bridge, options = {}) {
       'Read the current page of the browser panel as a compact accessibility tree plus a screenshot, '
       + 'and number the things you can act on as [ref=e1], [ref=e2], … Pass those refs (or an iframe '
       + 'prefix like f1e2) to browser_click / browser_type / browser_press. Refs are only valid for '
-      + 'the snapshot that produced them; take a new snapshot after the page changes.',
+      + 'the snapshot that produced them; take a new snapshot after the page changes. '
+      + 'Use it once the panel already holds the page (opened by browser_open, or by the user); for a public '
+      + 'static page that `web_fetch` can read, that call is cheaper and needs no panel.',
     parameters: {
       type: 'object',
       properties: {
