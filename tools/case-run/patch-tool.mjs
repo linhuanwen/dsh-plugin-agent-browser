@@ -1,5 +1,5 @@
-// tmp/patch-tool.mjs — 只用于 H 案例：在 profile patch 末尾插入/删除 agent-browser-panel 配置块
-// 用法: node tmp/patch-tool.mjs set <file-with-yaml-body> | clear | check
+// tools/case-run/patch-tool.mjs — 只用于 H 案例：在 profile patch 末尾插入/删除 agent-browser-panel 配置块
+// 用法: node tools/case-run/patch-tool.mjs set <file-with-yaml-body> | clear | check
 import fs from 'node:fs';
 
 const P = 'C:/Users/林焕文/.dsh/cordis.patch.yml';

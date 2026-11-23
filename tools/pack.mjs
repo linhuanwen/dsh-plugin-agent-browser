@@ -9,7 +9,7 @@
  *
  * Do not switch the profile back to a link install: the loader caches a
  * package's resolved path in the main process, keyed by package name, so
- * link -> package needs a DSH restart (see reference/008-packaging.md §6).
+ * link -> package needs a DSH restart (see docs/cases/008-packaging.md §6).
  *
  * Copy list is deliberately explicit. `package.json`, `locale/`, `docs/`,
  * `icon.svg` and `README.md` are the packaged metadata and are not overwritten

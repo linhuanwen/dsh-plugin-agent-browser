@@ -79,7 +79,7 @@ function makeLogger(ctx) {
  * Hold the `browserUse` slot while this panel is the browser tool provider.
  *
  * The seam is a process-wide mutex, not a tool source (see
- * `docs/browser-use-contract.md`): claiming it is how two browser controllers
+ * `docs/design/browser-use-contract.md`): claiming it is how two browser controllers
  * avoid driving one page. Claiming is best-effort — if the seam is absent the
  * plugin must still work — and re-synced on every command so the
  * `claimBrowserUse` switch can be flipped live.

@@ -14,7 +14,7 @@
 | 操作系统 | Windows / macOS 桌面端均可（面板本身是 Electron webview，不依赖特定系统能力） |
 | 网络 | 通道只监听 `127.0.0.1`；页面访问走面板自己的网络栈（带你的登录态） |
 
-为什么桌面限定：面板必须挂在 DSH 的右侧栏里，用户才能看见过程、随时接管；而"看得见"和"能用登录态"这两件事都绑在 Electron 的 webview 与租约上。这个取舍记录在仓库的 `decisions/005-loopback-bridge-over-cdp.md`。
+为什么桌面限定：面板必须挂在 DSH 的右侧栏里，用户才能看见过程、随时接管；而"看得见"和"能用登录态"这两件事都绑在 Electron 的 webview 与租约上。这个取舍记录在仓库的 `docs/decisions/005-loopback-bridge-over-cdp.md`。
 
 ## 安装 / 升级 / 卸载
 
@@ -104,7 +104,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 
 - **标"即时"的字段**（前四个）改动后不用重启插件，下一条命令就按新值走（面板在被接管时也不会被打断）。
 - **标"改后重载"的字段**改动后插件会自动重载一次：桥重启、在飞命令失败、面板标签保留。不要频繁改这些字段。
-- 拒绝类策略（scheme / 扩展名 / 大小 / 会话名单 / eval 开关）统一在 `plugin/policy.js` 里判定，错误都带稳定 code（`scheme_rejected`、`download_rejected`、`eval_disabled`、`session_not_allowed` 等），见 `tickets/024-policy-guards.md`。
+- 拒绝类策略（scheme / 扩展名 / 大小 / 会话名单 / eval 开关）统一在 `plugin/policy.js` 里判定，错误都带稳定 code（`scheme_rejected`、`download_rejected`、`eval_disabled`、`session_not_allowed` 等），见 `docs/tickets/024-policy-guards.md`。
 
 ### 导航失败时的"同站候选"（`searchFallback`，默认关）
 
@@ -116,7 +116,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 - 计费：宿主 `dsh-web` 的搜索服务按次计费（DeepSeek 官方口径约 5 元 / 1000 次）。本机默认落 `deepseek-search-api`（计费档）；想走不按次计费但你自己的模型 token 的那档，需要在宿主 `dsh-web` 的配置里把 `searchProvider` 设成 `deepseek-official`。
 - 查询形式是 `<host> <路径关键词>`（实测该 provider 不认 `site:` 操作符）；站点太冷门搜不到同站结果时就不出现候选，这是正常降级。
 
-详见 `tickets/027-search-fallback-navigation.md` 与仓库内 `docs/web-tools-and-agent-browser.md`。
+详见 `docs/tickets/027-search-fallback-navigation.md` 与仓库内 `docs/design/web-tools-and-agent-browser.md`。
 
 ### 什么时候打开面板（`activation`）
 
@@ -142,7 +142,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 | 需要"当时页面长这样"的证据 | `browser_screenshot` / `browser_snapshot` | 截图落盘带 sha256，可作为报告附件 |
 | 打开失败、链接过期、站点下架 | 先用 `web_search` 找同站替代入口 | Agent 只给候选、不自动打开；也可以打开 `searchFallback` 让失败错误里直接附上同站候选（默认关，按次计费，见「配置」） |
 
-详细论证与计费警示见仓库内 `docs/web-tools-and-agent-browser.md`。
+详细论证与计费警示见仓库内 `docs/design/web-tools-and-agent-browser.md`。
 
 ## 十一个工具
 

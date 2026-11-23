@@ -8,14 +8,14 @@ import { dirname, join } from 'node:path'
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, '..')
 const readme = join(root, 'dist', 'dsh-plugin-agent-browser', 'README.md')
-const index = join(root, 'decisions', 'README.md')
+const index = join(root, 'docs', 'decisions', 'README.md')
 
 const cases = [
   ['tool row renamed', readme, (s) => s.replace('| `browser_press` |', '| `browser_presz` |')],
   ['config field removed', readme, (s) => s.replace('| `limits.snapshotMaxChars` |', '| `limits.snapshotMaxCharsX` |')],
   ['yaml default changed', readme, (s) => s.replace('requestTimeoutMs: 20000', 'requestTimeoutMs: 21000')],
   ['decisions ref dropped', index, (s) => s.replace('](008-auth-dynamic-port.md)', ')(008-auth-dynamic-port.md')],
-  ['b11 doc ref dropped', readme, (s) => s.replaceAll('docs/web-tools-and-agent-browser.md', 'docs/elsewhere.md')],
+  ['b11 doc ref dropped', readme, (s) => s.replaceAll('docs/design/web-tools-and-agent-browser.md', 'docs/elsewhere.md')],
 ]
 
 let failures = 0

@@ -62,7 +62,7 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 
 浏览器本身不缺，缺的是**给 Agent 用的那一层**：可寻址的元素（`ref`）、可回放的错误（13 个稳定错误码）、可交还的控制权（顶部那条接管按钮）。这三样才是这个插件的正文。
 
-判据、计费与边界讨论见 [`docs/web-tools-and-agent-browser.md`](docs/web-tools-and-agent-browser.md)。
+判据、计费与边界讨论见 [`docs/design/web-tools-and-agent-browser.md`](docs/design/web-tools-and-agent-browser.md)。
 
 ## 它能做什么
 
@@ -147,7 +147,7 @@ client 半 · 侧栏 tab / 四态徽章 / 三张工具卡片 / <webview>
 ```
 
 - **为什么要三层**：工具跑在宿主侧，才有文件与网络权限；`<webview>` 只能活在渲染器里；页面内的遍历与命中必须进页面执行。三层之间只有一条本机回环通道。
-- **为什么不用 CDP / Playwright**：桌面端已经把浏览器租约给了渲染器，再拉一个外部 Chrome 就不是"侧栏里那一个"。取舍见 [`decisions/005`](decisions/005-loopback-bridge-over-cdp.md)。
+- **为什么不用 CDP / Playwright**：桌面端已经把浏览器租约给了渲染器，再拉一个外部 Chrome 就不是"侧栏里那一个"。取舍见 [`docs/decisions/005`](docs/decisions/005-loopback-bridge-over-cdp.md)。
 - **为什么长轮询**：面板侧只能发起请求，宿主拿不到渲染器的主动推送。长轮询 + 队列是这个约束下最省事的一条路。
 
 ## 人机验证与接管
@@ -192,7 +192,7 @@ client 半 · 侧栏 tab / 四态徽章 / 三张工具卡片 / <webview>
 - **一个 profile 只能启用一个浏览器后端**。两套插件都注册 `browser_*` 工具，宿主会拒绝第二次注册；启用前先停掉另一个。
 - **DSH 窗口在后台或最小化时不绘制**，也不接收合成输入：点击会"没反应"、截图会超时。把窗口切到前台即可，这不是插件 bug。
 - **跨域 iframe 只能给占位**，里面的元素必须用坐标点；canvas 同理。
-- **验证墙可能漏报**。检测器按 URL / 标题 / DOM / 文案判断，真实 Cloudflare 挑战页有漏报记录（[`tickets/033`](tickets/033-challenge-detection-gap.md)）；上线按"检测可能不触发，请人工接管"使用。
+- **验证墙可能漏报**。检测器按 URL / 标题 / DOM / 文案判断，真实 Cloudflare 挑战页有漏报记录（[`docs/tickets/033`](docs/tickets/033-challenge-detection-gap.md)）；上线按"检测可能不触发，请人工接管"使用。
 - **`browser_download` 走宿主侧 `fetch`，不带页面 Cookie**：需要登录态才能下载的链接会拿到登录页而不是文件。
 - **`target=_blank` 的附件是黑洞**：点了既不导航也不落盘，附件一律用 `browser_download({ url })`。
 - **取消只保证"不再等、不再下发新命令"**，已经发到页面里的动作不会撤销。
@@ -200,19 +200,30 @@ client 半 · 侧栏 tab / 四态徽章 / 三张工具卡片 / <webview>
 
 更多已知问题与处置见[用户手册 · 故障排查](dist/dsh-plugin-agent-browser/README.md#故障排查)。
 
+## 仓库结构
+
+```
+plugin/         插件源码 —— 11 个工具、快照引擎、桥、守卫、注入脚本，以及 20 余个单测
+dist/           打包产物 —— 可安装的 tgz、装机版 README、cordis.patch.yml
+demo/           本地测试夹具 —— V2/V3/V4 直接跑的那几个文件
+tools/          工程工具 —— pack（打包）、check-docs（文档一致性）、testsite（本地测试站）、case-run（案例探针与夹具）
+docs/           全部文档 —— design / spec / decisions / cases / tickets / release / assets
+screenshots/    运行截图 —— 案例证据与复跑留档
+```
+
 ## 文档地图
 
 | 文档 | 内容 |
 |---|---|
 | [用户手册](dist/dsh-plugin-agent-browser/README.md) | 安装 / 升级 / 卸载、16 个配置字段、11 个工具、故障排查 |
-| [与内置联网工具的分工](docs/web-tools-and-agent-browser.md) | 三层能力对比、`search → fetch → open` 判据、计费风险 |
-| [为什么不复用官方浏览器工具](docs/browser-use-contract.md) | 48 行互斥锁、MCP provider、三条路线对比 |
-| [技术规格](spec/001-agent-browser-plugin-spec.md) | 工具契约、状态机、快照格式、安全边界 |
-| [官方对齐规格](spec/002-official-alignment-spec.md) | B1–B11 / M1–M5 / U1–U7 与版本线 1.1.0–1.4.3 |
-| [决策记录](decisions/README.md) | 9 篇：通道选型、为什么不用 CDP、动态端口与令牌…… |
-| [取证与验收](reference) | 探针结果、快照引擎、接管、打包、spec 审计、四套案例集 |
-| [ticket 列表](tickets) | 34 张，含失败模式与验收证据 |
-| [发布说明](docs/release-notes-1.4.md) | 1.4.3 产物、行为变化、未验证项、回滚 |
+| [与内置联网工具的分工](docs/design/web-tools-and-agent-browser.md) | 三层能力对比、`search → fetch → open` 判据、计费风险 |
+| [为什么不复用官方浏览器工具](docs/design/browser-use-contract.md) | 48 行互斥锁、MCP provider、三条路线对比 |
+| [技术规格](docs/spec/001-agent-browser-plugin-spec.md) | 工具契约、状态机、快照格式、安全边界 |
+| [官方对齐规格](docs/spec/002-official-alignment-spec.md) | B1–B11 / M1–M5 / U1–U7 与版本线 1.1.0–1.4.3 |
+| [决策记录](docs/decisions/README.md) | 9 篇：通道选型、为什么不用 CDP、动态端口与令牌…… |
+| [取证与验收](docs/cases) | 探针结果、快照引擎、接管、打包、spec 审计、四套案例集 |
+| [ticket 列表](docs/tickets) | 34 张，含失败模式与验收证据 |
+| [发布说明](docs/release/release-notes-1.4.md) | 1.4.3 产物、行为变化、未验证项、回滚 |
 | [工作区日志](PROGRESS.md) | 开发期进度、踩坑、下一步 |
 
 ## 开发

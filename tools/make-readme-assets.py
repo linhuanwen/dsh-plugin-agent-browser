@@ -1,6 +1,6 @@
 """Regenerate the two case screenshots used by the root README.
 
-Both sources are real captures kept in the repo (reference/shots/, screenshots/);
+Both sources are real captures kept in the repo (docs/cases/shots/, screenshots/);
 this script only crops and downscales them so the README stays light.
 
     python tools/make-readme-assets.py

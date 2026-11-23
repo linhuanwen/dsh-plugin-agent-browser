@@ -7,7 +7,7 @@
  * The classifier is pure, so the interesting cases (DNS, refused, reset,
  * certificate, timeout, offline) are pinned without a browser or a network. The
  * rollback itself lives in the renderer half and is exercised by the装机 checks
- * in `tickets/013-failed-navigation.md` §4 — a `<webview>` cannot be driven from
+ * in `docs/tickets/013-failed-navigation.md` §4 — a `<webview>` cannot be driven from
  * node.
  */
 import { test } from 'node:test'

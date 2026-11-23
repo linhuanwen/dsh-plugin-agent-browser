@@ -15,5 +15,6 @@ dist/dsh-plugin-agent-browser/*.tgz
 Thumbs.db
 *.log
 
-tmp/commit-msg.txt
-tmp/_msg.txt
+# 临时脚本/夹具/日志：不入库（稳定的夹具在 tools/case-run/fixtures/）
+tmp/
+

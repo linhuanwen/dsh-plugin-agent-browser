@@ -1,6 +1,6 @@
-// tmp/discovery-probe.mjs — 用 .credentials.yaml 里的 browser-session secret 自签一个合法 cookie，
+// tools/case-run/discovery-probe.mjs — 用 .credentials.yaml 里的 browser-session secret 自签一个合法 cookie，
 // 再打宿主的 /agent-browser/discovery，拿到桥端口与令牌（只用于本机 H 案例验收）。
-// 用法: node tmp/discovery-probe.mjs [hostPort]
+// 用法: node tools/case-run/discovery-probe.mjs [hostPort]
 import fs from 'node:fs';
 import { createHash, createHmac } from 'node:crypto';
 

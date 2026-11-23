@@ -10,9 +10,9 @@
  *   1. 用户 README 的「完整字段表」↔ plugin/index.js 的 Config 键（双向差集为空）
  *   2. 用户 README 的「十一个工具」表 ↔ plugin/tools.js 实际注册的工具名（双向差集为空）
  *   3. 用户 README 的配置示例 YAML ↔ plugin/config.js 的 DEFAULTS（结构与默认值一致）
- *   4. decisions/README.md 索引 ↔ decisions/NNN-*.md 文件（双向）
- *   5. 仓库 README 与用户 README 都引用 docs/web-tools-and-agent-browser.md（SPEC-002 B11 验收项）
- *   6. docs/browser-use-contract.md 里引用的仓库内 file:line 仍存在（行号超界即失败）
+ *   4. docs/decisions/README.md 索引 ↔ docs/decisions/NNN-*.md 文件（双向）
+ *   5. 仓库 README 与用户 README 都引用 docs/design/web-tools-and-agent-browser.md（SPEC-002 B11 验收项）
+ *   6. docs/design/browser-use-contract.md 里引用的仓库内 file:line 仍存在（行号超界即失败）
  *
  * 不做什么：不校验 asar 内部路径（那是宿主的代码，仓库里没有对应文件），只跳过并计数。
  */
@@ -252,9 +252,9 @@ function checkYaml() {
 // --- 4. decisions 索引 ------------------------------------------------------
 
 function checkDecisions() {
-  const dir = path.join(ROOT, 'decisions')
+  const dir = path.join(ROOT, 'docs', 'decisions')
   const files = fs.readdirSync(dir).filter((name) => /^\d{3}-.+\.md$/.test(name)).sort()
-  const index = read('decisions/README.md')
+  const index = read('docs/decisions/README.md')
   const listed = new Set()
   for (const match of index.matchAll(/\]\((\d{3}-[^)]+\.md)\)/g)) listed.add(match[1])
   const unindexed = files.filter((name) => !listed.has(name))
@@ -267,7 +267,7 @@ function checkDecisions() {
 // --- 5. B11 文档被两处引用 --------------------------------------------------
 
 function checkDocReferences() {
-  const target = 'docs/web-tools-and-agent-browser.md'
+  const target = 'docs/design/web-tools-and-agent-browser.md'
   const repo = read('README.md')
   const user = read('dist/dsh-plugin-agent-browser/README.md')
   if (!repo.includes(target)) fail(`仓库 README 没有引用 ${target}（SPEC-002 B11 验收项）`)
@@ -278,7 +278,7 @@ function checkDocReferences() {
 // --- 6. docs 里的 file:line 漂移 --------------------------------------------
 
 function checkLineReferences() {
-  const sources = ['docs/browser-use-contract.md', 'docs/official-docs-review.md']
+  const sources = ['docs/design/browser-use-contract.md', 'docs/design/official-docs-review.md']
   let checked = 0
   let skipped = 0
   for (const source of sources) {

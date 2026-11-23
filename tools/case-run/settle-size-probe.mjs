@@ -1,5 +1,5 @@
 // 桥回执尺寸探针：给 /settle 发不同大小的 JSON body，看 host 侧上限与响应形态。
-// 用法：node tmp/settle-size-probe.mjs [127.0.0.1:9515]
+// 用法：node tools/case-run/settle-size-probe.mjs [127.0.0.1:9515]
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
