@@ -178,7 +178,7 @@
 
 **G5 前置条件（2026-11-23 新增）**：装机环境必须先恢复到候选版本。当前 `~/.dsh/profiles/desktop` 的 `package.json` 里 `dsh-mobile-plugin` 依赖路径是乱码（`FZ-GITHUB銆丼KILL`），`pnpm install` 因此失败并摘掉了 `dsh-plugin-agent-browser`；同时 `dsh-plugin-panel-browser`（#33 CDP 项目）与它注册同名工具。签字前需要：① 修掉乱码依赖路径（或移出该依赖）；② 按 README「一个 profile 只启用一个浏览器后端」把 panel-browser 停用/卸载；③ 重装 `1.4.13` 并复核 `list_plugins` 与 `/health`（`tools: 11 / registered: 11 / conflicts: []`）；④ 复核 tgz sha256 仍为冻结点。装回后建议把 G3 的 G3.1 一步重跑一次当作装机冒烟。
 
-> 进度（2026-11-23 15:08）：①②③ 全部完成——`pnpm install` 恢复 14/14 依赖、1.4.13 已落盘、panel-browser 已移出 `dsh.profile.bundles`、重启后 `/health` = `11 / 11 / []`、G3.1 装机冒烟通过。只剩 ④（tgz sha256 已复核一致）与 G5.4 签字。上线报告见 `docs/launch-report-1.4.13.md`。
+> 进度（2026-11-23 15:12）：四项全部完成——`pnpm install` 恢复 14/14 依赖、1.4.13 已落盘、panel-browser 已移出 `dsh.profile.bundles`、重启后 `/health` = `11 / 11 / []`、G3.1 装机冒烟通过；tgz sha256 复核仍为冻结点。**G5.4 已由产品负责人签字（15:12 确认范围与已知限制）**，G5 全部通过，上线报告见 `docs/launch-report-1.4.13.md`（§9 含仓库与提交归档）。
 
 ## 4. 环境矩阵
 
