@@ -21,6 +21,9 @@ export const DEFAULTS = Object.freeze({
   fitWidth: true,
   evalEnabled: true,
   claimBrowserUse: true,
+  // 'auto' = add the routing paragraph only when another browser tool set is
+  // loaded; 'on' = always; 'off' = never. See `registerRoutingPrompt` in apply.js.
+  routing: 'auto',
 
   bridge: Object.freeze({
     // 0 = let the OS pick; a fixed port collides with a second DSH instance and
@@ -53,6 +56,12 @@ export const DEFAULTS = Object.freeze({
     maxBytes: 32 * 1024 * 1024,
   }),
 })
+
+/**
+ * The default for the `routing` field, exported on its own so the prompt code
+ * reads one name instead of reaching into the frozen DEFAULTS object.
+ */
+export const DEFAULT_ROUTING = DEFAULTS.routing
 
 /**
  * Read a value that may be either plain data (non-volatile field) or a volatile

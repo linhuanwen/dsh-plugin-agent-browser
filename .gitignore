@@ -5,11 +5,13 @@ node_modules/
 # 测试下载物（跑用例时重新生成；含体积较大的公网 PDF）
 downloads/
 
-# 构建产物中的历史 tgz：只保留三个发布候选（1.4.13 首发冻结 / 1.4.14 截图回执 / 1.4.15 工具描述）
+# 构建产物中的历史 tgz：只保留五个发布候选（1.4.13 首发冻结 / 1.4.14 截图回执 / 1.4.15 工具描述 / 1.4.16 默认路由 / 1.4.17 路由可观测）
 dist/dsh-plugin-agent-browser/*.tgz
 !dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.4.13.tgz
 !dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.4.14.tgz
 !dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.4.15.tgz
+!dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.4.16.tgz
+!dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.4.17.tgz
 
 # 系统与编辑器
 .DS_Store

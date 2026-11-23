@@ -253,3 +253,27 @@ Select-String -Path plugin\index.js -Pattern "export const inject"
 2. 描述改动保留（1.4.15）：在只有 agent-browser 的 profile 里，它是分流依据；在双后端 profile 里它不害事，但也救不了场。
 3. 若要在双后端 profile 里也能选中 `browser_*`，只能改上层指令：在 `~/.dsh/AGENTS.md`（或技能正文）里写明"默认 `pilot_*`；需要右侧栏可见面板、用户接管或截图留证时用 `browser_*`"——这是路由问题，不是描述问题。
 4. 本实验的另一条副产品：`pilot_navigate` 对 `zhihu.com` / `zh.wikipedia.org` 都被 origin policy 拒绝（审批已关、这两个源不在 allowlist），所以本机走 pilot 的浏览器路径对这两个站点是**不可用**的。
+
+### 10.5 插件侧默认开启 + 条件注入（1.4.16 / 1.4.17）
+
+§10.4 第 3 条说的是"要改上层指令"，但那要求用户去改全局规则。产品负责人选了另一条路：**把分流做进插件，默认开启、按条件注入**。
+
+- `routing` 配置三态：`auto`（默认）/ `on` / `off`。
+- `auto` = 只在**检测到另一套浏览器工具**时把段落加进系统提示词：每次组装时扫 `ctx.tools.definitions()`，看有没有 `pilot_` 前缀或面板版独有的 `browser_navigate` / `browser_act` / `browser_wait` / `browser_tabs` / `browser_close`。单后端 profile 因此保持零噪音。
+- 段落名 `agent-browser-routing`，order **3050**（`TOOL_COMPUTER_USE` 3000 与 `MCP_SERVERS` 3100 之间），每次组装重新求值，所以后加载的后端也看得见。
+- 正文（`ROUTING_TEXT`）只陈述自己的分工，不点名任何别的插件：需要用户的登录态 / 要 JS 或点击才出内容 / 要下载文件 / 要一张留作证据的截图 → 用 `browser_*`，`browser_open` 先开面板；公开静态文章走 `web_fetch` 更便宜。
+
+**"到底注进去了没有"必须可查**，否则只能拿子代理的工具选择当证据——那分不清"没注入"和"注入了但被无视"。1.4.17 起 `/health` 直接给：
+
+```json
+"routing": {
+  "mode": "auto",
+  "injected": true,
+  "order": 3050,
+  "competitors": ["pilot_navigate", "pilot_snapshot", "pilot_act", "pilot_wait", "pilot_screenshot", "pilot_close"]
+}
+```
+
+装机 1.4.17 后实测就是这一段：段落已注册、`injected: true`、竞争者就是 pilot 那六个工具。行为侧同时看到了变化——同一条 A 提示词（静态维基词条）在 1.4.16 之后出现了 `browser_open`（`web_fetch` 与 `pilot_navigate` 先后失败时），而 1.4.14/1.4.15 两轮里 `browser_*` 一次都没出现；但 B 提示词（知乎登录墙）仍先选 `pilot_navigate`。
+
+结论保持不变、只是更精确：段落是**必要条件**，不是充分条件。技能正文与 `AGENTS.md` 仍排在它前面，模型在冲突时会先服从"一律用 `pilot_*`"。要彻底改观只有两条：`~/.dsh/AGENTS.md` 补一句分流，或者这个 profile 只留一个后端。

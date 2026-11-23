@@ -15,13 +15,14 @@
 import { DEFAULT_ACTIVATION } from './activation.js'
 import { BRIDGE_MARK, BRIDGE_PREFIX, Bridge } from './bridge.js'
 import { normalizeConfig, readField } from './config.js'
+import { DEFAULT_ROUTING } from './config.js'
 import { ERROR_CODES, HARNESS_ERROR_BASE } from './errors.js'
 import { createPolicy } from './policy.js'
 import { StaticSites } from './static.js'
 import { createTools, guardsSource, snapshotSource } from './tools.js'
 
 /** Bumped whenever the host half changes, so a reload can be told apart from a cache. */
-export const HOST_REV = 32
+export const HOST_REV = 34
 
 /**
  * Tool names the host already has registered, from this plugin's point of view.
@@ -233,6 +234,135 @@ function registerDiscovery(ctx, bridge, log) {
   return () => {}
 }
 
+/** Name and slot of the one prompt section this plugin contributes. */
+export const ROUTING_SECTION = 'agent-browser-routing'
+
+/**
+ * Sorts after TOOL_COMPUTER_USE (3000) and before MCP_SERVERS (3100), so the
+ * paragraph sits with the other tool guidance instead of the harness facts.
+ */
+export const ROUTING_ORDER = 3050
+
+/**
+ * The routing paragraph.
+ *
+ * Deliberately factual: it says what this browser offers that the cheap read
+ * path does not (the user's own session, a visible page they can take over, a
+ * downloaded file, a screenshot on disk) and leaves the choice to the model.
+ * It never names another plugin — a profile that ships two browser backends is
+ * the operator's arrangement, not something this plugin should editorialise.
+ */
+export const ROUTING_TEXT = 'Browser panel: the `browser_*` tools drive the Electron browser in this session\'s '
+  + 'right sidebar, so the page stays visible to the user and they can take it over at any time. Reach for them '
+  + 'when the work needs the user\'s own logged-in session, JavaScript or clicking to reveal the content, a file '
+  + 'download, or a screenshot kept as evidence; `browser_open` opens the panel first. A public static article is '
+  + 'cheaper through `web_fetch`.'
+
+/** Tool names only a second browser backend registers (this plugin owns the rest). */
+const OTHER_BROWSER_TOOLS = new Set(['browser_navigate', 'browser_act', 'browser_wait', 'browser_tabs', 'browser_close'])
+
+/**
+ * Which other browser tool sets are loaded right now?
+ *
+ * `ctx.tools.definitions()` sees every registration, including ones that arrive
+ * after this plugin, so the check runs per assembly rather than once at apply.
+ * Returning the names (not a boolean) puts the evidence on `/health`: "the
+ * paragraph is on" and "because `pilot_navigate` is here" are different facts,
+ * and only the second one explains a profile that ignored the rule.
+ * @param {import('cordis').Context} ctx - plugin context.
+ * @returns {string[]} competing tool names, in registration order.
+ */
+function listOtherBrowser(ctx) {
+  const found = []
+  try {
+    const definitions = ctx?.tools?.definitions?.()
+    if (!Array.isArray(definitions)) return found
+    for (const definition of definitions) {
+      const name = definition?.name
+      if (typeof name !== 'string') continue
+      if (name.startsWith('pilot_') || OTHER_BROWSER_TOOLS.has(name)) found.push(name)
+    }
+  } catch {
+    // A host that cannot answer is treated as "no competitor": the paragraph is
+    // still correct, only less necessary.
+  }
+  return found
+}
+
+/**
+ * The decision behind this step's routing paragraph.
+ *
+ * `published` on the plugin's own state and mirrored to `/health`, so "is the
+ * rule in the prompt?" stops being a guess: the answer was previously inferred
+ * from a subagent's tool choice, which is exactly the kind of evidence that
+ * cannot distinguish "not injected" from "injected and ignored".
+ * @param {import('cordis').Context} ctx - plugin context.
+ * @param {object} [config] - the loader row's config; `routing` may be a reader.
+ * @returns {{ mode: string, injected: boolean, order: number, competitors: string[] }} state.
+ */
+export function routingState(ctx, config) {
+  const raw = String(readField(config?.routing, DEFAULT_ROUTING)).trim().toLowerCase()
+  const mode = raw === 'on' || raw === 'off' ? raw : 'auto'
+  const competitors = listOtherBrowser(ctx)
+  const injected = mode === 'on' || (mode === 'auto' && competitors.length > 0)
+  return { mode, injected, order: ROUTING_ORDER, competitors }
+}
+
+/**
+ * Register the routing paragraph as a system-prompt section.
+ *
+ * Why a prompt section and not just a tool description: descriptions lose to
+ * skill bodies and to the user's own AGENTS.md — measured in
+ * `docs/design/web-tools-and-agent-browser.md` §10, where a profile shipping
+ * `dsh-pilot` kept choosing `pilot_navigate` even after the descriptions were
+ * rewritten. A section is assembled for every step, above both.
+ *
+ * `routing: auto` (the default) contributes only when another browser backend
+ * is loaded; a profile with a single backend needs no rule. 'on' and 'off'
+ * override that. The provider runs per assembly, so it follows live changes.
+ * @param {import('cordis').Context} ctx - plugin context.
+ * @param {object} [config] - the loader row's config; `routing` may be a reader.
+ * @param {(message: string) => void} log - logger.
+ * @param {(state: object) => void} [publish] - receives each change of the decision.
+ * @returns {() => void} disposer; a no-op when the host has no prompt registry.
+ */
+function registerRoutingPrompt(ctx, config, log, publish = () => {}) {
+  const service = ctx?.systemPrompt ?? ctx?.get?.('systemPrompt')
+  if (service === undefined || service === null || typeof service.section !== 'function') {
+    log('no systemPrompt service: the routing paragraph is skipped')
+    return () => {}
+  }
+  let last = ''
+  // Publish only on change: the provider runs on every step, and a bridge note
+  // per step would drown the log the screenshots are debugged from.
+  const state = () => {
+    const current = routingState(ctx, config)
+    const key = `${current.mode}|${current.injected}|${current.competitors.join(',')}`
+    if (key !== last) {
+      last = key
+      try {
+        publish(current)
+      } catch {
+        // Diagnostics are best-effort: /health must never break a step.
+      }
+    }
+    return current
+  }
+  try {
+    const dispose = service.section({
+      name: ROUTING_SECTION,
+      order: ROUTING_ORDER,
+      text: () => (state().injected ? ROUTING_TEXT : ''),
+    })
+    state()
+    log(`routing paragraph registered (mode: ${state().mode})`)
+    return () => dispose?.()
+  } catch (error) {
+    log(`could not register the routing paragraph: ${error?.message ?? error}`)
+    return () => {}
+  }
+}
+
 /**
  * Wire the bridge, the workspace servers and every tool into one effect.
  *
@@ -359,6 +489,14 @@ export function applyAgentBrowser(ctx, config = {}, overrides = {}) {
     } else {
       log('this host has no ctx.tools.guard(); session policy only applies in the tool bodies')
     }
+    // Not a tool: registered even when some tool failed above, because this
+    // paragraph is what routes the model to the tools that did register. The
+    // decision (mode, injected, competitors) also goes out on `/health`, so
+    // "is the rule in the prompt?" is answerable from outside the model.
+    disposers.push(registerRoutingPrompt(ctx, config, log, (routing) => {
+      bridge.setDiagnostics?.({ routing })
+      bridge.note('routing paragraph', routing)
+    }))
     // The tool surface and any ownership clash go out on `/health`: a half-dead
     // plugin is otherwise indistinguishable from a working one from outside.
     bridge.setDiagnostics?.({

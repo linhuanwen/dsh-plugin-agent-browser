@@ -21,8 +21,8 @@ import { DEFAULTS } from './config.js'
 
 export const name = 'dsh-plugin-agent-browser'
 
-/** Tools and image attachments are the host services we need. */
-export const inject = ['tools', 'attachments']
+/** Tools, image attachments and the system-prompt registry are the host services we need. */
+export const inject = ['tools', 'attachments', 'systemPrompt']
 
 export const Config = z.object({
   // A plain string rather than an enum schema: an unknown value must not stop
@@ -48,6 +48,14 @@ export const Config = z.object({
   claimBrowserUse: z.boolean()
     .default(DEFAULTS.claimBrowserUse)
     .description('Hold the harness `browserUse` slot while this panel provides browser tools, so a second provider cannot drive the same page.')
+    .volatile(),
+  // Tool descriptions lose to skill bodies and to a user's AGENTS.md, which is
+  // exactly where a profile that also ships `dsh-pilot` points browser work.
+  // A system-prompt section is assembled for every step and outranks both, so
+  // this is where the routing rule has to live (TICKET-035).
+  routing: z.string()
+    .default(DEFAULTS.routing)
+    .description('Add a routing paragraph to the agent system prompt: auto (only when another browser tool set is loaded), on, or off.')
     .volatile(),
 
   bridge: z.object({
