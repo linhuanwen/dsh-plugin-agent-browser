@@ -348,5 +348,5 @@ S3/S4/S6 的原始结论锚在 1.4.3，1.4.9–1.4.12 动过 policy 与 guards�
 2. **S3 恢复态**：清空配置后 `browser_eval 1+1` → `2`、`.dat` 照常落盘（`downloads/probe.dat`，392 B，sha256 `bff4860b3f0b7fbc81b32ea5cd64b3d06fc0f6e102bc00a0cafab44cc6fb09c9`），确认策略可回退。
 3. **S4 的名单匹配**：必须写当前会话 id（`session-e32e610d-cec7-44b8-98bd-d8d7bc6b9551`）；从桥 `/health` 的 `states[].id` 或最新 `session.v4.jsonl.zstd` 的目录名都能取到，别照抄旧文档里的 `session-bb049fec-…`。
 4. **S6 第三个故障**：这台机器 DNS 被劫持，`*.invalid` / `*.test` 都解析成功后被重置，只能拿到 `nav_dns` 的兄弟码 `nav_reset`；`nav_dns` 由 `plugin/test/navigation.test.mjs:31` 单测覆盖。三码三处置的判定不受影响（处置动作同为"接受回退、确认页面还在"）。
-5. **重载窗口比 1.4.3 更快**：`set_plugin false→true` 返回后立刻 `browser_open` 即成功（<1 s），本轮没有撞出 3 s 窗口内的 `bridge_timeout`；能复现的 `bridge_timeout` 只剩"大图回执丢失"那条（`tickets/034`）。
+5. **重载窗口比 1.4.3 更快**：`set_plugin false→true` 返回后立刻 `browser_open` 即成功（<1 s），本轮没有撞出 3 s 窗口内的 `bridge_timeout`；能复现的 `bridge_timeout` 只剩"大图回执丢失"那条（`tickets/034`；根因是 4 MiB 请求体上限，源码已修，待 1.4.14 复验）。
 

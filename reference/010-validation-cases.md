@@ -39,7 +39,7 @@
 | V5 | ✅ | 面板宽 767 px，放大按钮 `BMap_button_new BMap_stdMpZoomIn` 中心 **CSS (734,710)**；`browser_click({x:734,y:710})` → 比例尺 `5 公里 → 2 公里`、`@…,12z → @…,13z` |
 | V9 | ✅ | `file://` → `scheme_rejected`；`{path:'../outside.txt'}` → `path_escape: … outside the workspace`；`http://127.0.0.1:9522/`（DSH 自身）→ `navigation_failed: nav_aborted: … (ERR_FAILED)` 且面板回到原页（桥日志 `c13` 有 `navigation failed; going back`） |
 | V12 | ✅ | 端到端复现，见下 |
-| V10 | ❌ 新缺陷 | OpenTopoMap 截图挂死，见「坑 5」与 `tickets/034` |
+| V10 | ❌ 新缺陷 | OpenTopoMap 截图挂死，见「坑 5」与 `tickets/034`（根因已定位并修复于源码，待 1.4.14 复验） |
 
 V12 这次的三处变化值得记：① `browser_type({submit:true})` 现在**真的会重定位**（eval 得 `title: 杭州市 - 百度地图`、`href: …/search/杭州市/@13382475,3514398,12z`）——1.0.19 记录里的"Enter 只改 URL 不飞"陷阱不再复现；② `browser_hover({selector:'#mapType'})` 返回 `The layout changed under the pointer — something expanded.`，提示层已经会报"指针下布局变了"；③ 截图 `screenshots/v12-baidu-earth-hangzhou-1.4.13.png`，**2,079,549 B**，sha256 `fa366f132afbf178a9ca36559103e08f644bf36f706046d5f16bc1470cda2096`，1151×1294。识别命中 16 个标注类地物（良渚古城遗址公园、良渚文化村、兰里景区、东明山森林公园、杭州半山国家森林公园、京杭大运河杭州景区、西溪国家湿地公园、五常湿地公园、西湖风景区、午潮山国家森林公园、铜鉴湖公园、灵山景区、湘湖国家旅游度假区、新沙岛景区、麦田CBD、杭州南站、萧山站）+ 5 个行政区（拱墅 / 西湖 / 上城 / 滨江 / 萧山）+ 影像判读（西南午潮山—灵山深绿林斑与山体影、钱塘江自西南向东北的宽灰白水面、城区灰白高密度建成区与黄色路网、北部平原细碎绿斑）。弹层「下载百度地图 领100元券」占右上角，未影响点击。
 
@@ -61,7 +61,7 @@ capture done {sent:1151, chars:4239798}      ← +197 ms 就完成
 （之后无任何回执，客户端等到 60 s 超时）
 ```
 
-对照成功样本：`demo` 62,358 chars、百度地图 2,772,754 chars 都秒回；这次 **4,239,798 chars（约 4 MB）** 卡在回执/传输上。与坑 1（`css:0` 取图失败）**不是同一个 bug**：这次是取图成功、回执丢失，且错误停留 60 s 而不是 ~650 ms 放弃。处置：该站不截图，改用快照；登记 `tickets/034`。
+对照成功样本：`demo` 62,358 chars、百度地图 2,772,754 chars 都秒回；这次 **4,239,798 chars（约 4 MB）** 卡住。与坑 1（`css:0` 取图失败）**不是同一个 bug**：这次是取图成功、回执被拒。**根因已定位（`tickets/034`）**：回执走 `POST /settle`，body 是 `JSON.stringify({id, ok, result:{dataUrl}})`（4,239,848 B），而 `plugin/bridge.js` 的 `readJson` 有一条硬编码的 4 MiB（4,194,304 B）上限，超了直接 `throw new Error('body too large')` → 兜底 500、面板 settle 失败、命令永不 settle，工具才等满 60 s。阈值已用 `tmp/settle-size-probe.mjs` 打点确认：body 4,194,050 → 200，4,239,848 → 500 `body too large`。**源码已修**（上限提到 32 MiB + 413 `budget_exceeded` + 客户端 24 MiB 预检与降级重投），待 1.4.14 装机后实地复验；本版规避：该站不截图，改用快照。
 
 ---
 

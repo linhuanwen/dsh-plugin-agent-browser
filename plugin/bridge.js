@@ -34,6 +34,16 @@ export const DEFAULT_TIMEOUT_MS = 20_000
 export const TOKEN_HEADERS = 'authorization, x-agent-browser-token'
 /** Query parameter accepted on safe methods, where a header would force a preflight. */
 export const TOKEN_QUERY = 'token'
+/**
+ * Largest JSON body the panel may post back.
+ *
+ * A screenshot comes back as a base64 data URL, so the size is the picture, not
+ * a command: a busy map tile page reaches ~4.2 M characters, and a stitched tall
+ * page can be several times that. The old 4 MiB cap was under the first real
+ * case (TICKET-034: the reply was refused, the panel's settle never landed, and
+ * the tool sat out its whole 60 s budget before reporting `bridge_timeout`).
+ */
+export const MAX_BODY_BYTES = 32 * 1024 * 1024
 
 /** Phases a session can be in. `idle` is derived, the other three are stored. */
 export const PHASES = ['idle', 'agent', 'taken_over', 'needs_human']
@@ -633,7 +643,9 @@ export class Bridge {
     }
 
     if (route === '/log' && req.method === 'POST') {
-      const body = await readJson(req)
+      const read = await readJsonOrRefuse(req, res)
+      if (!read.ok) return
+      const body = read.body
       const message = typeof body?.message === 'string' ? body.message : '(no message)'
       const entry = { at: Date.now(), message, data: body?.data ?? null }
       this.#logs.push(entry)
@@ -682,7 +694,9 @@ export class Bridge {
     // The panel is the only writer: only it knows what the user just clicked and
     // what the page looks like now.
     if (route === '/phase' && req.method === 'POST') {
-      const body = await readJson(req)
+      const read = await readJsonOrRefuse(req, res)
+      if (!read.ok) return
+      const body = read.body
       const who = typeof body?.session === 'string' ? body.session : ''
       if (who === '') {
         send(res, 400, { ok: false, mark: BRIDGE_MARK, error: 'session is required' })
@@ -720,7 +734,9 @@ export class Bridge {
     }
 
     if (route === '/settle' && req.method === 'POST') {
-      const body = await readJson(req)
+      const read = await readJsonOrRefuse(req, res)
+      if (!read.ok) return
+      const body = read.body
       const id = typeof body?.id === 'string' ? body.id : ''
       const entry = this.#waiting.get(id)
       if (entry === undefined) {
@@ -817,13 +833,22 @@ function send(res, status, payload) {
   res.end(body)
 }
 
-/** Read a small JSON body. */
+/** A request body over `MAX_BODY_BYTES`; answered with a readable refusal, not a broken socket. */
+class BodyTooLarge extends Error {
+  /** @param {number} size - how much arrived before the cap was hit. */
+  constructor(size) {
+    super(`the reply was ${size} bytes, over the ${MAX_BODY_BYTES}-byte bridge limit`)
+    this.name = 'BodyTooLarge'
+  }
+}
+
+/** Read a JSON body. */
 async function readJson(req) {
   const chunks = []
   let size = 0
   for await (const chunk of req) {
     size += chunk.length
-    if (size > 4 * 1024 * 1024) throw new Error('body too large')
+    if (size > MAX_BODY_BYTES) throw new BodyTooLarge(size)
     chunks.push(chunk)
   }
   if (chunks.length === 0) return null
@@ -831,6 +856,35 @@ async function readJson(req) {
     return JSON.parse(Buffer.concat(chunks).toString('utf8'))
   } catch {
     return null
+  }
+}
+
+/**
+ * Read a JSON body, answering with `413` when it is over the cap.
+ *
+ * A refused body used to fall through to the generic `500` handler while the
+ * panel was still sending; the panel then logged a settle failure and nothing
+ * ever settled the command. Answering 413 with a code the panel can branch on
+ * lets it settle with a readable error instead of leaving the tool to time out.
+ * @param {import('node:http').IncomingMessage} req - the request to drain.
+ * @param {import('node:http').ServerResponse} res - where a refusal is written.
+ * @returns {Promise<{ ok: boolean, body?: any }>} `ok: false` when a response was already sent.
+ */
+async function readJsonOrRefuse(req, res) {
+  try {
+    return { ok: true, body: await readJson(req) }
+  } catch (error) {
+    if (!(error instanceof BodyTooLarge)) throw error
+    // Let the client finish uploading before the refusal goes out: answering
+    // mid-upload would surface as a socket reset instead of a readable 413.
+    req.resume()
+    send(res, 413, {
+      ok: false,
+      mark: BRIDGE_MARK,
+      error: { code: 'budget_exceeded', message: error.message },
+      limit: MAX_BODY_BYTES,
+    })
+    return { ok: false }
   }
 }
 

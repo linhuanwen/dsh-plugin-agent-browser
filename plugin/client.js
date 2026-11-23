@@ -235,6 +235,16 @@ window.__ModuleLoader__.load({
     /** Device rows a stitched screenshot may reach, so one call cannot eat the panel. */
     const MAX_SHOT_ROWS = 16000
 
+    /**
+     * Largest settle body this panel will post.
+     *
+     * The host refuses anything over its own 32 MiB cap with `413`. Staying
+     * below it here means an oversized picture is reported as a budget error in
+     * a second, instead of being posted, refused, and leaving the tool to sit
+     * out its whole command budget (TICKET-034).
+     */
+    const SETTLE_BUDGET = 24 * 1024 * 1024
+
     /** One JSON request to the host half. */
     async function callHost(path, init = {}) {
       // A request that never settles would hold the poll loop's `running` flag
@@ -315,15 +325,44 @@ window.__ModuleLoader__.load({
 
     /** Report one command's outcome back to the host. */
     async function settle(id, outcome) {
+      let text = JSON.stringify({ id, ...outcome })
+      // Over budget: say so with numbers instead of posting a body the host will
+      // refuse. The tool then fails in a second rather than after its own timeout.
+      if (text.length > SETTLE_BUDGET) {
+        report('settle over budget', { id, chars: text.length, limit: SETTLE_BUDGET })
+        text = JSON.stringify({
+          id,
+          ok: false,
+          error: `budget_exceeded: the panel produced ${text.length} characters, over the ${SETTLE_BUDGET}-character reply budget, so nothing was delivered. `
+            + 'Retake a smaller picture (mode "viewport", or a lower maxHeight) or read the page with browser_snapshot.',
+        })
+      }
       try {
         await callHost('/settle', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ id, ...outcome }),
+          body: text,
         })
         report('settled', { id, ok: outcome.ok !== false })
       } catch (error) {
-        log(`settle ${id} failed: ${error?.message ?? error}`)
+        const reason = String(error?.message ?? error)
+        log(`settle ${id} failed: ${reason}`)
+        // A refused or dropped reply must still settle the command: otherwise the
+        // host only sees silence and the caller waits out its whole budget. One
+        // retry without the payload turns a size problem into a readable error.
+        if (outcome?.result === undefined) return
+        await callHost('/settle', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            id,
+            ok: false,
+            error: `budget_exceeded: the panel produced ${text.length} characters but the host refused the reply (${reason}), so nothing was delivered. `
+              + 'Retake a smaller picture (mode "viewport", or a lower maxHeight) or read the page with browser_snapshot.',
+          }),
+        })
+          .then(() => report('settled without payload', { id, chars: text.length }))
+          .catch((again) => log(`settle ${id} retry failed: ${String(again?.message ?? again)}`))
       }
     }
 

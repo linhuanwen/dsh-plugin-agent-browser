@@ -1,6 +1,6 @@
 # TICKET-034 大图回执丢失：截图在面板里成功取到，但回执没回来，工具挂到 60 s 超时
 
-- **状态**：📋 待修（P1；不阻塞首发，但"截图看起来卡死 60 s"在真实站点可复现，属体验级故障）
+- **状态**：🔧 已修于源码（2026-11-23 16:3x，`main` 分支；1.4.13 冻结点不受影响）——待发 1.4.14 后在装机版上做实地复验
 - **优先级**：P1（安全语义未破、页面未丢；代价是每次 60 s 空等 + 工具报 `bridge_timeout`，模型会误判"面板没开"）
 - **来源**：2026-11-23 15:2x 案例复跑（V 集抽跑，`reference/010-validation-cases.md` 坑 5）—— `https://opentopomap.org/#map=10/23.13/113.26`
 - **相关**：TICKET-013（失败导航回退）、TICKET-028（截图可见性 / 取帧重试预算）、`plugin/bridge.js`、`plugin/client/…` 的 screenshot 回执路径
@@ -37,30 +37,43 @@ capture done {sent:1151, chars:4239798}      ← 距 start 约 197 ms
 
 ⇒ 与 TICKET-028 的坑 1（`css: 0`、`capturePage()` 抛 `UnknownVizError`、~650 ms 放弃）**不是同一个故障**：此处取图成功，失败在"回执/传输"这一段；区别还在超时形态（60 s 静默 vs 0.65 s 报错）。
 
-## 3. 原因（推断，未验证）
+## 3. 原因（已验证）
 
-1. 回执载荷是 base64/字符数组（`chars` 计数即载荷字符数），4.24 MB 量级可能超过 host ↔ client 通道单帧上限或触发分片逻辑缺陷；
-2. `screenshot` 的回执没有超时前的分片重组保障，也没有"取图成功但回执失败"的中间态错误码 ⇒ 客户端只能等 60 s；
-3. `bridge.request` 的 timeout 分支只抛 `bridge_timeout`，不携带 `capture done` 已发生的细节，模型因此无法判断"图已生成"，只能盲猜。
+**不是通道分片缺陷，而是一条硬编码的请求体上限。**
 
-## 4. 修法方向（未实现）
+- 回执走 `POST /dsh-agent-browser/settle`，body 是 `JSON.stringify({id, ok, result:{dataUrl}})`；opentopomap 那张 dataUrl 4,239,798 chars ⇒ body ≈ **4,239,848 B**。
+- `plugin/bridge.js` 的 `readJson(req)` 原本写着 `if (size > 4 * 1024 * 1024) throw new Error('body too large')`（4 MiB = **4,194,304 B**）。超限后 `#handle` 的 `.catch` 回 500，面板的 `settle()` 抛错、命令永不 settle，工具只能等满自己的 60,000 ms 再报 `bridge_timeout`。
+- 打点探针 `tmp/settle-size-probe.mjs`（HMAC cookie → discovery → POST `/settle` 合成 body）逐档试探，阈值正好落在 4,194,304 B：
 
-| # | 方向 | 说明 |
+| body 字节 | 结果 |
+|---|---|
+| 62,358 / 2,772,754 / 4,180,000 / 4,190,000 | 200 |
+| **4,194,050** | **200** |
+| **4,239,848**（本次事故） | **500 `{"ok":false,"error":"body too large"}`** |
+| 8,000,000 | 500 同款 |
+
+⇒ 4 MiB 恰好卡在"百度地图能过、opentopomap 过不去"之间，这也解释了为什么两个成功样本一直没暴露问题。
+
+## 4. 修法（已实现）
+
+| # | 方向 | 落地情况 |
 |---|---|---|
-| 1 | 载荷降级 | 超过阈值（如 2 MB chars）自动改走"落盘 + 只回路径/缩略图"，避免大载荷过桥 |
-| 2 | 分片回执 | 大回执按 512 KB 分片，带序号与总片数，host 侧重组；缺片即报可读错误 |
-| 3 | 中间态错误码 | 新增 `capture_delivered`（图已生成、回执丢失）或让 `bridge_timeout` 的 details 带上 `stage:'delivery'` 与 `bytes`，错误文案改成"截图已生成但回执超时，可重试或改用 viewport/降低质量" |
-| 4 | 不误导的文案 | `bridge_timeout` 不再无脑提示"打开右侧栏页签"，改为按 details 分支 |
+| 1 | 放宽上限 | ✅ `plugin/bridge.js` 新增 `export const MAX_BODY_BYTES = 32 * 1024 * 1024`，`readJson` 按它判断 |
+| 2 | 超限要可读 | ✅ 新增 `class BodyTooLarge` + `readJsonOrRefuse(req, res)`：超限回 **413** 且 body 带 `{error:{code:'budget_exceeded', message}, limit}`，`/log`、`/phase`、`/settle` 三处都改走它（原先只会落进 500 兜底） |
+| 3 | 客户端预检 + 必 settle | ✅ `plugin/client.js` 新增 `SETTLE_BUDGET = 24 * 1024 * 1024`：超预算直接 settle 成 `budget_exceeded: …` 并带字符数，不再发 24 MB 级 body；POST 失败且带 payload 时**再重投一次纯错误 settle**，保证命令一定被 settle，最坏情况秒级报错而不是 60 s 空等 |
+| 4 | 文案 | ✅ 错误消息写明"the panel produced N characters … Retake a smaller picture (mode \"viewport\", or a lower maxHeight) or read the page with browser_snapshot."，不再让模型以为面板没开 |
 
-## 5. 验收（写好后）
+未新增错误码：沿用既有的 `budget_exceeded`（`retryable: true`），避免动 `plugin/errors.js` 的 13 码契约与文档表格。
 
-1. 打开 `https://opentopomap.org/#map=10/23.13/113.26`，`browser_screenshot({mode:'viewport'})` 在 ≤10 s 内返回（成功保存，或返回带 `bytes` 的明确错误）；
-2. 同一页连续截图 3 次不累积超时；
-3. `demo` / 百度地图两个成功样本回执字节数与修复前一致（无回归）；
-4. `plugin/test` 增补一条"大载荷回执"单测（可用合成 4 MB buffer，不必依赖真实站点）。
+## 5. 验收状态
 
-## 6. 现状（1.4.13）
+1. ⬜ 真实站点 ≤10 s 返回 —— 需 1.4.14 装机后重跑 `opentopomap.org`（本轮只有源码级证据）
+2. ⬜ 同页连截 3 次不累积 —— 同上
+3. ⬜ `demo` / 百度地图无回归 —— 同上（单测层面已覆盖 4.24 M 字符回执）
+4. ✅ `plugin/test/bridge.test.mjs` 新增两条：**4.24 M 字符 settle 被接受**（端到端 `start()` → `request()` → `/pending` 取 id → `/settle` → 断言 200 且 payload 完整）与**超过 `MAX_BODY_BYTES` 回 413/`budget_exceeded`**；全量 `node --test plugin/test/*.test.mjs` 180/180 通过
 
-- 未修；规避方式：该站只用 `browser_snapshot`，不截图。
-- 已写入 `reference/010-validation-cases.md`（V10 坑 5）与 `reference/014-practical-cases.md` §7.6（S6 第二个故障的实测来源）。
-- 不阻塞 Windows 首发：首发站点清单里没有需要 4 MB 级截图的页面；但应在发布说明"已知限制"里补一句。
+## 6. 现状
+
+- **源码已修**（`main`），1.4.13 冻结点（tgz `128,654 B` / `16cac4ff…`）未变，首发结论不受影响。
+- 已同步 `reference/010-validation-cases.md`（V10 矩阵行 + 坑 5 根因）与 `docs/launch-report-1.4.13.md` §6 第 7 条（由"未修"改为"源码已修、待 1.4.14 复验"）。
+- 发布说明里保留"已知限制"一句，直到 1.4.14 实地复验通过。
