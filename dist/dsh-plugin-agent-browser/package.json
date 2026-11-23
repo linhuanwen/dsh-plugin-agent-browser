@@ -1,0 +1,57 @@
+{
+  "name": "dsh-plugin-agent-browser",
+  "version": "1.4.13",
+  "description": "A real browser panel in the DSH right sidebar that the agent can drive with browser_* tools, and the user can take over at any time.",
+  "private": false,
+  "license": "MIT",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "apply.js",
+    "config.js",
+    "activation.js",
+    "bridge.js",
+    "tools.js",
+    "downloads.js",
+    "errors.js",
+    "policy.js",
+    "navigation.js",
+    "search-fallback.js",
+    "static.js",
+    "client.js",
+    "inject",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "docs",
+    "icon.svg",
+    "README.md",
+    "inject/guards.js"
+  ],
+  "engines": {
+    "dsh": ">=0.2.2-rc.3 <0.3.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "^3.19.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/schemastery": "^3.19.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}

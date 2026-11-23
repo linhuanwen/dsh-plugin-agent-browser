@@ -1,0 +1,9 @@
+- id: agent-browser-panel
+  config:
+    evalEnabled: false
+    downloads:
+      extraBlockedExtensions:
+        - dat
+    sessions:
+      allowlist:
+        - definitely-not-this-session

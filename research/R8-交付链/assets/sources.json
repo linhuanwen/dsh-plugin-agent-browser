@@ -1,0 +1,81 @@
+{
+  "case": "R8-delivery-chain",
+  "builtAt": "2026-11-20T16:00:00+08:00",
+  "timezone": "Asia/Shanghai",
+  "items": [
+    {
+      "id": "S1",
+      "kind": "search",
+      "title": "采购公告搜索：关键字「服务器」（标题检索）+ 中标公告 + 近1月",
+      "url": "https://search.ccgp.gov.cn/bxsearch?searchtype=1&page_index=1&bidSort=0&buyerName=&projectId=&pinMu=0&bidType=7&dbselect=bidx&kw=%E6%9C%8D%E5%8A%A1%E5%99%A8&start_time=2026%3A10%3A20&end_time=2026%3A11%3A20&timeType=3&displayZone=&zoneId=&pppStatus=0&agentName=",
+      "capturedAt": "2026-11-20T15:57:00+08:00",
+      "note": "共找到 167 条；查询日期 2026-10-20 至 2026-11-20"
+    },
+    {
+      "id": "S2",
+      "kind": "image",
+      "title": "搜索结果页整页截图（筛选状态 + 15 条记录 + 页脚）",
+      "url": "https://search.ccgp.gov.cn/bxsearch?searchtype=1&page_index=1&bidSort=0&buyerName=&projectId=&pinMu=0&bidType=7&dbselect=bidx&kw=%E6%9C%8D%E5%8A%A1%E5%99%A8&start_time=2026%3A10%3A20&end_time=2026%3A11%3A20&timeType=3&displayZone=&zoneId=&pppStatus=0&agentName=",
+      "file": "assets/shot-list.png",
+      "bytes": 1310450,
+      "width": 768,
+      "height": 2472,
+      "sha256": "0eca73860707ec6b2304da4a2fa4392911cd81ee6e09055dd9a6ecca357ed9c7",
+      "capturedAt": "2026-11-20T17:30:00+08:00",
+      "note": "browser_screenshot 整页拼接（768 × 2472），2026-11-20 重拍"
+    },
+    {
+      "id": "S3",
+      "kind": "page",
+      "title": "合肥工业大学算力服务器及工作站设备采购项目中标结果公告",
+      "url": "http://www.ccgp.gov.cn/cggg/zygg/zbgg/202611/t20261120_27721283.htm",
+      "capturedAt": "2026-11-20T15:56:40+08:00",
+      "note": "第 1 行数据来源"
+    },
+    {
+      "id": "S4",
+      "kind": "image",
+      "title": "详情页整页截图（中标金额 144.6200000 万元 + 主要标的信息）",
+      "url": "http://www.ccgp.gov.cn/cggg/zygg/zbgg/202611/t20261120_27721283.htm",
+      "file": "assets/shot-detail.png",
+      "bytes": 734161,
+      "width": 768,
+      "height": 2779,
+      "sha256": "cdd181008d3c026f38a44d3a90f73fd42b32d49664fb1c3bd3b0e87b6756e3c2",
+      "capturedAt": "2026-11-20T17:30:00+08:00",
+      "note": "browser_screenshot 整页拼接（768 × 2779），2026-11-20 重拍"
+    },
+    {
+      "id": "S5",
+      "kind": "page",
+      "title": "生物育种钟山实验室高性能计算服务器中标公告",
+      "url": "http://www.ccgp.gov.cn/cggg/dfgg/zbgg/202611/t20261118_27708674.htm",
+      "capturedAt": "2026-11-20T15:57:50+08:00",
+      "note": "第 2 行数据来源（采购包1）"
+    },
+    {
+      "id": "S6",
+      "kind": "page",
+      "title": "张家港市公安局存储服务器建设中标公告",
+      "url": "http://www.ccgp.gov.cn/cggg/dfgg/zbgg/202611/t20261118_27704873.htm",
+      "capturedAt": "2026-11-20T15:58:10+08:00",
+      "note": "第 3 行数据来源"
+    },
+    {
+      "id": "S7",
+      "kind": "page",
+      "title": "搜索结果第 2 页",
+      "url": "https://search.ccgp.gov.cn/bxsearch?searchtype=1&page_index=2&bidSort=0&buyerName=&projectId=&pinMu=0&bidType=7&dbselect=bidx&kw=%E6%9C%8D%E5%8A%A1%E5%99%A8&start_time=2026%3A10%3A20&end_time=2026%3A11%3A20&timeType=3&displayZone=&zoneId=&pppStatus=0&agentName=",
+      "capturedAt": "2026-11-20T15:58:20+08:00",
+      "note": "20 条，用于去重比对"
+    },
+    {
+      "id": "S8",
+      "kind": "page",
+      "title": "搜索结果第 3 页",
+      "url": "https://search.ccgp.gov.cn/bxsearch?searchtype=1&page_index=3&bidSort=0&buyerName=&projectId=&pinMu=0&bidType=7&dbselect=bidx&kw=%E6%9C%8D%E5%8A%A1%E5%99%A8&start_time=2026%3A10%3A20&end_time=2026%3A11%3A20&timeType=3&displayZone=&zoneId=&pppStatus=0&agentName=",
+      "capturedAt": "2026-11-20T15:58:25+08:00",
+      "note": "20 条，用于去重比对；含「（二次）」重新招标案例"
+    }
+  ]
+}

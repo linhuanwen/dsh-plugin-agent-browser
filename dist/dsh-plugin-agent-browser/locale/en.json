@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Browser panel (agent)",
+    "description": "A real browser in the right sidebar that the agent drives: browser_open, browser_snapshot (accessibility tree plus a screenshot), browser_click (by ref or CSS selector, hit-tested), browser_scroll (scrolls to trigger lazy loading), browser_hover (moves the pointer so stacked controls fan out), browser_zoom (scales the page so a desktop layout fits the narrow sidebar), browser_screenshot (stitches a long page into one PNG under the workspace screenshots/ folder), browser_type, browser_press, browser_eval, browser_download (attachments land in the workspace downloads/ folder with a sha256). Pages are fitted to the panel width after they load, so one screen shows as much as it can. Open the panel from the right sidebar guide entry \"Browser (agent)\". The badge shows who is driving (agent / you / busy). Press \"Take over\" to drive it yourself; input tools are refused until you press \"Hand back\". Human verification pages are detected and paused for you, never bypassed.",
+    "detail": "docs/DETAIL.md"
+  }
+}

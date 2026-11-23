@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Workspace Demo</title>
+  <link rel="stylesheet" href="./a.css">
+</head>
+<body>
+  <h1>Workspace Demo</h1>
+  <p>This page is served from the workspace over loopback, not from <code>file://</code>.</p>
+  <p><img id="pic" src="img/b.png" alt="a green square" width="64" height="64"></p>
+  <p>Stylesheet loaded: <strong id="css">no</strong></p>
+  <p>fetch('/data.json'): <strong id="fetch">pending</strong></p>
+  <button id="go">click me</button>
+  <p id="hits">hits: 0</p>
+  <script>
+    document.getElementById('css').textContent =
+      getComputedStyle(document.querySelector('h1')).letterSpacing === '1.5px' ? 'yes' : 'no'
+    fetch('./data.json')
+      .then((r) => r.json())
+      .then((data) => { document.getElementById('fetch').textContent = JSON.stringify(data) })
+      .catch((error) => { document.getElementById('fetch').textContent = 'failed: ' + error.message })
+    let hits = 0
+    document.getElementById('go').addEventListener('click', () => {
+      hits += 1
+      document.getElementById('hits').textContent = 'hits: ' + hits
+    })
+  </script>
+</body>
+</html>

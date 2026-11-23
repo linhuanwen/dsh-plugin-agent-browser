@@ -1,0 +1,108 @@
+﻿# profile install baseline  2026-11-23 14:56:18
+
+## node_modules (top-level)
+@leichtgewicht
+ansi-regex
+ansi-styles
+bonjour-service
+camelcase
+cliui
+color-convert
+color-name
+decamelize
+dijkstrajs
+dns-packet
+dsh-mobile-plugin
+dsh-plugin-panel-browser
+dsh-plugin-wallpaper-engine
+dsh-whale-widget
+dshmarket
+dshplugin-registry
+emoji-regex
+exif-parser
+fast-deep-equal
+file-type
+find-up
+generate-function
+get-caller-file
+gifwrap
+iconv-lite
+ieee754
+image-q
+is-fullwidth-code-point
+is-property
+jimp
+jpeg-js
+js-yaml
+locate-path
+long
+lru.min
+mime
+ms
+multicast-dns
+mysql2
+named-placeholders
+omggif
+p-limit
+p-locate
+p-try
+pako
+parse-bmfont-ascii
+parse-bmfont-binary
+parse-bmfont-xml
+path-exists
+pixelmatch
+playwright-core
+pngjs
+qrcode
+require-directory
+require-main-filename
+safer-buffer
+sax
+set-blocking
+simple-xml-to-json
+sql-escaper
+string-width
+strip-ansi
+strtok3
+thunky
+tinycolor2
+token-types
+uint8array-extras
+undici
+utif2
+which-module
+wrap-ansi
+ws
+xml-parse-from-string
+xml2js
+xmlbuilder
+y18n
+yargs
+yargs-parser
+zod
+.pnpm-workspace-state-v1.json
+
+## declared deps vs present
+@duke-dsh-plugins/dsh-token-stats             MISSING   1.7.0
+@liustack/modlens                             MISSING   ^3.26.5
+billion-context                               MISSING   0.1.216
+dsh-cost-meter                                MISSING   ^1.7.44
+dsh-dream-skin                                MISSING   9.29.0
+dsh-hermes-bridge                             MISSING   ^0.4.0
+dsh-pilot                                     MISSING   ^0.1.1
+dsh-plugin-agent-browser                      MISSING   file:D:/Vibe coding/32 deepseek harness cebiankuang/dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.4.13.tgz
+dsh-plugin-panel-browser                      present   file:D:/Vibe coding/33 deepseek harness CDP
+dsh-plugin-wallpaper-engine                   present   1.1.0
+dsh-whale-widget                              present   ^0.3.18
+dshmarket                                     present   ^1.66.5
+dshplugin-registry                            present   ^0.1.0
+dsh-mobile-plugin                             present   file:D:/Vibe coding/FZ-GITHUB銆丼KILL/15 dsh-go/vendor/dsh-mobile-plugin
+
+## file hashes
+50a9881d45e7bd6f1f2407c37a23565d5a260148666a85de4c61867a6eab5b78  package.json
+e60b0bd9185280080b789ff94d434cad41e6dfed8b10bd8074c457912053cd3f  pnpm-lock.yaml
+8341160f350d607a73c6a24d8096551293572cc4ba6647284db7c05b6f090cfa  cordis.patch.yml
+
+## candidate tgz
+dsh-plugin-agent-browser-1.4.13.tgz  128654 bytes  sha256=16cac4ff6b9d25a7d78512a6272efa7e42353c21919331807cdddc0651925cd4

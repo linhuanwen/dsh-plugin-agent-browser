@@ -1,0 +1,6 @@
+- id: agent-browser-panel
+  config:
+    evalEnabled: false
+    downloads:
+      extraBlockedExtensions:
+        - dat

@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "浏览器面板（Agent）",
+    "description": "在右侧栏里放一个真浏览器，由 Agent 用 browser_open、browser_snapshot（无障碍树 + 截图）、browser_click（ref 或 CSS selector，带命中测试）、browser_scroll（滚动触发懒加载）、browser_hover（悬停展开叠卡）、browser_zoom（缩放页面，桌面站才塞得进窄侧栏）、browser_screenshot（长页拼接成整页 PNG 存到工作区 screenshots/）、browser_type、browser_press、browser_eval、browser_download 十一个工具操作（附件可下到工作区 downloads/，带 sha256）。打开页面后自动按面板宽度适配缩放，一屏尽量看全。从右侧栏引导页的「浏览器（Agent）」打开面板。徽章显示当前是谁在操作；点「我来接管」自己操作，接管期间输入类工具会被拒绝，点「交还 Agent」恢复。检测到人机验证时会自动停下等你处理，绝不代替你过验证。",
+    "detail": "docs/DETAIL.md"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "name": "dsh-plugin-agent-browser-probe",
+  "version": "0.0.1",
+  "private": true,
+  "description": "TICKET-001 feasibility probe: third-party sidebar tab + Electron webview privileges",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  }
+}

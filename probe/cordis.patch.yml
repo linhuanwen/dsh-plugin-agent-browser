@@ -1,0 +1,5 @@
+# TICKET-001 probe bundle: mounts the Host half (no-op) so the profile sees a
+# live entry whose `dsh.client` manifest pulls in client.js.
+- insert:
+    - id: agent-browser-probe
+      name: 'dsh-plugin-agent-browser-probe'

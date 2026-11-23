@@ -1,0 +1,5 @@
+# Loads the plugin into the DSH profile.
+# `insert` appends a loader entry; the id is stable so re-installing keeps one line.
+- insert:
+    - id: agent-browser-panel
+      name: 'dsh-plugin-agent-browser'

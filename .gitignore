@@ -1,0 +1,15 @@
+# 依赖与本地环境
+node_modules/
+*.local.*
+
+# 测试下载物（跑用例时重新生成；含体积较大的公网 PDF）
+downloads/
+
+# 构建产物中的历史 tgz：只保留冻结候选版本
+dist/dsh-plugin-agent-browser/*.tgz
+!dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.4.13.tgz
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+*.log

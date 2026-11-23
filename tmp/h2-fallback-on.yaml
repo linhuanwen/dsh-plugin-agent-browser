@@ -1,0 +1,4 @@
+- id: agent-browser-panel
+  config:
+    searchFallback:
+      enabled: true

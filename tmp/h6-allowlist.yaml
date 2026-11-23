@@ -1,0 +1,5 @@
+- id: agent-browser-panel
+  config:
+    sessions:
+      allowlist:
+        - not-this-session

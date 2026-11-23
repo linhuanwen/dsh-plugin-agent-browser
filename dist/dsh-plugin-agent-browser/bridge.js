@@ -1,0 +1,846 @@
+/**
+ * Host half of the panel channel.
+ *
+ * The direction we need is host -> client: a tool call has to make the panel
+ * navigate, type, or screenshot. DSH's Remote layer naturally runs the other
+ * way (client -> host), so the channel here is the documented fallback from the
+ * spec: the host parks commands in a per-session queue, and the client polls.
+ *
+ * The transport is loopback HTTP. It is deliberately the dumbest thing that
+ * works: no protocol negotiation, no pairing, `curl` can inspect it, and the
+ * panel can poll it from the renderer with a plain fetch. Only 127.0.0.1 is
+ * bound, and every response is tagged so a stray server on the same port is
+ * detectable.
+ *
+ * Loopback is not an authorization boundary: every local process, and every
+ * page that can reach this port, is on it. So the port is random per process
+ * and every request must carry a bearer token minted here. The panel learns
+ * the pair from the host's `/agent-browser/discovery` route (same origin, past
+ * the DSH connection fence), never from a file or a hard-coded constant.
+ */
+import { createServer } from 'node:http'
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
+import { AgentBrowserError, fromPanelMessage, isAgentBrowserError } from './errors.js'
+
+/** Default port: 0 asks the OS for a free one, so two instances never collide. */
+export const BRIDGE_PORT = 0
+/** Path prefix, so the server can never be confused with an unrelated 127.0.0.1 service. */
+export const BRIDGE_PREFIX = '/dsh-agent-browser'
+/** Marker that a responder really is this plugin. */
+export const BRIDGE_MARK = 'dsh-plugin-agent-browser/1'
+/** How long a tool waits for the panel to pick up and finish a command. */
+export const DEFAULT_TIMEOUT_MS = 20_000
+/** Headers the panel may present the per-process token with. */
+export const TOKEN_HEADERS = 'authorization, x-agent-browser-token'
+/** Query parameter accepted on safe methods, where a header would force a preflight. */
+export const TOKEN_QUERY = 'token'
+
+/** Phases a session can be in. `idle` is derived, the other three are stored. */
+export const PHASES = ['idle', 'agent', 'taken_over', 'needs_human']
+
+/** Tools that change or navigate the page; refused while a human has the wheel. */
+const INPUT_TYPES = new Set(['open', 'click', 'scroll', 'hover', 'zoom', 'screenshot', 'type', 'press', 'eval'])
+
+/** A session that has not acted for this long reads as `idle` instead of `agent`. */
+const IDLE_MS = 45_000
+
+/** How long `close()` waits for open connections before cutting them off. */
+const CLOSE_TIMEOUT_MS = 2_000
+
+/**
+ * Per-session command queue plus the promises waiting on each command.
+ *
+ * One tool call = one command. The client pulls whatever is queued for its
+ * session, executes in order, and settles every command exactly once; a
+ * timeout settles it as an error so a closed panel never wedges a tool call.
+ */
+export class Bridge {
+  /** @type {Map<string, Array<object>>} */
+  #queues = new Map()
+  /** @type {Map<string, { resolve: (v: any) => void, reject: (e: Error) => void, timer: NodeJS.Timeout }>} */
+  #waiting = new Map()
+  /** @type {Set<string>} sessions whose panel has polled at least once */
+  #seen = new Set()
+  /** @type {Set<{ settle: () => void }>} parked long-polls */
+  #waiters = new Set()
+  /**
+   * Who is driving each session's page, and since when.
+   *
+   * This lives on the host, not in the panel, because it has to survive a panel
+   * rebuild, a page navigation, and a session switch: a user who took over five
+   * minutes ago is still driving, even if they are looking at another chat.
+   * @type {Map<string, { phase: string, since: number, reason: string, signals: string[], digest: string }>}
+   */
+  #states = new Map()
+  #server = null
+  #port = BRIDGE_PORT
+  /** Bearer token every request must carry; minted once per process. */
+  #token
+  /** Listening origin, filled once the socket is bound (`''` before that). */
+  #origin = ''
+  #logger
+  #enqueued = 0
+  #pulled = 0
+  /** Ring buffer of what the panel says it did; the host has no console to read. */
+  #logs = []
+  #logLimit = 200
+  /** Memoized listen promise: `start()` may be called from `apply` and from a tool race. */
+  #starting = null
+  /** Page-side sources the panel may request by name (`snapshot`, …). */
+  #sources = {}
+  /** Default budget for a command the panel has to pick up and finish. */
+  #timeoutMs = DEFAULT_TIMEOUT_MS
+  /** Set by `close()`/`dispose()`; a shut-down bridge must fail instead of queueing. */
+  #closed = false
+  /**
+   * Ids the caller cancelled. Kept only so a late `/settle` from a panel that was
+   * already executing the command is answered politely instead of as an error.
+   * Bounded, because a long session would otherwise grow it forever.
+   * @type {Set<string>}
+   */
+  #cancelled = new Set()
+  /** Cap for `#cancelled`. */
+  #cancelledLimit = 64
+  /**
+   * Host-side facts `/health` should expose but the bridge cannot discover on its
+   * own (which tools actually got registered, and whether another browser plugin
+   * already owns their names). Set once by `apply`.
+   * @type {Record<string, unknown>}
+   */
+  #diagnostics = {}
+
+  constructor(options = {}) {
+    this.#logger = options.logger ?? (() => {})
+    this.#port = options.port ?? BRIDGE_PORT
+    this.#token = options.token ?? randomBytes(32).toString('base64url')
+    this.#sources = options.sources ?? {}
+    this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  }
+
+  /** Listening port (after `start`, this is the real one). */
+  get port() {
+    return this.#port
+  }
+
+  /** Bearer token the panel must present; also handed out by the discovery route. */
+  get token() {
+    return this.#token
+  }
+
+  /** Loopback origin of the listening socket (`''` before `start` resolves). */
+  get origin() {
+    return this.#origin
+  }
+
+  /** True once a panel has polled at least once. */
+  hasClient() {
+    return this.#seen.size > 0
+  }
+
+  /**
+   * Merge host-side facts into the `/health` payload.
+   *
+   * Used for the tool surface: two browser plugins in one profile claim the same
+   * `browser_*` names, and the loser used to die with an opaque "already
+   * registered" error. Exposing the result here makes that visible from outside
+   * the process (`GET /health` with the discovery token) instead of only in the
+   * GUI console.
+   * @param {Record<string, unknown>} fields - partial diagnostics to merge.
+   */
+  setDiagnostics(fields) {
+    if (fields === null || typeof fields !== 'object') return
+    this.#diagnostics = { ...this.#diagnostics, ...fields }
+  }
+
+  /**
+   * Whether the Host header names this loopback listener.
+   *
+   * A rebound page sends the attacker's hostname here even though the socket
+   * lands on 127.0.0.1, so an exact match is the one thing DNS cannot forge.
+   * @param {import('node:http').IncomingMessage} req
+   */
+  #hostTrusted(req) {
+    const host = String(req.headers.host ?? '')
+    return host === `127.0.0.1:${this.#port}` || host === `localhost:${this.#port}`
+  }
+
+  /**
+   * Whether the request carries this process's token.
+   *
+   * A header is required for state-changing calls; long-polls may pass it as a
+   * query parameter instead, because a custom header would turn every poll into
+   * a preflighted request. Tokens come from the discovery route, not from disk.
+   * @param {import('node:http').IncomingMessage} req
+   * @param {URL} url
+   */
+  #tokenMatches(req, url) {
+    const authorization = req.headers.authorization
+    const bearer = typeof authorization === 'string' && authorization.startsWith('Bearer ')
+      ? authorization.slice('Bearer '.length)
+      : undefined
+    const custom = req.headers['x-agent-browser-token']
+    const safe = req.method === 'GET' || req.method === 'HEAD'
+    const query = safe ? (url.searchParams.get(TOKEN_QUERY) ?? undefined) : undefined
+    return [bearer, custom, query].some((candidate) => typeof candidate === 'string' && sameToken(candidate, this.#token))
+  }
+
+  /**
+   * Record a host-side event into the same ring the panel writes to.
+   *
+   * The host has no readable console, so anything that has to be observed
+   * during development goes here and is read back with `/logs`.
+   * @param {string} message - short tag.
+   * @param {object} [data] - attached detail.
+   */
+  note(message, data = null) {
+    this.#logs.push({ at: Date.now(), message, data })
+    if (this.#logs.length > this.#logLimit) this.#logs.shift()
+    this.#logger(message)
+  }
+
+  /**
+   * Current control state of one session.
+   *
+   * `agent` decays to `idle` after a quiet minute so the badge does not claim
+   * the agent is working when it has not touched the page for a while.
+   * @param {string} sessionId - the agent session.
+   * @returns {{ phase: string, since: number, reason: string, signals: string[], digest: string }}
+   */
+  stateOf(sessionId) {
+    const state = this.#states.get(sessionId)
+    if (state === undefined) return { phase: 'idle', since: 0, reason: '', signals: [], digest: '' }
+    const phase = state.phase === 'agent' && Date.now() - state.since > IDLE_MS ? 'idle' : state.phase
+    return { ...state, phase }
+  }
+
+  /**
+   * Move a session into a phase.
+   *
+   * Entering `taken_over` also empties the queue and fails everything already
+   * waiting: a command the panel would run under the user's hands is worse
+   * than an error the agent can read.
+   * @param {string} sessionId - the agent session.
+   * @param {string} phase - one of `PHASES`.
+   * @param {{ reason?: string, signals?: string[], digest?: string, since?: number }} [detail]
+   */
+  setPhase(sessionId, phase, detail = {}) {
+    const previous = this.stateOf(sessionId)
+    const next = {
+      phase: PHASES.includes(phase) ? phase : 'idle',
+      since: Number.isFinite(detail.since) ? Number(detail.since) : Date.now(),
+      reason: typeof detail.reason === 'string' ? detail.reason : '',
+      signals: Array.isArray(detail.signals) ? detail.signals.slice(0, 8).map(String) : [],
+      digest: typeof detail.digest === 'string' ? detail.digest : previous.digest,
+    }
+    this.#states.set(sessionId, next)
+    if (next.phase !== previous.phase || next.reason !== previous.reason) {
+      this.note('phase', { session: short(sessionId), from: previous.phase, to: next.phase, reason: next.reason })
+    }
+    if (next.phase === 'taken_over') this.#flushSession(sessionId, 'the user took over while this command was queued')
+    this.#wake()
+  }
+
+  /**
+   * Refuse a command for the wrong driver.
+   *
+   * Read-only tools stay available while a human is working: the agent must be
+   * able to see what changed, it just may not type or click. Navigation is the
+   * one write that survives `needs_human`: a panel parked on a challenge page the
+   * agent cannot solve would otherwise be a dead end — opening another URL is how
+   * it gives up on this page and carries on. Under `taken_over` even navigation
+   * stays refused, because there the human owns the panel outright.
+   * @param {string} sessionId - the agent session.
+   * @param {string} type - command type.
+   */
+  #assert(sessionId, type) {
+    const { phase } = this.stateOf(sessionId)
+    if (phase === 'taken_over' && INPUT_TYPES.has(type)) {
+      throw new AgentBrowserError(
+        'panel_taken_over',
+        '用户已接管，请等待交还。The user is driving the panel right now; '
+        + 'wait until they hand it back, then continue. Reads (browser_snapshot) still work.',
+      )
+    }
+    if (phase === 'needs_human' && INPUT_TYPES.has(type) && type !== 'open') {
+      throw new AgentBrowserError(
+        'needs_human',
+        '页面需要人工验证（a human verification step is on screen）。'
+        + 'Ask the user to complete it in the panel; browser_snapshot still works so you can see '
+        + 'when it is gone, and browser_open can still navigate away from this page.',
+      )
+    }
+  }
+
+  /**
+   * Take (once) the digest the panel left when the user handed control back.
+   * @param {string} sessionId - the agent session.
+   * @returns {string} one line describing the page, or ''.
+   */
+  takeDigest(sessionId) {
+    const state = this.#states.get(sessionId)
+    if (state === undefined || state.digest === '') return ''
+    const digest = state.digest
+    state.digest = ''
+    return digest
+  }
+
+  /** Drop one session's queue and fail its in-flight commands. */
+  #flushSession(sessionId, reason) {
+    const queue = this.#queues.get(sessionId)
+    if (queue !== undefined && queue.length > 0) {
+      this.note('flush', { session: short(sessionId), dropped: queue.length })
+      this.#queues.delete(sessionId)
+    }
+    for (const [id, entry] of this.#waiting) {
+      if (entry.sessionId !== sessionId) continue
+      this.#waiting.delete(id)
+      clearTimeout(entry.timer)
+      entry.reject(new AgentBrowserError('panel_taken_over', reason))
+    }
+  }
+
+  /**
+   * Queue one command for a session and wait for the panel to settle it.
+   * @param {string} sessionId - the agent's session; the panel polls its own session only.
+   * @param {string} type - command type, e.g. `open`.
+   * @param {object} params - command payload.
+   * @param {number} [timeoutMs] - budget for the whole round trip (defaults to the
+   *   bridge's configured `bridge.requestTimeoutMs`).
+   * @param {{ show?: 'once'|'always'|'never', fit?: 'width'|'none', signal?: AbortSignal }} [options] -
+   *   panel visibility instruction for this command (`once` when omitted), whether
+   *   the page should be fitted to the panel width after navigation (`width` when
+   *   omitted), and an abort signal owned by the caller (`exec.signal`).
+   * @returns {Promise<object>} the command result.
+   */
+  async request(sessionId, type, params = {}, timeoutMs = this.#timeoutMs, options = {}) {
+    if (this.#closed) throw new AgentBrowserError('bridge_closed', 'the browser panel bridge is shut down')
+    const signal = options.signal
+    // An already-aborted call must not reach the page at all: the queue is where
+    // "a click the model no longer wants" would otherwise wait for its turn.
+    if (signal?.aborted === true) throw cancelledError()
+    await this.start()
+    // A `close()` may have run while the first listen was still in flight.
+    if (this.#closed) throw new AgentBrowserError('bridge_closed', 'the browser panel bridge is shut down')
+    if (signal?.aborted === true) throw cancelledError()
+    this.#assert(sessionId, type)
+    if (type !== 'snapshot') {
+      const state = this.stateOf(sessionId)
+      if (state.phase !== 'agent') this.setPhase(sessionId, 'agent', { reason: '' })
+    }
+    const id = `c${++this.#enqueued}`
+    const show = options.show === 'always' || options.show === 'never' ? options.show : 'once'
+    const fit = options.fit === 'none' ? 'none' : 'width'
+    const started = Date.now()
+
+    return new Promise((resolve, reject) => {
+      /** @type {{ sessionId: string, resolve: (v: any) => void, reject: (e: Error) => void, timer: any, onAbort?: () => void }} */
+      const entry = { sessionId, resolve, reject, timer: null }
+      const finish = (error, value) => {
+        clearTimeout(entry.timer)
+        if (entry.onAbort !== undefined && signal !== undefined) {
+          signal.removeEventListener('abort', entry.onAbort)
+          entry.onAbort = undefined
+        }
+        this.#waiting.delete(id)
+        if (error === null) {
+          this.#logger(`resolve ${id} in ${Date.now() - started}ms`)
+          resolve(value)
+        } else {
+          reject(error)
+        }
+      }
+      entry.resolve = (value) => finish(null, value)
+      entry.reject = (error) => finish(error, undefined)
+
+      entry.timer = setTimeout(() => {
+        this.#abandon(sessionId, id)
+        finish(new AgentBrowserError(
+          'bridge_timeout',
+          `browser panel did not answer ${id} (${type}) within ${timeoutMs}ms. `
+          + 'Open the right sidebar browser tab for this session and retry.',
+        ))
+      }, timeoutMs)
+      entry.timer.unref?.()
+
+      this.#waiting.set(id, entry)
+      if (signal !== undefined) {
+        if (signal.aborted) {
+          finish(cancelledError())
+          return
+        }
+        entry.onAbort = () => this.#cancel(id, sessionId)
+        signal.addEventListener('abort', entry.onAbort, { once: true })
+      }
+
+      const command = { id, type, params, sessionId, enqueuedAt: Date.now(), show, fit }
+      const queue = this.#queues.get(sessionId) ?? []
+      queue.push(command)
+      this.#queues.set(sessionId, queue)
+      this.#logger(`enqueue ${id} ${type} session=${short(sessionId)}`)
+      this.#wake()
+    })
+  }
+
+  /**
+   * Take one command back and tell the panel to stop it.
+   *
+   * Two different guarantees, and the difference matters:
+   * - a command still in the queue is **removed**, so it never reaches the page;
+   * - a command the panel already pulled is **not undone** — a click that landed
+   *   is a click that landed. A `cancel` frame asks the panel to stop what it can
+   *   (an in-flight navigation) and to drop the result instead of settling it.
+   * @param {string} id - the command id.
+   * @param {string} sessionId - the session that owns it.
+   */
+  #cancel(id, sessionId) {
+    const entry = this.#waiting.get(id)
+    if (entry === undefined) return
+    this.#abandon(sessionId, id)
+    this.#cancelled.add(id)
+    while (this.#cancelled.size > this.#cancelledLimit) {
+      const oldest = this.#cancelled.values().next().value
+      this.#cancelled.delete(oldest)
+    }
+    // `show: 'never'` keeps the cancel frame from waking a panel that is not there;
+    // it is a control frame, not something the user should see.
+    const queue = this.#queues.get(sessionId) ?? []
+    queue.push({
+      id: `x${id}`,
+      type: 'cancel',
+      params: { target: id },
+      sessionId,
+      enqueuedAt: Date.now(),
+      show: 'never',
+      fit: 'width',
+    })
+    this.#queues.set(sessionId, queue)
+    this.#wake()
+    this.#logger(`cancel ${id}`)
+    entry.reject(cancelledError(id))
+  }
+
+  /** Drop a command that timed out so a late panel does not execute it. */
+  #abandon(sessionId, id) {
+    const queue = this.#queues.get(sessionId)
+    if (queue === undefined) return
+    const at = queue.findIndex((command) => command.id === id)
+    if (at >= 0) queue.splice(at, 1)
+    if (queue.length === 0) this.#queues.delete(sessionId)
+  }
+
+  /**
+   * Take everything queued, for every session at once.
+   *
+   * Draining all sessions in one poll is what lets a tool call open a tab in a
+   * session the user is not currently looking at.
+   * @returns {{ sessions: Record<string, Array<object>>, total: number }}
+   */
+  #drain() {
+    const sessions = {}
+    let total = 0
+    for (const [sessionId, queue] of this.#queues) {
+      if (queue.length === 0) continue
+      sessions[sessionId] = queue.map(({ id, type, params, show, fit }) => ({ id, type, params, show, fit }))
+      total += queue.length
+      this.#seen.add(sessionId)
+    }
+    if (total > 0) {
+      this.#queues.clear()
+      this.#pulled += total
+    }
+    return { sessions, total }
+  }
+
+  /** Park until a command arrives or `waitMs` passes. */
+  async #park(waitMs) {
+    await new Promise((resolve) => {
+      const settle = () => {
+        clearTimeout(timer)
+        this.#waiters.delete(waiter)
+        resolve()
+      }
+      const waiter = { settle }
+      const timer = setTimeout(settle, waitMs)
+      timer.unref?.()
+      this.#waiters.add(waiter)
+    })
+  }
+
+  /** Wake every parked poll; called as soon as a command is queued. */
+  #wake() {
+    for (const waiter of [...this.#waiters]) waiter.settle()
+  }
+
+  /**
+   * Start listening. Binding 127.0.0.1 only: the panel is in this machine's renderer.
+   * @returns {Promise<number>} the listening port.
+   */
+  async start() {
+    if (this.#closed) throw new AgentBrowserError('bridge_closed', 'the browser panel bridge is shut down')
+    this.#starting ??= this.#listen()
+    return this.#starting
+  }
+
+  /** Bind the socket once; the promise is memoized by `start`. */
+  async #listen() {
+    const server = createServer((req, res) => {
+      this.#handle(req, res).catch((error) => {
+        send(res, 500, { ok: false, error: String(error?.message ?? error) })
+      })
+    })
+    server.on('error', (error) => {
+      this.#logger(`bridge error: ${error.message}`)
+    })
+    this.#server = server
+    await new Promise((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(this.#port, '127.0.0.1', () => {
+        server.off('error', reject)
+        const address = server.address()
+        if (address !== null && typeof address === 'object') this.#port = address.port
+        this.#origin = `http://127.0.0.1:${this.#port}`
+        this.#logger(`bridge listening on ${this.#origin}${BRIDGE_PREFIX}`)
+        resolve()
+      })
+    })
+    // A `close()` that raced the first bind cannot see this socket: `#server` was
+    // already taken by the shutdown, so the listen would otherwise leak.
+    if (this.#closed) {
+      server.closeAllConnections?.()
+      server.close()
+    }
+    return this.#port
+  }
+
+  /**
+   * Stop listening and fail every command still waiting.
+   *
+   * Asynchronous because `server.close()` waits for open connections and the
+   * panel keeps a long-poll parked: without a bound on that wait, unloading the
+   * plugin would hang. Waiting commands are failed with a stable `bridge_closed:`
+   * prefix, so a tool call ends immediately instead of burning its timeout.
+   * @returns {Promise<void>} resolves once the socket is closed (idempotent).
+   */
+  async close() {
+    this.#closed = true
+    for (const [id, entry] of this.#waiting) {
+      entry.reject(new AgentBrowserError('bridge_closed', `the bridge stopped before ${id} settled`))
+    }
+    this.#waiting.clear()
+    this.#queues.clear()
+    this.#wake()
+    const server = this.#server
+    this.#server = null
+    if (server === null) return
+    await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        server.closeAllConnections?.()
+        resolve()
+      }, CLOSE_TIMEOUT_MS)
+      timer.unref?.()
+      server.close(() => {
+        clearTimeout(timer)
+        resolve()
+      })
+    })
+  }
+
+  /** Synchronous escape hatch for process teardown; prefer `close()` while unloading. */
+  dispose() {
+    this.#closed = true
+    for (const [id, entry] of this.#waiting) {
+      entry.reject(new AgentBrowserError('bridge_closed', `the bridge stopped before ${id} settled`))
+    }
+    this.#waiting.clear()
+    this.#queues.clear()
+    this.#wake()
+    if (this.#server !== null) {
+      this.#server.close()
+      this.#server = null
+    }
+  }
+
+  /** Route one HTTP request. */
+  async #handle(req, res) {
+    const url = new URL(req.url ?? '/', `http://127.0.0.1:${this.#port}`)
+    if (!url.pathname.startsWith(BRIDGE_PREFIX)) {
+      send(res, 404, { ok: false, error: 'not this service', mark: BRIDGE_MARK })
+      return
+    }
+    const route = url.pathname.slice(BRIDGE_PREFIX.length) || '/'
+    const origin = req.headers.origin ?? ''
+    if (!isPanelOrigin(origin)) {
+      this.#logger(`rejected ${route} from origin=${origin || '(none)'}`)
+      send(res, 403, { ok: false, error: 'unexpected origin', mark: BRIDGE_MARK })
+      return
+    }
+
+    // The renderer runs on dsh-app://app, so every JSON POST is cross-origin and
+    // arrives behind a preflight. Answering it here is what lets the panel settle
+    // commands at all: a 404 on OPTIONS makes the browser drop the real request.
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'access-control-allow-origin': origin === '' ? '*' : origin,
+        'access-control-allow-headers': `content-type, ${TOKEN_HEADERS}`,
+        'access-control-allow-methods': 'GET, POST, OPTIONS',
+        'access-control-max-age': '600',
+        'content-length': '0',
+      })
+      res.end()
+      return
+    }
+
+    // Two independent fences beyond the origin check. Host catches DNS
+    // rebinding (the attacker's name reaches a loopback address); the token is
+    // the actual credential, since any local process can forge Origin.
+    if (!this.#hostTrusted(req)) {
+      this.#logger(`rejected ${route} with host=${String(req.headers.host ?? '')}`)
+      send(res, 403, unauthorized('untrusted host'))
+      return
+    }
+    if (!this.#tokenMatches(req, url)) {
+      this.#logger(`rejected ${route} without a valid token`)
+      send(res, 403, unauthorized('missing or invalid token'))
+      return
+    }
+
+    if (route === '/health') {
+      let queued = 0
+      for (const queue of this.#queues.values()) queued += queue.length
+      send(res, 200, {
+        ok: true,
+        mark: BRIDGE_MARK,
+        origin: this.#origin,
+        clients: this.#seen.size,
+        seen: [...this.#seen].map(short),
+        queued,
+        waiting: this.#waiting.size,
+        parked: this.#waiters.size,
+        enqueued: this.#enqueued,
+        pulled: this.#pulled,
+        logs: this.#logs.length,
+        diagnostics: this.#diagnostics,
+        states: [...this.#states].map(([sessionId, state]) => ({
+          session: short(sessionId),
+          // The full id is what a diagnostic needs to drive `/state` or `/phase`
+          // by hand; this endpoint is loopback-only and answers the panel's peers.
+          id: sessionId,
+          phase: this.stateOf(sessionId).phase,
+          since: state.since,
+        })),
+      })
+      return
+    }
+
+    if (route === '/log' && req.method === 'POST') {
+      const body = await readJson(req)
+      const message = typeof body?.message === 'string' ? body.message : '(no message)'
+      const entry = { at: Date.now(), message, data: body?.data ?? null }
+      this.#logs.push(entry)
+      if (this.#logs.length > this.#logLimit) this.#logs.shift()
+      this.#logger(`panel: ${message}`)
+      send(res, 200, { ok: true, mark: BRIDGE_MARK })
+      return
+    }
+
+    if (route === '/logs' && req.method === 'GET') {
+      send(res, 200, { ok: true, mark: BRIDGE_MARK, logs: this.#logs })
+      return
+    }
+
+    // Page-side code the panel needs on its own initiative, not only as part of
+    // a command. The host owns these files, so the panel never carries a copy
+    // that could drift from what the tools actually run.
+    if (route === '/source' && req.method === 'GET') {
+      const name = url.searchParams.get('name') ?? ''
+      const read = this.#sources[name]
+      if (typeof read !== 'function') {
+        send(res, 404, { ok: false, mark: BRIDGE_MARK, error: `unknown source: ${name}` })
+        return
+      }
+      try {
+        send(res, 200, { ok: true, mark: BRIDGE_MARK, name, source: String(read()) })
+      } catch (error) {
+        send(res, 500, { ok: false, mark: BRIDGE_MARK, error: String(error?.message ?? error) })
+      }
+      return
+    }
+
+    // Panel reads the phase it should paint, including the reason a page needs
+    // a human. Cheap and idempotent, so the badge can refresh without a command.
+    if (route === '/state' && req.method === 'GET') {
+      const who = url.searchParams.get('session')
+      if (who === null || who === '') {
+        send(res, 400, { ok: false, mark: BRIDGE_MARK, error: 'session is required' })
+        return
+      }
+      this.#seen.add(who)
+      send(res, 200, { ok: true, mark: BRIDGE_MARK, state: this.stateOf(who) })
+      return
+    }
+
+    // The panel is the only writer: only it knows what the user just clicked and
+    // what the page looks like now.
+    if (route === '/phase' && req.method === 'POST') {
+      const body = await readJson(req)
+      const who = typeof body?.session === 'string' ? body.session : ''
+      if (who === '') {
+        send(res, 400, { ok: false, mark: BRIDGE_MARK, error: 'session is required' })
+        return
+      }
+      this.#seen.add(who)
+      this.setPhase(who, String(body?.phase ?? 'idle'), {
+        reason: typeof body?.reason === 'string' ? body.reason : '',
+        signals: Array.isArray(body?.signals) ? body.signals : [],
+        digest: typeof body?.digest === 'string' ? body.digest : undefined,
+        since: Number(body?.since),
+      })
+      send(res, 200, { ok: true, mark: BRIDGE_MARK, state: this.stateOf(who) })
+      return
+    }
+
+    if (route === '/pending' && req.method === 'GET') {
+      const who = url.searchParams.get('session')
+      if (who !== null && who !== '') this.#seen.add(who)
+      // Long-poll: an idle panel parks its request here instead of asking again
+      // every 100 ms, so a command reaches the page with no polling delay.
+      const waitMs = Math.min(Math.max(Number(url.searchParams.get('wait') ?? 0) || 0, 0), 5_000)
+      let pulled = this.#drain()
+      if (pulled.total === 0 && waitMs > 0) {
+        await this.#park(waitMs)
+        pulled = this.#drain()
+      }
+      if (pulled.total > 0) this.#logger(`pull ${pulled.total} by ${short(who ?? '?')}`)
+      const states = {}
+      for (const [sessionId, state] of this.#states) {
+        states[sessionId] = { ...state, phase: this.stateOf(sessionId).phase }
+      }
+      send(res, 200, { ok: true, mark: BRIDGE_MARK, sessions: pulled.sessions, states })
+      return
+    }
+
+    if (route === '/settle' && req.method === 'POST') {
+      const body = await readJson(req)
+      const id = typeof body?.id === 'string' ? body.id : ''
+      const entry = this.#waiting.get(id)
+      if (entry === undefined) {
+        // The caller already gave up on this command. Answer politely, so a panel
+        // that was mid-flight does not log a spurious "unknown command" error.
+        if (id !== '' && this.#cancelled.delete(id)) {
+          send(res, 200, { ok: true, mark: BRIDGE_MARK, ignored: true })
+          return
+        }
+        send(res, 200, { ok: false, mark: BRIDGE_MARK, error: 'unknown or expired command' })
+        return
+      }
+      if (body.ok === false) {
+        entry.reject(panelFailure(body))
+      } else {
+        entry.resolve(body.result ?? null)
+      }
+      send(res, 200, { ok: true, mark: BRIDGE_MARK })
+      return
+    }
+
+    send(res, 404, { ok: false, error: `no route ${route}`, mark: BRIDGE_MARK })
+  }
+}
+
+/** Only the DSH renderer may drive this queue. */
+function isPanelOrigin(origin) {
+  if (origin === 'dsh-app://app' || origin === 'null' || origin === '') return true
+  return origin.startsWith('http://127.0.0.1:')
+}
+
+/** Constant-time token comparison; a length mismatch short-circuits instead of throwing. */
+function sameToken(actual, expected) {
+  const left = Buffer.from(actual)
+  const right = Buffer.from(expected)
+  return left.length === right.length && timingSafeEqual(left, right)
+}
+
+/** One JSON response for a refused request; never a `WWW-Authenticate` challenge. */
+function unauthorized(message) {
+  return { ok: false, mark: BRIDGE_MARK, error: { code: 'unauthorized', message } }
+}
+
+/**
+ * Turn a panel failure report into the error the caller sees.
+ *
+ * TICKET-013: a failed navigation also reports where it was going and whether
+ * the panel managed to go back; carry that into `details` so the tool layer can
+ * classify the failure without re-parsing the remote-method wrapper.
+ * @param {{error?: unknown, navigation?: unknown}} [body] - the panel's settle body.
+ * @returns {Error} an `AgentBrowserError` when the shape is recognised.
+ */
+function panelFailure(body = {}) {
+  const text = String(body?.error ?? 'panel error')
+  const failure = fromPanelMessage(text)
+  const navigation = body?.navigation
+  if (isAgentBrowserError(failure) === false || navigation === null || typeof navigation !== 'object') {
+    return failure
+  }
+  const details = { ...(failure.details ?? {}) }
+  if (typeof navigation.url === 'string' && navigation.url !== '') details.url = navigation.url
+  if (typeof navigation.previousUrl === 'string' && navigation.previousUrl !== '') {
+    details.previousUrl = navigation.previousUrl
+  }
+  details.restored = navigation.restored === true
+  details.raw = text
+  return new AgentBrowserError(failure.code, failure.message, {
+    cause: failure,
+    retryable: failure.retryable,
+    details,
+  })
+}
+
+/** The caller aborted a command before or while the panel was executing it. */
+function cancelledError(id = '') {  const which = id === '' ? 'this call' : `${id}`
+  return new AgentBrowserError(
+    'cancelled',
+    `the caller stopped ${which} before the panel finished it. `
+    + 'Nothing already sent to the page can be undone, so re-read the page before acting again.',
+  )
+}
+
+/** One JSON response, with the CORS headers the renderer needs to read it. */
+function send(res, status, payload) {
+  const body = JSON.stringify(payload)
+  res.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': Buffer.byteLength(body),
+    'access-control-allow-origin': '*',
+    'access-control-allow-headers': `content-type, ${TOKEN_HEADERS}`,
+    'access-control-allow-methods': 'GET, POST, OPTIONS',
+    'cache-control': 'no-store',
+  })
+  res.end(body)
+}
+
+/** Read a small JSON body. */
+async function readJson(req) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of req) {
+    size += chunk.length
+    if (size > 4 * 1024 * 1024) throw new Error('body too large')
+    chunks.push(chunk)
+  }
+  if (chunks.length === 0) return null
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  } catch {
+    return null
+  }
+}
+
+/** Short session id for logs. */
+export function short(sessionId) {
+  const text = String(sessionId ?? '')
+  return text.length <= 8 ? text : `${text.slice(0, 8)}…`
+}
+
+/** Id for a command nobody asked for yet; exported for tests. */
+export function newCommandId() {
+  return randomUUID()
+}

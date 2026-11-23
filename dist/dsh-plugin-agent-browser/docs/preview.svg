@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="300" viewBox="0 0 640 300" role="img" aria-label="A conversation on the left and a real browser panel on the right, with the pointer inside the panel">
+  <rect x="32" y="32" width="576" height="236" rx="14" fill="none" stroke="#94a3b8" stroke-width="2"/>
+  <line x1="32" y1="66" x2="608" y2="66" stroke="#94a3b8" stroke-width="2"/>
+  <circle cx="52" cy="49" r="4" fill="#cbd5e1"/>
+  <circle cx="66" cy="49" r="4" fill="#cbd5e1"/>
+  <circle cx="80" cy="49" r="4" fill="#cbd5e1"/>
+
+  <rect x="52" y="86" width="220" height="10" rx="5" fill="#cbd5e1"/>
+  <rect x="52" y="108" width="300" height="10" rx="5" fill="#e2e8f0"/>
+  <rect x="52" y="130" width="264" height="10" rx="5" fill="#e2e8f0"/>
+  <rect x="52" y="152" width="188" height="10" rx="5" fill="#e2e8f0"/>
+  <rect x="52" y="186" width="140" height="26" rx="13" fill="#e2e8f0"/>
+
+  <rect x="372" y="82" width="216" height="166" rx="10" fill="#eff6ff" stroke="#93c5fd" stroke-width="2"/>
+  <rect x="372" y="82" width="216" height="24" rx="10" fill="#1d4ed8"/>
+  <rect x="372" y="98" width="216" height="8" fill="#1d4ed8"/>
+  <circle cx="388" cy="94" r="4" fill="#bfdbfe"/>
+  <rect x="400" y="91" width="86" height="6" rx="3" fill="#bfdbfe"/>
+
+  <rect x="388" y="122" width="120" height="9" rx="4.5" fill="#93c5fd"/>
+  <rect x="388" y="140" width="184" height="8" rx="4" fill="#dbeafe"/>
+  <rect x="388" y="156" width="164" height="8" rx="4" fill="#dbeafe"/>
+  <rect x="388" y="172" width="148" height="8" rx="4" fill="#dbeafe"/>
+  <rect x="388" y="196" width="96" height="24" rx="6" fill="#1d4ed8"/>
+  <rect x="400" y="205" width="72" height="6" rx="3" fill="#eff6ff"/>
+
+  <path d="M470 148 l34 15 -13.5 4 -5 13.5 -5 -2 4.6 -12.5 -12 3.2 z" fill="#0f172a" stroke="#f8fafc" stroke-width="2.5" stroke-linejoin="round"/>
+</svg>

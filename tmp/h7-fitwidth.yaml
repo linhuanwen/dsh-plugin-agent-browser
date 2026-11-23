@@ -1,0 +1,5 @@
+- id: agent-browser-panel
+  config:
+    limits:
+      snapshotMaxChars: 3000
+    fitWidth: false
