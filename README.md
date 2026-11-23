@@ -1,4 +1,4 @@
-﻿<div align="center">
+<div align="center">
 
 <img src="docs/assets/icon.svg" width="84" alt="agent browser panel" />
 
@@ -109,25 +109,16 @@ Agent 会自己走完 `browser_open` → `browser_snapshot` → 按 ref 点搜�
 ## 它是怎么工作的
 
 ```text
-        Agent（对话）
-            │  browser_* 工具调用
-            ▼
-  ┌─────────────────────────────┐
-  │  host 半                    │  注册工具、策略、下载、静态服务
-  │  tools / policy / bridge    │  127.0.0.1 动态端口 + 每进程令牌
-  └──────────────┬──────────────┘
-                 │  长轮询（面板 → 宿主，拿命令；宿主 → 面板，回结果）
-                 ▼
-  ┌─────────────────────────────┐
-  │  client 半                  │  右侧栏 tab、四态徽章、三张工具卡片
-  │  <webview> 真浏览器          │  导航、缩放、截图、输入事件
-  └──────────────┬──────────────┘
-                 │  executeJavaScript
-                 ▼
-  ┌─────────────────────────────┐
-  │  页面注入层                  │  snapshot / actions / detect / guards
-  │  纯字符串注入，每次读盘       │  在页面里遍历、命中、检测验证墙
-  └─────────────────────────────┘
+Agent（对话）
+   │  browser_* 工具调用
+   ▼
+host 半 · 注册工具 / 策略 / 下载 / 静态服务
+   │  长轮询：127.0.0.1 动态端口 + 每进程令牌
+   ▼
+client 半 · 侧栏 tab / 四态徽章 / 三张工具卡片 / <webview>
+   │  executeJavaScript
+   ▼
+页面注入层 · snapshot / actions / detect / guards
 ```
 
 - **为什么要三层**：工具跑在宿主侧，才有文件与网络权限；`<webview>` 只能活在渲染器里；页面内的遍历与命中必须进页面执行。三层之间只有一条本机回环通道。
@@ -174,13 +165,13 @@ Agent 会自己走完 `browser_open` → `browser_snapshot` → 按 ref 点搜�
 
 <table>
   <tr valign="top">
-    <td width="50%">
-      <img src="docs/assets/case-ccgp-list.jpg" alt="中国政府采购网整页截图" width="360" />
+    <td width="40%">
+      <img src="docs/assets/case-ccgp-list.jpg" alt="中国政府采购网整页截图" width="100%" />
       <br />
       <sub><b>整页拼接截图</b> · 中国政府采购网「服务器」近一周 167 条结果，滚 2 帧 + 尾帧拼成 768 × 2472 的 PNG，页头到页脚连续无重复。</sub>
     </td>
-    <td width="50%">
-      <img src="docs/assets/case-baidu-earth.jpg" alt="百度地图地球视图截图" width="420" />
+    <td width="60%">
+      <img src="docs/assets/case-baidu-earth.jpg" alt="百度地图地球视图截图" width="100%" />
       <br />
       <sub><b>JS 地图 + 坐标点击</b> · 搜索「杭州市」→ 点地球卡片切到卫星视图 → 整页截图。canvas 与跨域 iframe 用坐标命中。</sub>
     </td>
