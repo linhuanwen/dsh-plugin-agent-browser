@@ -249,6 +249,10 @@ node tools/check-docs.mjs
 
 若发现有问题或有修改建议，可以直接开 [issue](https://github.com/linhuanwen/dsh-plugin-agent-browser/issues) 描述问题或建议。
 
+## 友链
+
+本项目已链接认可 [LINUX DO](https://linux.do) 社区。
+
 ## License
 
 [MIT](LICENSE) © 2026 linhuanwen
