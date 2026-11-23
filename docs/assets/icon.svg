@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Agent browser panel">
+  <rect x="4" y="8" width="56" height="48" rx="9" fill="#1d4ed8"/>
+  <rect x="4" y="8" width="56" height="13" rx="9" fill="#1e40af"/>
+  <rect x="4" y="16" width="56" height="5" fill="#1e40af"/>
+  <circle cx="12.5" cy="14.5" r="2.2" fill="#bfdbfe"/>
+  <circle cx="20" cy="14.5" r="2.2" fill="#bfdbfe"/>
+  <circle cx="27.5" cy="14.5" r="2.2" fill="#bfdbfe"/>
+  <rect x="36" y="9" width="4" height="48" fill="#bfdbfe" opacity="0.35"/>
+  <path d="M23 27 l16 7 -6.4 1.9 -2.4 6.5 -2.4 -0.9 2.2 -6 -5.6 1.5 z" fill="#ffffff"/>
+</svg>
