@@ -23,7 +23,7 @@
 
 <p align="center"><img src="docs/assets/hero.svg" width="760" alt="示意图：左边是对话，右边是侧栏里的真浏览器面板；顶部徽章显示检测到验证、等你处理，面板底部有我来接管按钮" /></p>
 
-> **一句话定位**：内置的 `web_search` / `web_fetch` 负责「匿名、快速、只读」地取网页文字；这个插件负责「用你的登录身份、看得见、能动手、能留证据」的那一半。
+内置的 `web_search` / `web_fetch` 负责「匿名、快速、只读」地取网页文字；这个插件负责「用你的登录身份、看得见、能动手、能留证据」的那一半。
 
 ## 为什么需要它
 
@@ -238,7 +238,14 @@ node tools/pack.mjs
 node tools/check-docs.mjs
 ```
 
+README 里的两张案例图由 `python tools/make-readme-assets.py` 从真实截图重新生成（Pillow，可选）；`docs/assets/hero.svg` 是手写的示意图。
+
 开发循环是「改 `plugin/` → `node tools/pack.mjs` → `plugin_manager install_bundle <tgz>`」，约 10 秒。改 `client.js` 要 bump `CLIENT_REV` 才会重新执行 client 半。更多约定（哪些字段能热改、重装后第一条命令为什么超时、link 安装的坑）写在 [`PROGRESS.md`](PROGRESS.md) 末尾。
+
+## 反馈
+
+- 用着有问题、想要新工具：开 [issue](https://github.com/linhuanwen/dsh-plugin-agent-browser/issues)。
+- 安全相关：先开一个不含复现细节的 issue 说明来意，细节我们私下对。
 
 ## License
 
