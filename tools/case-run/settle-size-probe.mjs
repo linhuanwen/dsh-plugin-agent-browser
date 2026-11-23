@@ -47,6 +47,9 @@ async function attempt(chars) {
   }
 }
 
-for (const chars of [62_358, 2_772_754, 4_180_000, 4_190_000, 4_194_000, 4_239_798, 8_000_000]) {
+// Sizes are the real samples plus the old 4 MiB boundary; `argv[3]` adds more
+// (comma separated) so the same probe can poke a newer cap without editing it.
+const extra = (process.argv[3] ?? '').split(',').filter(Boolean).map(Number)
+for (const chars of [...[62_358, 2_772_754, 4_180_000, 4_190_000, 4_194_000, 4_239_798, 8_000_000], ...extra]) {
   await attempt(chars)
 }

@@ -92,7 +92,7 @@ tar -tzf dsh-plugin-agent-browser-1.4.13.tgz → 25 项 / 128,654 B / sha256 16C
 | 4 | 跨 minor 回滚后渲染器仍跑较新客户端 bundle，`browser_open` 先报 `panel_not_open` | P2 | 刷新页面或重开侧栏页签恢复（TICKET-030 同类） |
 | 5 | **一个 profile 只启用一个浏览器后端**：#33 `dsh-plugin-panel-browser` 与本插件有 2 个同名工具（`browser_snapshot` / `browser_screenshot`） | 使用约束 | 已写进 README；发布说明需提醒 |
 | 6 | 截图取帧依赖面板可见，隐藏/未绘制时报 `produced no picture` | P2 | 文案可读、可重试（TICKET-028） |
-| 7 | **超大截图回执丢失**：面板已取到图（实测 4,239,798 chars / 1151×1294）但回执未回，工具挂到 60 s 报 `bridge_timeout`，且文案误导为"打开页签" | P1（TICKET-034；**根因已定位并修复于源码**：`bridge.js` 的 4 MiB 请求体上限低于该图 4,239,848 B 的回执，现提到 32 MiB + 413 `budget_exceeded` + 客户端预检降级；1.4.13 冻结点未动，待 1.4.14 装机复验） | 规避：该站改用 `browser_snapshot`；复现站点 `opentopomap.org`（`reference/010` V10 坑 5）。与其他成功样本（百度地图 2,772,754 chars）对照确认是载荷尺度问题 |
+| 7 | **超大截图回执丢失**：面板已取到图（实测 4,239,798 chars / 1151×1294）但回执未回，工具挂到 60 s 报 `bridge_timeout`，且文案误导为"打开页签" | P1（TICKET-034；**根因已定位、修复并复验**：`bridge.js` 的 4 MiB 请求体上限低于该图 4,239,848 B 的回执 ⇒ 1.4.14 提到 32 MiB + 413 `budget_exceeded` + 客户端预检降级；1.4.14 实测 opentopomap 连拍 188–201 ms、整页 4.23 M 字符回执 2.8 s 送达；1.4.13 冻结点未动） | 规避：该站改用 `browser_snapshot`；复现站点 `opentopomap.org`（`reference/010` V10 坑 5）。与其他成功样本（百度地图 2,772,754 chars）对照确认是载荷尺度问题 |
 
 ## 7. 发布动作（G5 通过后执行）
 

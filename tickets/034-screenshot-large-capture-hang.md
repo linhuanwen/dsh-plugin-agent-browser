@@ -1,6 +1,6 @@
 # TICKET-034 大图回执丢失：截图在面板里成功取到，但回执没回来，工具挂到 60 s 超时
 
-- **状态**：🔧 已修于源码（2026-11-23 16:3x，`main` 分支；1.4.13 冻结点不受影响）——待发 1.4.14 后在装机版上做实地复验
+- **状态**：✅ 已修并验证（2026-11-23 16:5x，1.4.14 装机；四条验收全过，现场记录见 §5）
 - **优先级**：P1（安全语义未破、页面未丢；代价是每次 60 s 空等 + 工具报 `bridge_timeout`，模型会误判"面板没开"）
 - **来源**：2026-11-23 15:2x 案例复跑（V 集抽跑，`reference/010-validation-cases.md` 坑 5）—— `https://opentopomap.org/#map=10/23.13/113.26`
 - **相关**：TICKET-013（失败导航回退）、TICKET-028（截图可见性 / 取帧重试预算）、`plugin/bridge.js`、`plugin/client/…` 的 screenshot 回执路径
@@ -65,15 +65,19 @@ capture done {sent:1151, chars:4239798}      ← 距 start 约 197 ms
 
 未新增错误码：沿用既有的 `budget_exceeded`（`retryable: true`），避免动 `plugin/errors.js` 的 13 码契约与文档表格。
 
-## 5. 验收状态
+## 5. 验收状态（1.4.14 实测，2026-11-23 16:5x，面板 429×863 @ dpr 1.5）
 
-1. ⬜ 真实站点 ≤10 s 返回 —— 需 1.4.14 装机后重跑 `opentopomap.org`（本轮只有源码级证据）
-2. ⬜ 同页连截 3 次不累积 —— 同上
-3. ⬜ `demo` / 百度地图无回归 —— 同上（单测层面已覆盖 4.24 M 字符回执）
-4. ✅ `plugin/test/bridge.test.mjs` 新增两条：**4.24 M 字符 settle 被接受**（端到端 `start()` → `request()` → `/pending` 取 id → `/settle` → 断言 200 且 payload 完整）与**超过 `MAX_BODY_BYTES` 回 413/`budget_exceeded`**；全量 `node --test plugin/test/*.test.mjs` 180/180 通过
+装包后**未重启**就已生效（`install_bundle` 返回 `application: "applied"`，宿主半热应用）：对同一桥打点，34,000,000 字符的 settle 现在回 **413 `{"code":"budget_exceeded","message":"the reply was 33619648 bytes, over the 33554432-byte bridge limit"}`** —— 上限确实从 4,194,304 抬到了 33,554,432。
+
+1. ✅ **真实站点 ≤10 s 返回**：`opentopomap.org` 连拍 3 次全部成功，桥日志逐帧计时 **197 / 188 / 201 ms**（`capture done` → `settled ok:true`），三张 **1,793,126 B 字节完全相同**（sha256 `b2d35dbf…`）。
+2. ✅ **不累积、可重复**：同上三次；另外整页拼接也一次过（见下）。
+3. ✅ **无回归**：`demo/index.html` 截图 45.7 KB（与修复前 62,358 chars 的回执一致）；百度地图在 429 px 面板下 740.2 KB 正常保存（此前 767 px 时是 2,079,549 B，尺寸差异只因面板宽度变了）。
+4. ✅ **单测**：`plugin/test/bridge.test.mjs` 两条端到端用例（4.24 M 字符 settle 被接受 / 超 `MAX_BODY_BYTES` 回 413 且 `code:'budget_exceeded'`），全量 `node --test plugin/test/*.test.mjs` → **180/180**。
+
+**跨过旧上限的关键证据**：`https://zh.wikipedia.org/wiki/杭州市` 整页截图（`mode:'full'`）——13 帧拼接、644×14,994 px、PNG **3,173,820 B** ⇒ base64 dataUrl ≈ **4,231,760 字符 / body ≈ 4,231,810 B**，**刚好越过旧的 4,194,304 B 上限**；本次 `screenshot done` → `settled ok:true` 共 **2,826 ms**，产物 `screenshots/v10-fullpage-large-payload-1.4.14.png`（sha256 `25a0ba1b98c2320ac52e86851e190cb69cf8741c415e46732009f298cf3abb21`）。这就是修复前必然挂 60 s 的那一类载荷。
 
 ## 6. 现状
 
-- **源码已修**（`main`），1.4.13 冻结点（tgz `128,654 B` / `16cac4ff…`）未变，首发结论不受影响。
-- 已同步 `reference/010-validation-cases.md`（V10 矩阵行 + 坑 5 根因）与 `docs/launch-report-1.4.13.md` §6 第 7 条（由"未修"改为"源码已修、待 1.4.14 复验"）。
-- 发布说明里保留"已知限制"一句，直到 1.4.14 实地复验通过。
+- 1.4.14 已发布并装进 desktop profile（`node_modules` 版本 1.4.14，`MAX_BODY_BYTES` 在位）；1.4.13 冻结包仍在库里，首发报告结论不受影响。
+- 已同步 `reference/010-validation-cases.md`（V10 矩阵行 + 坑 5）、`reference/014-practical-cases.md` §7.6、`docs/launch-report-1.4.13.md` §6 第 7 条与 `PROGRESS.md` 的 dist 清单。
+- 未新增错误码：沿用 `budget_exceeded`（13 码契约不变）。
