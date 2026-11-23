@@ -334,7 +334,7 @@ capture done {sent:1151, chars:4239798}      ← +197 ms 就完成
 | 4 | 首次 `browser_open https://example.com/` → `Opened https://example.com/ — Example Domain`，**一次成功、无 `panel_not_open`** | V11 重启项的自动拉起成立；G3 那次"首次调用失败需重试"未复现 |
 | 5 | 随后 `/health`：`clients:1`、`enqueued:1`、`pulled:1`、`states:[{id:"session-e32e610d-cec7-44b8-98bd-d8d7bc6b9551", phase:"agent"}]`、`tools:11 registered:11 conflicts:[]` | 面板按需新建、只挂一个会话；工具面完整 |
 
-留证：`screenshots/v11-restart-after-open.png`（重启后首次打开 example.com 的面板视图，86.7 KB）。
+留证：`screenshots/v11-restart-after-open.png`（重启后首次打开 example.com 的面板视图，88,769 B / 1151×1294 / `d370eea5…`）。它与重启前 15:08 的 `screenshots/shot-20261123-150821.png` **字节完全相同**（同 sha）——同宽面板、同页面、渲染确定性；同时也说明重启后的页面是**重新加载到顶部**的，没有继承上一轮的滚动/缩放状态，与"不假装恢复"互相印证。
 
 ---
 
