@@ -13,3 +13,5 @@ dist/dsh-plugin-agent-browser/*.tgz
 .DS_Store
 Thumbs.db
 *.log
+
+tmp/commit-msg.txt
