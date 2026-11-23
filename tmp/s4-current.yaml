@@ -1,0 +1,5 @@
+- id: agent-browser-panel
+  config:
+    sessions:
+      allowlist:
+        - session-e32e610d-cec7-44b8-98bd-d8d7bc6b9551

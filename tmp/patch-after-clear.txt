@@ -1,0 +1,54 @@
+# Hermes 于 2026-10-09 添加的机器级补丁层（$DSH_HOME/cordis.patch.yml）。
+# 作用：修 dsh-hermes-bridge v0.4.0 的 hd-events 条目。
+#
+# 上游包自带的 cordis.patch.yml 里 insert 了两行，name 都写 'dsh-hermes-bridge'（= 包 main，
+# 即 hermes-bridge.js），所以第二条（id: hd-events）从来没有真正加载过，顺带还把 hermes-bridge
+# 重复插入了一次。DSH 的 applyEntryPatches 会把 patch 的 name 解构掉、不参与覆盖，无法就地改
+# 模块路径，因此这里用「disable 旧行 + insert 新行」的方式修正。
+#
+# 新行指向本机 fork（上游那份的凭据发现逻辑读不到 Hermes 的 webhook_subscriptions.json，
+# 会导致 HMAC secret 为空、Hermes 侧一律 401）。fork 说明见：
+#   C:\Users\林焕文\.dsh\local-plugins\hd-events-local.mjs
+- id: hd-events
+  disabled: true
+- insert:
+    - id: hd-events-local-v2
+      name: 'C:\Users\林焕文\.dsh\local-plugins\hd-events-local.mjs'
+# 2026-10-15 停用 rea MCP：它单独贡献 207 个工具 schema = 782 KiB / 42584 个 JSON 值，
+# 使每个请求都超过 DeepSeek 后端的 32768 JSON 值上限（多出来的 76 KiB 才是 DSH 自带工具+系统提示），
+# 于是所有走 deepseek-v4-flash / 官方 anthropic 路线的会话都会 400。要恢复 REA 时，把下面这段取消注释并重启 DSH。
+# - insert:
+#     - id: rea-mcp
+#       name: "@deepseek-ai/dsh-mcp-client"
+#       config:
+#         serverName: rea
+#         transport: stdio
+#         command: cmd.exe
+#         args:
+#           - /d
+#           - /c
+#           - npx
+#           - -y
+#           - rea-agents@6.5.0
+#           - mcp
+
+# 2026-11-14：把 DSH 进程的临时目录从 C 盘 %TEMP% 迁到 D:\dsh-temp，
+# 并在启动 5s 后清理超过 24h 未更新的 dsh-workspace-changes-* 残留目录。
+#
+# 原因：内置插件 @deepseek-ai/dsh-workspace-changes 的临时根目录写死 os.tmpdir()
+# （源码 `tempRoot: tmpdir()`，config 只有 timeoutMs/outputMaxBytes/maxFiles/
+# maxFileBytes/diffTimeoutMs，没有 tempDir 也没有开关）。每个顶层会话首轮快照会
+# git add -A 整个工作树（未跟踪且未被 .gitignore 排除的文件全写成 git 对象），
+# 只有 session/disposed 才 rm -rf；进程被强杀就成了残留，2026-10 那批单个达 2.64GB。
+#
+# 原理：Node 的 os.tmpdir() 在 Windows 上每次调用都重读 TMPDIR/TMP/TEMP，
+# 插件在加载期改 env 即可；workspace-changes 的 scratchDir() 是每个 Session
+# 首次用时才算的，必然晚于插件加载。
+#
+# 生效：重启 DSH。只影响 DSH 进程及其子进程（git/node/pwsh 的 temp 一起搬）。
+# 回滚：删掉下面这段 insert 并重启；想保留 code 但停用清理可设环境变量 DSH_TEMP_SWEEP=0。
+# 插件源码与详细说明：C:\Users\林焕文\.dsh\local-plugins\dsh-temp-redirect.mjs
+- insert:
+    - id: dsh-temp-redirect
+      name: 'C:\Users\林焕文\.dsh\local-plugins\dsh-temp-redirect.mjs'
+

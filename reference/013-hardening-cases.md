@@ -354,11 +354,11 @@
 3. 紧接 `browser_snapshot({maxChars:600})` → `page "Example Domain" url=https://example.com/`、516 B、5 行（现场未丢）。
 4. 置回 `false` 后同一 URL：错误文本与第 1 步**逐字一致**（无任何搜索痕迹）。
 
-### 7.4 H6 错误契约 — 🟡 部分（4/6）
+### 7.4 H6 错误契约 — ✅ 6/6（首测 4 条 + §7.7 补 `cancelled` + 2026-11-23 补 `panel_not_open`）
 
 | # | 触发 | 实测 message |
 |---|---|---|
-| 1 | 面板未打开 | ⬜ 未触发（面板一直开着；需要 🖐 关页签后调用） |
+| 1 | 面板未打开 | ✅ 2026-11-23 1.4.13 补测：`Error: panel_not_open: the browser panel of session session-… is not on screen, so the page cannot be driven. Open that session and its right sidebar browser tab, then retry.`（用户打开页签后重试成功） |
 | 2 | `browser_open file:///C:/Windows/win.ini` | `Error: scheme_rejected: only http(s) URLs are allowed, got file:` |
 | 3 | `evalEnabled:false` + `browser_eval` | `Error: eval_disabled: browser_eval is switched off by this installation (evalEnabled: false)` |
 | 4 | `browser_open https://no-such-host.invalid/` | `Error: navigation_failed: nav_dns: the host name could not be resolved (ERR_NAME_NOT_RESOLVED): https://no-such-host.invalid/. The panel went back to …` |
@@ -447,3 +447,23 @@
 **H 集已无剩余人工项**：H1–H8 全部实测完毕（H1 取消 §7.7、H5 卡片 §7.6、H6 补齐 §7.4/§7.7、H8 验证墙 §7.9；H2/H3/H4/H7 见 §7.1–§7.5）。原交接给 S 集的两项人工（S2 面板切后台截图、S5 真实站点验证墙）也已于 2026-11-22 / 11-23 完成，记录见 `reference/014-practical-cases.md` §7.4 / §7.5。
 
 清理：`tmp/` 下的夹具与脚本保留到 H 集跑完；`downloads/probe.dat` 为验收产物（可删）；profile patch 已恢复基线（2,071 字符 / 54 行、无临时块）。
+
+### 7.11 1.4.13 复跑（2026-11-23 15:2x–15:4x，插件 1.4.13 / 宿主 GUI 127.0.0.1:9522）
+
+背景：1.4.9–1.4.12 动过代码（接管点击 TICKET-032、‹›⟳ 工具栏、`inject/guards.js` 独立注入、`fitWidth`），而 H 集结论锚在 1.4.3，故在装机版本 1.4.13 上把 H2/H3/H4/H6/H7 全部重跑。**结论：五案全过，无回归。**
+
+| 案例 | 结果 | 1.4.13 关键证据 |
+|---|---|---|
+| H2 失败换路 | ✅ | baseline（`tmp/h2-baseline.txt`，196 字符）与关闭态逐字一致；`searchFallback.enabled:true` 后同一 URL 追加 `Search fallback (1 call, provider≈deepseek-search-api, model route=opencode-go, query="wikipedia.org")` + `Nothing was opened (opened: false)` + 同站候选（`ja.wikipedia.org` 子域）；页面未丢（`gen 1 · 5 lines · 516 B`）；`patch-tool clear` 后**再逐字一致** |
+| H3 鉴权与隔离 | ✅ 16/16 | `tmp/h3-auth-probe.mjs` 全 PASS（无/错令牌 403、伪造 Host 403 `untrusted host`、静态 302 + `ab` HttpOnly cookie、双实例令牌互斥）；发现路由无 cookie 与假 cookie 均 **401**；`set_plugin include:agent-browser-panel false→true` 后 discovery 200、**未刷新 GUI** 直接可驱动 |
+| H4 策略收紧 | ✅ 四相 A→D | A: `eval_disabled` + `download_rejected (.dat)`；B: allowlist `[definitely-not-this-session]` → 任何 `browser_*` 均 `session_not_allowed` 且**桥 `enqueued` 不增**；C: 删掉 `sessions` 后 open 恢复、eval/.dat 仍拒；D: 清空后 `1+1 → 2`、`.dat` 落盘（392 B，`downloads/probe.dat`） |
+| H6 错误契约 | ✅ 6/6 | 本轮新增 `panel_not_open`（面板未开时）+ 复核 `scheme_rejected` / `eval_disabled` / `session_not_allowed` / `navigation_failed`；六条 message 都是 `Error: <code>: …` |
+| H7 配置面 | ✅ | `limits.snapshotMaxChars:3000` → 同一夹具页快照 `2.8 KB / 14 refs / 70 lines`（默认 `7.7 KB / 47 refs / 169 lines`）；`fitWidth:false` + `browser_zoom({reset:true})` → `innerWidth 657 / scrollWidth 1908`、`window.scrollTo(600,0)` 后 `scrollX 600`；非法值 `snapshotMaxChars:-5` **被拒**、旧配置继续跑（桥日志仍 `snapshot start {maxChars:3000}`，且无新的 `host half applied` 帧）；清空后恢复默认 |
+
+**本轮环境注记（复跑前必读）**
+
+1. 每次改配置都会**重置桥端口与计数器**（本轮依次 12869 / 12457 / 3340 / 14295 / 2564 / 1399 / 12125 …），所以"`enqueued` 不增"这类断言必须在**同一次重启之后**取前后两读数。
+2. **这台机器的 DNS 被劫持**：`no-such-host.invalid`、`nohost.test`、随机 `.com` 一律解析成功后被重置，实测落到 `navigation_failed: nav_reset (ERR_CONNECTION_CLOSED)`，**拿不到 `nav_dns`**。`nav_dns` 分类仍由单测覆盖（`plugin/test/navigation.test.mjs:31`，`ERR_NAME_NOT_RESOLVED (-105)` → `nav_dns`）。要真验 `nav_dns` 需换网络或改 hosts。
+3. H7 的非法值不是"报错弹窗"型：写入后**没有任何新 apply 帧**，只有下一次操作还看着旧预算——判负条件要写成"旧配置仍生效"，不要等错误横幅。
+4. 每次 `set_plugin` 都附同一条与本案无关的警告（`dream-skin (dsh-dream-skin): pending (waiting for service: webRuntime)`），不是回归。
+5. `include:agent-browser-panel` 是插件条目 id；写 `agent-browser-panel` 会得到 `{"code":"unknown-plugin"}`。

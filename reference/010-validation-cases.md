@@ -27,6 +27,42 @@
 
 但用户随后澄清了真实意图（不是要百度出地势图，而是走人工同一条路）：**搜索框输入城市名 → 右下角切换模块选「地球」→ 对地球界面下的城市截图并识别内容**。这条路完全走得通，且「地球」模式在市级缩放下渲染为**卫星影像**，山体阴影、林斑、河网、建成区在影像里比任何"地势图层"都更直白——见 **V12**（端到端主案例，城市按用户要求用**杭州市**，广州那轮作为历史产物保留）。`guangzhou-terrain.png`（OpenTopoMap 晕渲）作为"真地势图"的补充源保留。
 
+### 1.4.13 抽跑（2026-11-23，插件 1.4.13，面板 767×863 @ dpr 1.5）
+
+1.4.13 相对 1.4.12 是**纯文档变更**（25 个文件逐哈希核对，只有 `package/package.json` 与 `package/README.md` 不同），但 1.4.9–1.4.12 动过代码（接管点击 TICKET-032、‹›⟳ 工具栏、`inject/guards.js`、`fitWidth`），所以对 P1 抽跑项做了一次重跑：
+
+| 案例 | 结果 | 证据（1.4.13 实测） |
+|---|---|---|
+| V2 | ✅ | `browser_open({path:'demo/index.html'})` → `http://127.0.0.1:3177/t/demo/index.html`；快照 `gen 1 · 3 refs · 15 lines · 32 nodes walked · 1ms · 46.2 KB`；三条资源断言全中：`text "Stylesheet loaded:"` + `yes`、`img "a green square"`、`fetch('/data.json'): {"ok":true,"served":"from the workspace","items":[1,2,3]}` |
+| V3 | ✅（1 处偏差） | `includeImage:false` 两次 → gen 1→2→3、ref `e1–e3` 稳定、纯文本 **511 B**（含图 46.2 KB = 图片负载）；`maxChars:120` → 末行 `… tree cut at the character budget; scroll or narrow the query and snapshot again.`。**偏差**：纯文本快照没有独立 digest 行，`Image sha256:<64hex>` 只在含图时出现 |
+| V4 | ✅ | `browser_click({ref:'e3'})` → `Clicked button "click me" at (65, 294)`；再快照 `paragraph "hits: 1"` |
+| V5 | ✅ | 面板宽 767 px，放大按钮 `BMap_button_new BMap_stdMpZoomIn` 中心 **CSS (734,710)**；`browser_click({x:734,y:710})` → 比例尺 `5 公里 → 2 公里`、`@…,12z → @…,13z` |
+| V9 | ✅ | `file://` → `scheme_rejected`；`{path:'../outside.txt'}` → `path_escape: … outside the workspace`；`http://127.0.0.1:9522/`（DSH 自身）→ `navigation_failed: nav_aborted: … (ERR_FAILED)` 且面板回到原页（桥日志 `c13` 有 `navigation failed; going back`） |
+| V12 | ✅ | 端到端复现，见下 |
+| V10 | ❌ 新缺陷 | OpenTopoMap 截图挂死，见「坑 5」与 `tickets/034` |
+
+V12 这次的三处变化值得记：① `browser_type({submit:true})` 现在**真的会重定位**（eval 得 `title: 杭州市 - 百度地图`、`href: …/search/杭州市/@13382475,3514398,12z`）——1.0.19 记录里的"Enter 只改 URL 不飞"陷阱不再复现；② `browser_hover({selector:'#mapType'})` 返回 `The layout changed under the pointer — something expanded.`，提示层已经会报"指针下布局变了"；③ 截图 `screenshots/v12-baidu-earth-hangzhou-1.4.13.png`，**2,079,549 B**，sha256 `fa366f132afbf178a9ca36559103e08f644bf36f706046d5f16bc1470cda2096`，1151×1294。识别命中 16 个标注类地物（良渚古城遗址公园、良渚文化村、兰里景区、东明山森林公园、杭州半山国家森林公园、京杭大运河杭州景区、西溪国家湿地公园、五常湿地公园、西湖风景区、午潮山国家森林公园、铜鉴湖公园、灵山景区、湘湖国家旅游度假区、新沙岛景区、麦田CBD、杭州南站、萧山站）+ 5 个行政区（拱墅 / 西湖 / 上城 / 滨江 / 萧山）+ 影像判读（西南午潮山—灵山深绿林斑与山体影、钱塘江自西南向东北的宽灰白水面、城区灰白高密度建成区与黄色路网、北部平原细碎绿斑）。弹层「下载百度地图 领100元券」占右上角，未影响点击。
+
+### 坑 5（1.4.13 新抓，P1）：大图回执丢失 → 截图静默挂到 60 s 超时
+
+同一批操作里，`browser_open('https://opentopomap.org/#map=10/23.13/113.26')` 后立刻 `browser_screenshot({mode:'viewport'})` **连续两次**返回：
+
+```
+Error: bridge_timeout: browser panel did not answer c26 (screenshot) within 60000ms.
+Open the right sidebar browser tab for this session and retry. (screenshot step: command)
+```
+
+而同页 `browser_snapshot({includeImage:false})` 正常（`gen 1 · 12 refs · 60 nodes · 1ms`）。桥日志显示**取图其实成功了**，只是回执没到：
+
+```
+screenshot start {mode:viewport, w:767, h:863, dpr:1.5, vis:visible}
+capture start {css:767} → capture got image {device:1151, height:1294}
+capture done {sent:1151, chars:4239798}      ← +197 ms 就完成
+（之后无任何回执，客户端等到 60 s 超时）
+```
+
+对照成功样本：`demo` 62,358 chars、百度地图 2,772,754 chars 都秒回；这次 **4,239,798 chars（约 4 MB）** 卡在回执/传输上。与坑 1（`css:0` 取图失败）**不是同一个 bug**：这次是取图成功、回执丢失，且错误停留 60 s 而不是 ~650 ms 放弃。处置：该站不截图，改用快照；登记 `tickets/034`。
+
 ---
 
 ## V1 外网 https 首屏 + 截图（canvas 地图站）

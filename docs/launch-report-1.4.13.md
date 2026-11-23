@@ -35,6 +35,8 @@
 | G4 回滚与升级演练 | ✅ | `launch-test-plan.md` §G4：1.4.9↔1.4.8↔1.3.6 四次装卸，配置与用户数据零变化 |
 | G5 发布判断 | ✅ 已签（15:12 确认 / 15:14 签署） | §8 |
 
+**用例分级与本轮复跑（2026-11-23 15:2x–15:4x）**：H 集 H1–H8 全部通过，其中 H2/H3/H4/H6/H7 已在本装机版 1.4.13 上**重跑通过**（`reference/013-hardening-cases.md` §7.11）；S 集 S1–S6 全部通过，S3/S4/S6 同样在 1.4.13 上重跑通过（`reference/014-practical-cases.md` §7.6）；V 集本轮抽跑 7 项（V2/V3/V4/V5/V9/V12 通过，V3 记一处 digest 偏差），**并新抓到 1 个 P1 缺陷**——超大截图回执丢失（TICKET-034，见 §6 第 7 条）；T/R 两集留待上线后回归。
+
 ## 3. G0 复跑记录（2026-11-23 15:09，本轮）
 
 ```
@@ -90,6 +92,7 @@ tar -tzf dsh-plugin-agent-browser-1.4.13.tgz → 25 项 / 128,654 B / sha256 16C
 | 4 | 跨 minor 回滚后渲染器仍跑较新客户端 bundle，`browser_open` 先报 `panel_not_open` | P2 | 刷新页面或重开侧栏页签恢复（TICKET-030 同类） |
 | 5 | **一个 profile 只启用一个浏览器后端**：#33 `dsh-plugin-panel-browser` 与本插件有 2 个同名工具（`browser_snapshot` / `browser_screenshot`） | 使用约束 | 已写进 README；发布说明需提醒 |
 | 6 | 截图取帧依赖面板可见，隐藏/未绘制时报 `produced no picture` | P2 | 文案可读、可重试（TICKET-028） |
+| 7 | **超大截图回执丢失**：面板已取到图（实测 4,239,798 chars / 1151×1294）但回执未回，工具挂到 60 s 报 `bridge_timeout`，且文案误导为"打开页签" | P1（TICKET-034，本轮新登记，未修） | 规避：该站改用 `browser_snapshot`；复现站点 `opentopomap.org`（`reference/010` V10 坑 5）。与其他成功样本（百度地图 2,772,754 chars）对照确认是载荷尺度问题 |
 
 ## 7. 发布动作（G5 通过后执行）
 

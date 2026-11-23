@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import { createHash, createHmac } from 'node:crypto';
 
-const hostPort = '127.0.0.1:9529';
+const hostPort = process.argv[2] ?? '127.0.0.1:9522';
 const yaml = fs.readFileSync('C:/Users/林焕文/.dsh/.credentials.yaml', 'utf8');
 const m = yaml.match(/client-connection\/browser-session:\s*\n(?:.*\n)*?\s+secret:\s*(\S+)/);
 const secret = Buffer.from(m[1].replaceAll('-', '+').replaceAll('_', '/'), 'base64');

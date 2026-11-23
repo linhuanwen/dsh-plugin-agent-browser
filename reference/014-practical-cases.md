@@ -332,3 +332,21 @@ S5 的 M 步是"真站点验证墙"，本轮借上线测试 G2 用真实站点�
 
 **复跑提示**：真墙站点随时可能变（NopeCHA 演示页是较稳定的靶子）；若挑战页没有触发 `needs_human`，按 TICKET-033 的现状记为"检测漏报"，不要为了让案例通过而人工点"我来接管"后宣称墙被识别。
 
+### 7.6 S3 / S4 / S6 在 1.4.13 上重跑 — ✅ 三案全过（2026-11-23 15:3x）
+
+S3/S4/S6 的原始结论锚在 1.4.3，1.4.9–1.4.12 动过 policy 与 guards，故在装机 1.4.13 上重跑。三案都是"先真出事，再看处置"，所以按"障碍步"记：
+
+| 案例 | 障碍步（M） | 实测（1.4.13） | 结论 |
+|---|---|---|---|
+| S3 受限策略下取数 | `evalEnabled:false` + `downloads.extraBlockedExtensions:[dat]` | 取数：`browser_open({path:'tmp/h7-page.html'})` → `http://127.0.0.1:14757/t/tmp/h7-page.html`，`browser_snapshot({maxChars:2200})` 直接读出 7 行（`Entry number 0..6` → value `0,7,14,21,28,35,42`），**全程未用 eval**；下载：`browser_download https://httpbin.org/anything/probe.dat` → `Download failed at policy: download_rejected: refusing to download .dat files into the workspace` + `Nothing was saved.` | ✅ L3 |
+| S4 会话隔离 | allowlist 只放行本会话 | 主会话（`session-e32e610d-…`）`browser_open` 正常；`subagent` 起的独立会话调 `browser_snapshot` → `Error: session_not_allowed: this session is not allowed to drive the browser (session_not_allowed)`；被拒期间桥 `enqueued` **停在 1 不动**（只有主会话那次真进了桥）；清名单后恢复 | ✅ L3 |
+| S6 故障自助 | 三故障三处置 | ① `panel_not_open`（页签没开）→ 打开页签后重试成功；② `bridge_timeout`（下午 V10 的截图挂死，60 s ×2）→ 换快照继续，页面未丢；③ `navigation_failed: nav_reset`（`nohost.test`）→ 面板自动回到上一页，报错里明说"页面还在" | ✅ L3（③ 见下注） |
+
+**与 1.4.3 记录的差异**
+
+1. **S3 的替代路径换了**：1.4.3 那轮用公告站 HTML；这轮先试 Wikipedia 真页失败——a11y 树**总是从文档根开始**，表格在 6,000 字符预算之外，`browser_scroll` 也不改变树起点。于是改成"内网报表页"夹具（60 行列表）：结论一样——**快照就是受限策略下的取数通道**，把 7 行写进 `tmp/s3-extracted-rows.csv`（`index,name,value`）。这是复跑时最容易踩的坑，写进 §7.3 复跑注意。
+2. **S3 恢复态**：清空配置后 `browser_eval 1+1` → `2`、`.dat` 照常落盘（`downloads/probe.dat`，392 B，sha256 `bff4860b3f0b7fbc81b32ea5cd64b3d06fc0f6e102bc00a0cafab44cc6fb09c9`），确认策略可回退。
+3. **S4 的名单匹配**：必须写当前会话 id（`session-e32e610d-cec7-44b8-98bd-d8d7bc6b9551`）；从桥 `/health` 的 `states[].id` 或最新 `session.v4.jsonl.zstd` 的目录名都能取到，别照抄旧文档里的 `session-bb049fec-…`。
+4. **S6 第三个故障**：这台机器 DNS 被劫持，`*.invalid` / `*.test` 都解析成功后被重置，只能拿到 `nav_dns` 的兄弟码 `nav_reset`；`nav_dns` 由 `plugin/test/navigation.test.mjs:31` 单测覆盖。三码三处置的判定不受影响（处置动作同为"接受回退、确认页面还在"）。
+5. **重载窗口比 1.4.3 更快**：`set_plugin false→true` 返回后立刻 `browser_open` 即成功（<1 s），本轮没有撞出 3 s 窗口内的 `bridge_timeout`；能复现的 `bridge_timeout` 只剩"大图回执丢失"那条（`tickets/034`）。
+

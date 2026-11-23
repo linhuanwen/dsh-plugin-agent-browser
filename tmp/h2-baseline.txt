@@ -1,0 +1,1 @@
+Error: navigation_failed: nav_timeout: the server did not answer in time (ERR_TIMED_OUT): https://www.wikipedia.org:8080/. The panel went back to https://example.com/, so that page is still there.
