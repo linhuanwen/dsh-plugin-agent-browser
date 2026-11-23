@@ -288,7 +288,7 @@
 
 ### 7.3 复跑注意
 
-- 改配置的案例必须用 `tools/case-run/patch-tool.mjs set <yaml> / clear`，跑完确认 profile patch 回到 **2,071 字符 / 54 行 / 末尾单换行**。
+- 改配置的案例必须用 `tools/case-run/patch-tool.mjs set <yaml> / clear`，跑完确认 `check` 输出 **`chars=2072 lines=55 hasBlock=false`**（机器级 `~/.dsh/cordis.patch.yml`；早期文档写的 2,071/54 是旧基线，差 1 个字节来自脚本对空行的归一化，不是残留块）。
 - 取证辅助脚本在 `tools/case-run/`（`patch-tool`：改 profile 配置块；`discovery-probe`：自签 cookie 读桥端口/令牌/health）；H 集夹具与配置样本保留在 `tmp/`。
 - S1 的搜索筛选（中标公告 / 近1月）在页面上是无 ref 的 `li`，用 `browser_eval` 按文本点击；翻页优先用「下一页」文本。
 - S4 需要一个真实独立会话：用 `subagent` 起一次性代理即可（同一条命令在两个会话得到不同结果，是隔离的直接证据）。
