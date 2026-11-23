@@ -31,7 +31,7 @@
 | 诚实性补丁 1.0.25 / 1.0.26 | ✅ 1.0.25（行为验收版）：class 版 disabled 的控件点击后追加 `Heads up: its class list says "layui-disabled"…`，`window.open` 的拦截提示不再被滚动吞掉；1.0.26 只补包内 README 的两条已知限制（class-disabled、附件链接是黑洞）。单测 59/59 |
 | TICKET-014 激活档位 + 验证识别加固 | ✅ 2026-11-20 完成并装机（`1.0.27` 代码 / `1.0.28` 包文档，`HOST_REV 27` / `CLIENT_REV 27`）：配置 `activation` 三档 `auto`（默认，只有需要页面的动作才展开）/ `always`（每次动作都亮，`browser_download` 除外）/ `manual`（agent 不展开，没开就立刻报错）；1688 那种"验证码拦截"滑块页现在能判成 `needs_human`。单测 71/71（`tickets/014-activation-levels.md`，决策见 `decisions/004`） |
 | TICKET-015 宽度自适应 + 整页截图 | ✅ 2026-11-20 完成并装机（`1.0.39`，`HOST_REV 28` / `CLIENT_REV 28`）：导航后自动把页面缩到面板宽度（`fitWidth`，可关）；`browser_screenshot` 长页**滚动拼接**成整页 PNG 落盘 `screenshots/`。政采结果页 `sh 3588` → `768 × 2472`、2 帧 + 尾帧、`truncated:false`，页头到页脚连续无重复。单测 82/82（`tickets/015-fit-width-and-fullpage-screenshots.md`） |
-| spec §10 验收审计（A1–A13 逐条对照） | ✅ 2026-11-20，11 条通过，2 条带实现偏差，A9 一条按实测修正 / A12 待下次重启补测（`reference/009-spec-audit.md`） |
+| spec §10 验收审计（A1–A13 逐条对照） | ✅ 2026-11-20，11 条通过，2 条带实现偏差，A9 一条按实测修正；**A12 的最后一条证据于 2026-11-23 重启实测补上**（无残留壳、零状态恢复、首次 `browser_open` 一把成功）——§10 全部条目均有结论（`reference/009-spec-audit.md`） |
 | 全部 ticket | ✅ 完成——插件已作为真包安装在 profile 里 |
 | spec 增补 A14 / A15 / A16 / A17 / A18 / A19 | ✅ 2026-11-20 已加，且**六条都已实现并勾选**：A14（1.0.5 下载落盘）、A15（1.0.14 同视图导航 + `blockedNewWindow`，1.0.21/1.0.22 补表单与假成功）、A16（1.0.19 悬停展开）、A17（1.0.24 面板缩放）、A18（1.0.27 激活档位 `auto`/`always`/`manual`）、A19（1.0.39 宽度自适应 + 整页截图） |
 | 操作能力验证案例集（V1–V12） | ✅ 2026-11-20：V1–V6 / V9 实测通过，V10 复现 1 次**截图静默失败**，**V12 端到端主案例**（搜索「杭州市」→ 地球/卫星视图 → 截图并识别）按真实人工路径跑通（见 `reference/010-validation-cases.md`） |
@@ -87,7 +87,7 @@ reference/
   006-takeover.md                  接管：host 相位机、门控矩阵、检测器两类门槛、交接摘要、两个同源 bug
   007-local-files.md               本地文件：为什么必须挂 HTTP 壳、两道安全闸、错误码表、三个误判现象
   008-packaging.md                 打包：发布结构、exports 六出口、元数据规则、安装四态、link→包的一次重启、两道 Windows 坑
-  009-spec-audit.md                spec §10 的 A1–A13 逐条审计：证据、三处实现偏差、A9 修正、A12 待补测
+  009-spec-audit.md                spec §10 的 A1–A13 逐条审计：证据、三处实现偏差、A9 修正、A12 重启实测通过（2026-11-23）
   010-validation-cases.md          操作能力验证案例集 V1–V12：覆盖矩阵、坐标点击打 canvas、截图静默失败复现与修法、V12 端到端（搜索→地球→截图识别）
   011-task-cases.md                任务级案例集 T1–T8（**T1/T4/T5/T6/T7/T8 已执行，T2/T3 暂缓**）：1688 选品/比价/登录墙、规章下载落盘、PDF 文号闭环、翻页去重、新窗口与附件行为、404/WAF 换路 + 缺口登记
   012-industry-research-cases.md   行业调研验证方案 R1–R8（**R4 / R8 已跑通，其余六案待跑**）：医保目录/年报数字/法规时效/政采中标/文献结论/土地成交/供应商资质 + 素材落盘与正式报告，判"结论可核对"

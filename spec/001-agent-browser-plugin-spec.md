@@ -423,7 +423,7 @@ browser_open({ path: 'D:/work/report.html' })
 - [ ] A9 `browser_open({path})` 打开本地 HTML → 静态服务起来、页面渲染、~~关 tab 后端口释放~~——**修正**：端口随插件生命周期释放，同一工作区复用，不随 tab 关闭
 - [x] A10 `file://` 与 DSH 自身地址（`http://127.0.0.1:8738`）均被拒绝，返回明确原因（前者在工具层拦截，后者由主进程 `ERR_FAILED` 拒绝）
 - [x] A11 切会话再切回 → 页面仍在原处（`keepMounted` 生效）
-- [ ] A12 重启应用 → tab 壳还在，提示"重新打开"（不假装恢复）——**步骤已交接**（2026-11-23，见 `reference/010-validation-cases.md` V11 节「重启检查清单」），待用户执行后回填
+- [x] A12 重启应用 → tab 壳还在，提示"重新打开"（不假装恢复）——**2026-11-23 16:1x 实测通过**：重启后侧栏无残留壳、插件 `/health` 零状态恢复（`clients:0`、`states:[]`），首次 `browser_open` 一把成功；记录见 `reference/010-validation-cases.md` V11 节「重启实测记录」与 `reference/009-spec-audit.md` §10 表
 - [x] A13 代码里搜不到任何自动过验证/打码相关实现（人工审计）
 - [x] A14 **下载落盘**：在详情页点 `.pdf` / `.doc` / `.docx` 附件（或对附件 href 直接下载）→ 文件**真实写入** `<workspace>/downloads/`，工具返回 `{path, bytes, sha256, mime}`；失败时返回 `download_failed` 并**明说未下载**，禁止用正文摘要冒充附件内容（对应用例 T4 / T5）
 - [x] A15 **新窗口策略**：`target="_blank"` 链接与 `window.open()` **不弹独立窗口**——行为固化为"同视图导航"，或返回 `blocked_new_window {url}` 让 agent 显式 `browser_open`；其后快照里的 URL 必须与实际视图一致（对应用例 T7）
@@ -449,7 +449,7 @@ browser_open({ path: 'D:/work/report.html' })
 
 > **A8 补强（1.0.27，TICKET-014）**：`inject/detect.js` 的标题词加 `验证码拦截|滑动验证|人机验证|security check`，选择器加 `#nc_1_wrapper`、`.nc-container`、`.nc_scale`、`#baxia-dialog`、`[id^="nc_"]`、`iframe[src*="captcha"]`，文案加 `请按住滑块`、`拖动到最右边`、`按住滑块拖`、`滑块验证`、`滑动验证`；另加降级命中——**只有文本一类信号且页面可交互元素 ≤ 3** 也算墙（1688 实测 `请按住滑块，拖动到最右边` 属此类）。反例已固化成单测：帮助页「如何完成滑块验证」有几十个控件，不算墙。
 
-> **审计记录（2026-11-20）**：逐条对照见 `reference/009-spec-audit.md`（含证据位置与三个待决偏差）。本清单据此改为实际状态：11 条通过（其中 A5/A6/A8 带实现偏差），A9 的"关 tab 释放端口"不成立，A12 缺证据。
+> **审计记录（2026-11-20）**：逐条对照见 `reference/009-spec-audit.md`（含证据位置与三个待决偏差）。本清单据此改为实际状态：11 条通过（其中 A5/A6/A8 带实现偏差），A9 的"关 tab 释放端口"不成立。**A12 已于 2026-11-23 重启实测通过**（当时缺的那条证据已补上），至此 §10 的 15 条中 11 条 ✅、3 条 ✅带偏差（A5/A6/A8）、1 条按实测改 spec（A9）。
 
 ---
 

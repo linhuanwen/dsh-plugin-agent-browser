@@ -21,7 +21,7 @@
 | A9 | `browser_open({path})` → 静态服务起来、页面渲染、**关 tab 后端口释放** | ❌ | 前两段 ✅（起服务、外链 CSS/图片/fetch 全对）。**第三段不成立**：端口只在插件 dispose 时关闭（`index.js` 的 `ctx.effect(() => () => sites.dispose())`），关 tab 不会释放。当前设计是"每个工作区一个服务、多个页面复用"，端口因此比 tab 活得久 |
 | A10 | `file://` 与 DSH 自身地址均被拒绝，且给出明确原因 | ✅ | `browser_open('file:///C:/Windows/win.ini')` → `Error: only http(s) URLs are allowed, got file:`（工具层就挡，比交给主进程更早）。DSH 自身地址 → 主进程拒绝：`Error invoking remote method 'GUEST_VIEW_MANAGER_CALL': Error: ERR_FAILED (-2) loading 'http://127.0.0.1:13098/'`。**说明**：我们的代码里没有"拒绝 DSH origin"的显式判断，靠的是主进程；错误文本是 Electron 的 |
 | A11 | 切会话再切回 → 页面仍在原处（`keepMounted` 生效） | ✅ | 实测（用户操作 + 日志双重证据）：面板里开着 `http://127.0.0.1:4614/demo/index.html`，切到另一个会话再切回，**页面与页面内状态都在**（按钮计数 `hits` 从 0 变成 4 仍保留）；`/logs` 里只有开机那一次 `panel mount`（1795139276839）与一次 `lease acquired`，切会话后**没有新的 mount / 租约**，说明 panel body 从未卸载。→ `keepMounted: true` 确实让侧栏 tab 跨会话存活 |
-| A12 | 重启应用 → tab 壳还在，提示"重新打开"（不假装恢复） | ❔ | 两次重启都没专门看侧栏残留（用户答"没注意"）。逻辑上：相位、webview、页面状态全在内存，重启必然丢页面；"tab 壳是否留下"取决于 DSH 是否持久化侧栏 tab 地址，未取证。下次重启时看一眼即可 |
+| A12 | 重启应用 → tab 壳还在，提示"重新打开"（不假装恢复） | ✅ | 2026-11-23 16:1x 实测（补上原先缺的证据）：重启前 `/health` 桥 **12125**、`clients:1`、`states:[session-e32e610d…]` → 完全退出 DSH 重开（宿主 9522 → **9515**，桥换到 **9516**）→ `/health` `clients:0`、`seen:[]`、`states:[]`、`enqueued:0`、`logs:4` ⇒ 插件侧**零状态恢复**，不存在"假装恢复"。用户目视重启后右侧栏：**没有**「浏览器」页签或空白壳。随后首次 `browser_open https://example.com/` 一把成功（`Opened … — Example Domain`，无 `panel_not_open`），`clients` 变 1、只挂本会话。留证 `screenshots/v11-restart-after-open.png` |
 | A13 | 代码里搜不到任何自动过验证/打码实现 | ✅ | 对 `plugin/` 全量 grep `captcha|turnstile|2captcha|anti-captcha|hcaptcha|recaptcha|bypass|打码|过验证|solve`：命中项全部是**检测用的选择器**、`resolve()` 等同名函数、以及一句注释 `It only ever *reports*. Nothing here tries to solve, spoof, or click a…`。无任何求解、转发打码、绕过逻辑 |
 
 ## 非功能要求（spec §9）
@@ -45,10 +45,10 @@
 2. **A5 的 `needs_human` 语义**。密码框返回的是工具级错误而不是相位切换，这是对的（否则用户一碰密码框，整个面板就被锁成"等待人工验证"）。建议把 spec 这句改成"返回 `needs_human` 错误，不切换相位"。
 3. **A11 反而通过了**（原本以为会退化成空白）。既然 `keepMounted` 能让页面跨会话存活，就把它当成一条要守住的性质写进 spec 与 README：**切会话不清页面**。将来若改动挂载策略（例如为了省内存改成"只剩当前会话挂载"），必须重新验 A11。
 
-## 待补测（只剩一件）
+## 待补测（已于 2026-11-23 全部补齐）
 
-| # | 怎么做 | 看什么 |
-|---|---|---|
-| A12 | 下次重启 DSH 后看一眼右侧栏 | 是否残留一个"浏览器"tab 壳；点开是空白浏览器面板（合格）还是直接报错 / 假装恢复了页面（不合格） |
+| # | 怎么做 | 看什么 | 结果 |
+|---|---|---|---|
+| A12 | 下次重启 DSH 后看一眼右侧栏 | 是否残留一个"浏览器"tab 壳；点开是空白浏览器面板（合格）还是直接报错 / 假装恢复了页面（不合格） | ✅ 2026-11-23 16:1x：无残留壳、插件侧零状态恢复、首次 `browser_open` 一把成功（详见 §10 表格 A12 行与 `reference/010` V11 节） |
 
-补测完把结果写回本文件与 §10 表格，并在 `README.md` 的状态表里记一笔。A1 与 A11 已于 2026-11-20 由用户目视/操作确认。
+全部条目已于 2026-11-23 补齐：结果已写回本文件与 §10 表格，`README.md` 状态表与 `reference/010` V11 节同步。A1 与 A11 于 2026-11-20 由用户目视/操作确认，A12 于 2026-11-23 由用户重启 + 目视确认。
