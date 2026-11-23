@@ -236,9 +236,7 @@ node tools/check-docs.mjs
 
 ## 反馈
 
-- 用着有问题、想要新工具：开 [issue](https://github.com/linhuanwen/dsh-plugin-agent-browser/issues)。
-- 直接找我：QQ **136273496**、邮箱 **136273496@qq.com**。
-- 安全相关：先开一个不含复现细节的 issue 说明来意，细节我们私下对。
+若发现有问题或有修改建议，可直接联系：QQ **136273496**、邮箱 **136273496@qq.com**。
 
 ## License
 
