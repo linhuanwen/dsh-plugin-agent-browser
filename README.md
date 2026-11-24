@@ -9,7 +9,7 @@
 `dsh-plugin-agent-browser` · DSH 桌面端插件
 
 <p>
-  <img alt="version 1.4.22" src="https://img.shields.io/badge/version-1.4.22-2563eb?style=flat-square" />
+  <img alt="version 1.4.23" src="https://img.shields.io/badge/version-1.4.23-2563eb?style=flat-square" />
   <img alt="DSH 0.2.2 - 0.3.0" src="https://img.shields.io/badge/DSH-0.2.2%20~%200.3.0-1d4ed8?style=flat-square" />
   <img alt="11 tools" src="https://img.shields.io/badge/tools-11-0f766e?style=flat-square" />
   <img alt="196 tests passed" src="https://img.shields.io/badge/tests-196%20passed-16a34a?style=flat-square" />
@@ -95,7 +95,7 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 
 ```text
 plugin_manager action: install_bundle
-                target: dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.4.22.tgz
+                target: dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.4.23.tgz
 ```
 
 ### 3. 打开面板
@@ -189,6 +189,21 @@ client 半 · 侧栏 tab / 四态徽章 / 三张工具卡片 / <webview>
 | 本地文件服务 | 工作区页面的单文件上限 | 同上 |
 
 页面顶部是一行现况：桥的端口、已注册的工具数、当前几个会话持有浏览器——排查问题时先看这一行，能立刻分清"插件没加载"和"页面在跟别的后端抢"。
+
+### 「面板自动打开」到底管什么
+
+它只管**浏览器面板本身**：`browser_open` / `snapshot` / `click` / `type` / `scroll` / `hover` / `zoom` / `screenshot` / `press` / `eval` 这十个工具被调用时，要不要把右侧栏展开、把面板带到前台。它**不影响** `web_search` / `web_fetch`——那两个是 DSH 内置的联网工具，跑在宿主里，永远不碰面板。
+
+| 选项 | 实际行为 |
+|---|---|
+| **自动（需要时）** `auto` | 只有当这个会话还没有活着的面板时，才打开并展开右侧栏；之后不再动布局。你手动收起侧栏后，它会保持收起 |
+| **每次调用都打开** `always` | 每条浏览器命令都把面板带到前台（即使你已经切到别的视图）；适合"想盯着它操作"的场景，代价是每次操作都会抢一次焦点 |
+| **从不自动打开** `manual` | 从不打开。当前没有面板时，命令立即失败并返回 `panel_not_open`，提示你自己开页签或改成 `auto` |
+
+两个例外要知道：
+
+- `browser_download` 永远不受这三档影响——它在宿主侧用 `fetch` 跑，既不开面板也不需要面板。
+- `auto` / `always` 只能打开面板页签并展开右栏，**不能把你切换到别的会话**。如果那条命令所属的会话不在屏幕上，面板拿不到页面，5 秒后仍会返回"panel is not on screen"，此时切回那个会话再重试即可。
 
 保存只提交你改动过的字段；写配置走的是 DSH 自己的 config editor，所以**本插件永远不会去改你的 `cordis.patch.yml`**。需要重载的那几组，页面会等插件重新连上、读回新值之后再提示成功。
 

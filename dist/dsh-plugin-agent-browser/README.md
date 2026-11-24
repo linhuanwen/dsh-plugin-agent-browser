@@ -124,7 +124,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 
 | 档位 | 行为 |
 |---|---|
-| `auto`（默认） | 只有需要页面的动作（`open`/`snapshot`/`click`/`type`/`press`/`scroll`/`hover`/`eval`/`zoom`/`screenshot`）才把面板展开；`browser_download` 不会打开面板 |
+| `auto`（默认） | 只有需要页面的动作（`open`/`snapshot`/`click`/`type`/`press`/`scroll`/`hover`/`eval`/`zoom`/`screenshot`）才把面板展开，且**只在这个会话还没有活面板时展开一次**，之后不动布局（你收起侧栏就保持收起）；`browser_download` 不会打开面板 |
 | `always` | 每次动作都把面板带到前台，方便你全程盯着看（`browser_download` 仍不点亮，它在后台跑，点亮也看不到过程） |
 | `manual` | Agent 不替你开面板：没打开就直接报错并说明档位，适合"我要自己先开、你先别动" |
 
