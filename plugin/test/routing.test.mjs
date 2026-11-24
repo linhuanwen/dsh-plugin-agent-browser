@@ -88,19 +88,30 @@ function apply(ctx, config) {
 
 test('auto adds the paragraph only when another browser backend is loaded', () => {
   const alone = fakeContext([...TOOL_NAMES])
-  apply(alone.ctx, {})
+  apply(alone.ctx, { routing: 'auto' })
   assert.equal(alone.sections.length, 1)
   assert.equal(alone.sections[0].text(), '', 'a single-backend profile needs no rule')
 
   const competing = fakeContext([...TOOL_NAMES, 'pilot_navigate', 'pilot_snapshot'])
-  apply(competing.ctx, {})
+  apply(competing.ctx, { routing: 'auto' })
   assert.equal(competing.sections[0].text(), ROUTING_TEXT)
 
   // The panel-browser backend names a different set; detecting only `pilot_`
   // would miss it.
   const panel = fakeContext([...TOOL_NAMES, 'browser_navigate', 'browser_act'])
-  apply(panel.ctx, {})
+  apply(panel.ctx, { routing: 'auto' })
   assert.equal(panel.sections[0].text(), ROUTING_TEXT)
+})
+
+test('the shipped default is off: no paragraph even next to another backend', () => {
+  // Routing is the operator's call. A profile that installs this plugin and
+  // nothing else must not find its agent prompt quietly rewritten, and a
+  // profile that already has pilot needs the human's AGENTS.md rule, not a
+  // plugin arguing with it.
+  const competing = fakeContext([...TOOL_NAMES, 'pilot_navigate'])
+  apply(competing.ctx, {})
+  assert.equal(competing.sections.length, 1, 'the section is still registered, ready to switch on')
+  assert.equal(competing.sections[0].text(), '')
 })
 
 test('the section is declared where the other tool guidance lives', () => {
@@ -136,7 +147,7 @@ test('a host without the prompt service still applies and registers its tools', 
 test('the decision is published on /health, with the names that caused it', () => {
   reports.length = 0
   const competing = fakeContext([...TOOL_NAMES, 'pilot_navigate', 'pilot_snapshot'])
-  apply(competing.ctx, {})
+  apply(competing.ctx, { routing: 'auto' })
   // Reading the paragraph is what republishes after a live change; the first
   // publish happens at registration, before any step is assembled.
   competing.sections[0].text()

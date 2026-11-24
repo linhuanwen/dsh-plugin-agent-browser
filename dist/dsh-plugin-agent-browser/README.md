@@ -59,7 +59,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
     fitWidth: true
     evalEnabled: true
     claimBrowserUse: true
-    routing: auto
+    routing: off
     bridge:
       port: 0
       requestTimeoutMs: 20000
@@ -88,7 +88,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 | `fitWidth` | boolean | `true` | 即时 | 每次导航后把缩放调到"整行排版塞进侧栏"；`false` 保持 100% 横向滚动 |
 | `evalEnabled` | boolean | `true` | 即时 | 是否允许 `browser_eval` 在页面里跑任意 JS；关掉后该工具报 `eval_disabled`。给不可信页面建议关 |
 | `claimBrowserUse` | boolean | `true` | 即时 | 占用宿主的 `browserUse` 互斥槽，避免第二个浏览器提供者同时驱动页面；宿主没有该接缝时自动降级 |
-| `routing` | `auto` \| `on` \| `off` | `auto` | 即时 | 往 Agent 的系统提示词里加一段"什么时候该用本插件"的分流说明。`auto` 只在检测到**另一套浏览器工具**（`pilot_*` 或面板版 `browser_navigate` 等）时才加，单后端 profile 保持零噪音；`on` 总是加，`off` 不加。见下文「和别的浏览器工具共存」 |
+| `routing` | `off` \| `auto` \| `on` | `off` | 即时 | 往 Agent 的系统提示词里加一段"什么时候该用本插件"的分流说明。**由人决定开不开**：默认 `off` 什么都不加；`auto` 只在检测到**另一套浏览器工具**（`pilot_*` 或面板版 `browser_navigate` 等）时才加；`on` 总是加。见下文「和别的浏览器工具共存」 |
 | `bridge.port` | 整数 ≥ 0 | `0` | 改后重载 | 面板通道端口；`0` = 系统分配（推荐，双实例不冲突）。一般不需要改 |
 | `bridge.requestTimeoutMs` | 整数 ≥ 1 | `20000` | 改后重载 | 单条命令的默认超时 |
 | `limits.navigationTimeoutMs` | 整数 ≥ 1 | `45000` | 改后重载 | `browser_open` 等待页面加载的上限 |
@@ -150,13 +150,15 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 
 一个 profile 里同时装了两套浏览器工具（例如本插件 + `dsh-pilot` 的 `pilot_*`）时，"Agent 会不会选本插件"不取决于工具描述写得好不好——技能正文与 `AGENTS.md` 的权重更高，模型会先照着它们走。
 
-所以本插件往系统提示词里加一段分流说明（`routing`，默认 `auto`）：只在检测到另一套浏览器工具时才加，单后端 profile 完全不加。内容是事实性的一句话——**需要你的登录态、需要页面可见并由你随时接管、需要把文件带回来、需要一张留作证据的截图时，用 `browser_*`；公开静态文章用 `web_fetch` 更便宜**。
+所以本插件准备好了一段分流说明，但**默认不往里加**——开不开由你决定（`routing`，默认 `off`）。打开后：`auto` 只在检测到另一套浏览器工具时才加，单后端 profile 完全不加；`on` 总是加。内容是事实性的一句话——**需要你的登录态、需要页面可见并由你随时接管、需要把文件带回来、需要一张留作证据的截图时，用 `browser_*`；公开静态文章用 `web_fetch` 更便宜**。
 
 ```yaml
 - id: agent-browser-panel
   config:
-    routing: auto   # auto | on | off
+    routing: auto   # off（默认） | auto | on
 ```
+
+更稳的做法是把这条分工写进你自己的 `AGENTS.md`（人写规则，插件不抢解释权），插件这段留着当备用。
 
 想彻底避免两套工具打架，最干净的做法仍是**一个 profile 只留一个浏览器后端**（见「已知限制」）。这一段只是在不得不共存时，把话说在模型一定会读到的地方。
 

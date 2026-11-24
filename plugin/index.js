@@ -10,7 +10,7 @@
  * `sessions` from TICKET-024 and `searchFallback` from TICKET-027): `bridge` /
  * `limits` / `downloads` / `static` / `sessions` / `searchFallback.maxResults`
  * are restart fields (the plugin is replaced when they change), while
- * `activation`, `fitWidth`, `evalEnabled`, `claimBrowserUse` and
+ * `activation`, `fitWidth`, `evalEnabled`, `claimBrowserUse`, `routing` and
  * `searchFallback.enabled` are `.volatile()` — the loader hands back a reader, and
  * the host half reads it on every command, so a config-editor change applies live.
  */
@@ -55,7 +55,7 @@ export const Config = z.object({
   // this is where the routing rule has to live (TICKET-035).
   routing: z.string()
     .default(DEFAULTS.routing)
-    .description('Add a routing paragraph to the agent system prompt: auto (only when another browser tool set is loaded), on, or off.')
+    .description('Add a routing paragraph to the agent system prompt: off (the default), auto (only when another browser tool set is loaded), or on.')
     .volatile(),
 
   bridge: z.object({

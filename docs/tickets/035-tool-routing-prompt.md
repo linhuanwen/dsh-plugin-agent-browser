@@ -1,6 +1,6 @@
 # TICKET-035 双后端 profile 下 Agent 不选 `browser_*`：把分流写进系统提示词
 
-- 状态：🔧 已实现（1.4.16 注入 + 1.4.17 可观测），行为侧**部分改善、未全胜**
+- 状态：🔧 已实现（1.4.16 注入 + 1.4.17 可观测 + 1.4.18 默认关、人工开启），行为侧**部分改善、未全胜**，最终以 `AGENTS.md` 的人写规则为主
 - 优先级：P1（功能在双后端 profile 里等于不可用）
 - 关联：`docs/design/web-tools-and-agent-browser.md` §10（对照实验 + §10.5 实现）、`docs/tickets/016`（配置面）、1.4.15（只改描述，未奏效）
 
@@ -26,7 +26,7 @@ DSH 的 `systemPrompt` 服务让插件注册有序的 prompt 段落（`ctx.syste
 - **段落名** `agent-browser-routing`，**order 3050**（在 `TOOL_COMPUTER_USE` 3000 与 `MCP_SERVERS` 3100 之间，跟其它工具指引放一起）。
 - **正文**（`ROUTING_TEXT`，英文，与工具描述同一口径）：说明 `browser_*` 驱动的是右侧栏里那块 Electron 面板、页面对用户可见且可随时接管，因此"要用户的登录态 / 要 JS 或点击才出内容 / 要下载文件 / 要一张留作证据的截图"时用它；公开静态文章用 `web_fetch` 更便宜；`browser_open` 负责先把面板打开。
 - **不点名别的插件**：双后端是运营者的安排，插件不该在提示词里编排别人；它只陈述自己提供什么。
-- **配置 `routing`**：`auto`（默认）/ `on` / `off`，即时生效。
+- **配置 `routing`**：`off`（**默认**：由人决定开不开）/ `auto` / `on`，即时生效。
   - `auto` 只在**检测到另一套浏览器工具**时才加：工具名以 `pilot_` 开头，或出现面板版独有的 `browser_navigate` / `browser_act` / `browser_wait` / `browser_tabs` / `browser_close`。
   - 检测在**每次组装时**做（`ctx.tools.definitions()`），所以后加载的后端也能被看见；单后端 profile 保持零噪音。
 - **宿主没有 `systemPrompt` 服务**时不抛错，只记一条日志，工具照常注册。
