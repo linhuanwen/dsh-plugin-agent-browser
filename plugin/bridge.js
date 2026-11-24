@@ -98,6 +98,17 @@ export class Bridge {
   #starting = null
   /** Page-side sources the panel may request by name (`snapshot`, …). */
   #sources = {}
+  /**
+   * The settings page's read/write path, when the host can edit the row.
+   *
+   * The bridge only transports it: `read()` answers the resolved config and the
+   * per-field restart semantics; `write(patch)` hands a shallow patch to the
+   * config editor, which validates it and owns the write. `null` means this
+   * profile cannot save configuration (no editor, or a bare test bridge), and
+   * `/config` then answers 501 instead of pretending the page is broken.
+   * @type {null | { read: () => Promise<object> | object, write: (patch: object) => Promise<object> }}
+   */
+  #config = null
   /** Default budget for a command the panel has to pick up and finish. */
   #timeoutMs = DEFAULT_TIMEOUT_MS
   /** Set by `close()`/`dispose()`; a shut-down bridge must fail instead of queueing. */
@@ -124,6 +135,7 @@ export class Bridge {
     this.#port = options.port ?? BRIDGE_PORT
     this.#token = options.token ?? randomBytes(32).toString('base64url')
     this.#sources = options.sources ?? {}
+    this.#config = options.config ?? null
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   }
 
@@ -657,6 +669,45 @@ export class Bridge {
 
     if (route === '/logs' && req.method === 'GET') {
       send(res, 200, { ok: true, mark: BRIDGE_MARK, logs: this.#logs })
+      return
+    }
+
+    // The settings page (a `settings.section` tab) reads and saves this row's
+    // config through the same authenticated channel the panel uses. Saving is the
+    // host's business: the adapter hands the patch to the config editor, which
+    // validates the candidate and serializes the write.
+    if (route === '/config' && req.method === 'GET') {
+      if (this.#config === null) {
+        send(res, 501, { ok: false, mark: BRIDGE_MARK, error: 'this profile cannot save plugin configuration' })
+        return
+      }
+      try {
+        send(res, 200, { ...(await this.#config.read()), ok: true, mark: BRIDGE_MARK })
+      } catch (error) {
+        send(res, 500, { ok: false, mark: BRIDGE_MARK, error: String(error?.message ?? error) })
+      }
+      return
+    }
+
+    if (route === '/config' && req.method === 'POST') {
+      if (this.#config === null) {
+        send(res, 501, { ok: false, mark: BRIDGE_MARK, error: 'this profile cannot save plugin configuration' })
+        return
+      }
+      const read = await readJsonOrRefuse(req, res)
+      if (!read.ok) return
+      const patch = read.body?.patch
+      if (patch === null || typeof patch !== 'object' || Array.isArray(patch) || Object.keys(patch).length === 0) {
+        send(res, 400, { ok: false, mark: BRIDGE_MARK, error: 'patch must be a non-empty object' })
+        return
+      }
+      try {
+        const saved = await this.#config.write(patch)
+        this.#logger(`config saved from the settings page: ${Object.keys(patch).join(', ')}`)
+        send(res, 200, { ...saved, ok: true, mark: BRIDGE_MARK })
+      } catch (error) {
+        send(res, 400, { ok: false, mark: BRIDGE_MARK, error: String(error?.message ?? error) })
+      }
       return
     }
 

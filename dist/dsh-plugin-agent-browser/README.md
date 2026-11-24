@@ -170,6 +170,23 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 
 `injected: true` = 已注册且这次组装会带上正文；`competitors` 说明是被谁触发的。桥日志里同名的 `routing paragraph` 只在决策变化时写一条。
 
+## 设置页（设置 → 浏览器面板）
+
+装好之后，DSH 的「设置」左侧会多一页 **浏览器面板**（在本插件启用时出现，禁用即消失）。页面把上表的配置字段做成表单，不用再手改 YAML：
+
+| 分组 | 字段 | 保存后 |
+|---|---|---|
+| 行为 | `activation`、`fitWidth`、`evalEnabled`、`claimBrowserUse`、`routing` | 立即生效，不用重启 |
+| 预算 | `limits.navigationTimeoutMs`、`limits.snapshotMaxChars`、`limits.evalMaxChars` | 插件重新加载一次（约 1–2 s，面板自动重连） |
+| 下载 | `downloads.dir`、`downloads.maxBytes`、`downloads.extraBlockedExtensions` | 同上 |
+| 搜索兜底 | `searchFallback.enabled`、`searchFallback.maxResults` | 同上 |
+| 会话白名单 | `sessions.allowlist` | 同上 |
+| 本地文件服务 | `static.maxBytes` | 同上 |
+
+页面顶部直接显示现况：桥的 origin 与端口、已注册几个工具、当前几个会话持有浏览器。保存时只提交改动过的顶层字段；"需要重启"的那几组会明确提示插件正在重新加载。写配置走的是 DSH 自己的 config editor（和你在「插件」里改 YAML 是同一个通道），所以 `cordis.patch.yml` 永远不会被本插件改写。
+
+> 如果页面底部显示"这个 profile 不能保存插件配置"，说明宿主没有给它 config editor（多见于只读或内置 profile）——此时表单只读，改配置请用 YAML。
+
 ## 十一个工具
 
 | 工具 | 作用 |

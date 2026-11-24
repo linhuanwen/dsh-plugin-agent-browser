@@ -9,10 +9,10 @@
 `dsh-plugin-agent-browser` · DSH 桌面端插件
 
 <p>
-  <img alt="version 1.4.18" src="https://img.shields.io/badge/version-1.4.18-2563eb?style=flat-square" />
+  <img alt="version 1.4.22" src="https://img.shields.io/badge/version-1.4.22-2563eb?style=flat-square" />
   <img alt="DSH 0.2.2 - 0.3.0" src="https://img.shields.io/badge/DSH-0.2.2%20~%200.3.0-1d4ed8?style=flat-square" />
   <img alt="11 tools" src="https://img.shields.io/badge/tools-11-0f766e?style=flat-square" />
-  <img alt="187 tests passed" src="https://img.shields.io/badge/tests-187%20passed-16a34a?style=flat-square" />
+  <img alt="196 tests passed" src="https://img.shields.io/badge/tests-196%20passed-16a34a?style=flat-square" />
   <img alt="platform Windows and macOS" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-475569?style=flat-square" />
   <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-0284c7?style=flat-square" />
 </p>
@@ -94,7 +94,7 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 
 ```text
 plugin_manager action: install_bundle
-                target: dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.4.18.tgz
+                target: dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.4.22.tgz
 ```
 
 ### 3. 打开面板

@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
      * The renderer caches `client.js` aggressively, and a stale half looks
      * exactly like a bug in the host half.
      */
-    const CLIENT_REV = 45
+    const CLIENT_REV = 46
     /** The panel talks to the host half over loopback; both sides carry this mark. */
     const BRIDGE_PREFIX = '/dsh-agent-browser'
     const BRIDGE_MARK = 'dsh-plugin-agent-browser/1'
@@ -283,7 +283,20 @@ window.__ModuleLoader__.load({
           bridge = null
           throw new Error(`bridge ${path} -> HTTP ${response.status} (token rejected)`)
         }
-        if (!response.ok) throw new Error(`bridge ${path} -> HTTP ${response.status}`)
+        if (!response.ok) {
+          // The settings page needs the reason (a 501 "no config editor", a 400
+          // "patch must be ..."), not just the status code.
+          let detail = ''
+          try {
+            const body = await response.json()
+            if (typeof body?.error === 'string') detail = body.error
+          } catch {
+            // Not JSON; the status alone has to do.
+          }
+          const failure = new Error(`bridge ${path} -> HTTP ${response.status}${detail === '' ? '' : `: ${detail}`}`)
+          failure.status = response.status
+          throw failure
+        }
         const data = await response.json()
         if (data?.mark !== BRIDGE_MARK) throw new Error(`bridge ${path} answered by something else`)
         return data
@@ -2752,6 +2765,302 @@ window.__ModuleLoader__.load({
       ['browser_download', DownloadRow],
     ]
 
+    // -------------------------------------------------------------- settings
+    /**
+     * A page in the shell's Settings panel (`settings.section`, TICKET-036).
+     *
+     * The page never reads the profile file and never guesses: it asks the host
+     * half over the same authenticated bridge the panel uses (`GET /config`) and
+     * saves through it (`POST /config`), which hands the patch to DSH's config
+     * editor. Fields the schema marks volatile apply on the next tool call; the
+     * rest reload the plugin, so the page says so before the button is pressed.
+     */
+    const SETTINGS_LABEL = '浏览器面板'
+    const SETTINGS_ORDER = 300
+
+    /** Read a nested path out of a plain config object. */
+    const at = (object, path) => path.reduce((node, key) => (node === null || node === undefined ? undefined : node[key]), object)
+
+    /** Immutably set one nested path; untouched branches keep their identity. */
+    function put(object, path, value) {
+      const [head, ...rest] = path
+      const child = object === null || typeof object !== 'object' ? {} : object
+      return rest.length === 0 ? { ...child, [head]: value } : { ...child, [head]: put(child[head], rest, value) }
+    }
+
+    /**
+     * What the page shows, grouped the way the schema groups it. `path` is
+     * resolved against the config document, so a field this build does not have
+     * is skipped instead of rendered as an empty control.
+     */
+    const SETTINGS_GROUPS = [
+      {
+        title: '行为',
+        hint: '这些字段保存后立即生效，下一次工具调用就按新值执行。',
+        fields: [
+          { path: ['activation'], label: '面板自动打开', kind: 'select', options: [['auto', '自动（需要时）'], ['always', '每次调用都打开'], ['manual', '从不自动打开']] },
+          { path: ['routing'], label: '系统提示词路由段', kind: 'select', options: [['off', '关（默认）'], ['auto', '检测到别的浏览器工具时才加'], ['on', '总是加']] },
+          { path: ['fitWidth'], label: '导航后把页面缩到面板宽度', kind: 'bool' },
+          { path: ['claimBrowserUse'], label: '占用 browserUse 槽，阻止第二个浏览器后端', kind: 'bool' },
+          { path: ['evalEnabled'], label: '允许 browser_eval 在页面里执行脚本', kind: 'bool' },
+        ],
+      },
+      {
+        title: '预算',
+        hint: '保存后插件会重新加载一次：桥端口变了，面板会自动重连。',
+        fields: [
+          { path: ['limits', 'navigationTimeoutMs'], label: '打开页面超时（毫秒）', kind: 'number', min: 1000, step: 1000 },
+          { path: ['limits', 'snapshotMaxChars'], label: '快照默认字符上限', kind: 'number', min: 200, step: 200 },
+          { path: ['limits', 'evalMaxChars'], label: 'eval 默认字符上限', kind: 'number', min: 200, step: 200 },
+        ],
+      },
+      {
+        title: '下载',
+        hint: '浏览器下载落在会话工作目录下，这里是目录、体积上限和额外禁用的扩展名。',
+        fields: [
+          { path: ['downloads', 'dir'], label: '下载目录', kind: 'text' },
+          { path: ['downloads', 'maxBytes'], label: '单文件上限（字节）', kind: 'number', min: 1, step: 1048576 },
+          { path: ['downloads', 'extraBlockedExtensions'], label: '额外禁止的扩展名', kind: 'list', transform: (item) => item.replace(/^\./, '').toLowerCase() },
+        ],
+      },
+      {
+        title: '搜索兜底',
+        hint: '页面打不开时用一次站内搜索补候选链接（每次可能计费），不会自动打开任何页面。',
+        fields: [
+          { path: ['searchFallback', 'enabled'], label: '开启搜索兜底', kind: 'bool', hint: '这一项立即生效。' },
+          { path: ['searchFallback', 'maxResults'], label: '最多候选数', kind: 'number', min: 1, step: 1 },
+        ],
+      },
+      {
+        title: '会话白名单',
+        hint: '留空表示所有会话都能驱动浏览器；填了就只允许列出的会话 id。',
+        fields: [
+          { path: ['sessions', 'allowlist'], label: '允许的会话 id', kind: 'list' },
+        ],
+      },
+      {
+        title: '本地文件服务',
+        hint: '面板不能用 file://，工作区里的页面由回环服务提供；这里是单文件上限。',
+        fields: [
+          { path: ['static', 'maxBytes'], label: '单文件上限（字节）', kind: 'number', min: 1024, step: 1048576 },
+        ],
+      },
+    ]
+
+    /** Styles, inline on purpose: the client bundle carries no stylesheet. */
+    const SET_S = {
+      page: { padding: '24px 28px', maxWidth: 780, fontSize: 13, lineHeight: 1.6 },
+      title: { fontSize: 17, fontWeight: 600, marginBottom: 4 },
+      sub: { opacity: 0.7, marginBottom: 12 },
+      status: { display: 'flex', gap: 8, alignItems: 'center', background: 'rgba(127,127,127,0.08)', borderRadius: 8, padding: '8px 10px', marginBottom: 14, flexWrap: 'wrap' },
+      group: { borderTop: '1px solid rgba(127,127,127,0.22)', padding: '10px 0' },
+      groupTitle: { fontWeight: 600 },
+      groupHint: { opacity: 0.7, marginBottom: 6 },
+      row: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, minHeight: 32, padding: '4px 0' },
+      label: { display: 'flex', flexDirection: 'column', gap: 2 },
+      fieldHint: { opacity: 0.7, fontSize: 12 },
+      input: { minWidth: 220, maxWidth: 320, padding: '5px 8px', borderRadius: 6, border: '1px solid rgba(127,127,127,0.4)', background: 'transparent', color: 'inherit', fontSize: 13 },
+      bar: { display: 'flex', gap: 10, alignItems: 'center', borderTop: '1px solid rgba(127,127,127,0.22)', paddingTop: 12, marginTop: 8, flexWrap: 'wrap' },
+      button: { padding: '6px 14px', borderRadius: 6, border: '1px solid rgba(127,127,127,0.4)', background: 'transparent', color: 'inherit', fontSize: 13, cursor: 'pointer' },
+      link: { padding: '4px 6px', border: 'none', background: 'transparent', color: '#3370ff', fontSize: 13, cursor: 'pointer' },
+      note: { opacity: 0.7 },
+      error: { color: '#d92d20', whiteSpace: 'pre-wrap', marginTop: 8 },
+    }
+
+    /** The settings page: load, edit, save, and one line of live status. */
+    function SettingsPage() {
+      const [doc, setDoc] = React.useState(null)
+      const [draft, setDraft] = React.useState(null)
+      const [health, setHealth] = React.useState(null)
+      const [error, setError] = React.useState('')
+      const [note, setNote] = React.useState('')
+      const [busy, setBusy] = React.useState(false)
+
+      const load = React.useCallback(async () => {
+        try {
+          const data = await callHost('/config', { timeoutMs: 8000 })
+          setDoc(data)
+          setDraft(JSON.parse(JSON.stringify(data.values ?? {})))
+          setError('')
+        } catch (failure) {
+          setError(String(failure?.message ?? failure))
+        }
+      }, [])
+
+      const loadHealth = React.useCallback(async () => {
+        try {
+          setHealth(await callHost('/health', { timeoutMs: 6000 }))
+        } catch (failure) {
+          setHealth({ ok: false, error: String(failure?.message ?? failure) })
+        }
+      }, [])
+
+      React.useEffect(() => {
+        void load()
+        void loadHealth()
+      }, [load, loadHealth])
+
+      const set = (path, value) => setDraft((current) => put(current ?? {}, path, value))
+
+      const changed = () => {
+        const fields = doc?.fields ?? {}
+        const patch = {}
+        for (const key of Object.keys(fields)) {
+          if (JSON.stringify(at(draft, [key])) !== JSON.stringify(at(doc?.values, [key]))) patch[key] = at(draft, [key])
+        }
+        return patch
+      }
+
+      // A restart-class write reloads the plugin half-way through the request, so
+      // the reply may never arrive even though the save landed. Ask again until the
+      // new values are visible, and only then call it saved.
+      const confirmAfterReload = async (patch) => {
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1000))
+          try {
+            const next = await callHost('/config', { timeoutMs: 8_000 })
+            const landed = Object.keys(patch).every((key) => JSON.stringify(at(next.values, [key])) === JSON.stringify(patch[key]))
+            if (landed) return next
+          } catch {
+            // The host half is still coming back; try again.
+          }
+        }
+        return null
+      }
+
+      const save = async () => {
+        const patch = changed()
+        if (Object.keys(patch).length === 0) {
+          setNote('没有改动。')
+          return
+        }
+        setBusy(true)
+        setError('')
+        try {
+          const data = await callHost('/config', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ patch }),
+            timeoutMs: 20_000,
+          })
+          setDoc(data)
+          setDraft(JSON.parse(JSON.stringify(data.values ?? {})))
+          setNote(data.restart === true ? '已保存，插件正在重新加载；面板会自动重连。' : '已保存，立即生效。')
+          if (data.restart === true) setTimeout(() => { void loadHealth() }, 2500)
+          else void loadHealth()
+        } catch (failure) {
+          const restartKeys = Object.keys(patch).filter((key) => doc?.fields?.[key] === 'restart')
+          const confirmed = restartKeys.length > 0 ? await confirmAfterReload(patch) : null
+          if (confirmed !== null) {
+            setDoc(confirmed)
+            setDraft(JSON.parse(JSON.stringify(confirmed.values ?? {})))
+            setNote('已保存，插件已重新加载。')
+            setTimeout(() => { void loadHealth() }, 2500)
+          } else {
+            setError(String(failure?.message ?? failure))
+          }
+        } finally {
+          setBusy(false)
+        }
+      }
+
+      const control = (field) => {
+        const value = at(draft, field.path)
+        if (field.kind === 'bool') {
+          return h('input', { type: 'checkbox', checked: value !== false, onChange: (event) => set(field.path, event.target.checked) })
+        }
+        if (field.kind === 'select') {
+          return h('select', { style: SET_S.input, value: String(value ?? ''), onChange: (event) => set(field.path, event.target.value) },
+            field.options.map(([key, text]) => h('option', { key, value: key }, text)))
+        }
+        if (field.kind === 'number') {
+          return h('input', {
+            type: 'number',
+            style: SET_S.input,
+            value: value === undefined || value === null ? '' : String(value),
+            min: field.min,
+            step: field.step ?? 1,
+            onChange: (event) => {
+              const next = Number(event.target.value)
+              set(field.path, Number.isFinite(next) ? Math.max(0, Math.round(next)) : 0)
+            },
+          })
+        }
+        if (field.kind === 'list') {
+          return h('input', {
+            type: 'text',
+            style: SET_S.input,
+            placeholder: '逗号分隔',
+            value: Array.isArray(value) ? value.join(', ') : '',
+            onChange: (event) => {
+              const items = event.target.value.split(',').map((item) => item.trim()).filter((item) => item !== '')
+              set(field.path, field.transform === undefined ? items : items.map(field.transform))
+            },
+          })
+        }
+        return h('input', {
+          type: 'text',
+          style: SET_S.input,
+          value: value === undefined || value === null ? '' : String(value),
+          onChange: (event) => set(field.path, event.target.value),
+        })
+      }
+
+      if (doc === null) {
+        return h('div', { style: SET_S.page },
+          h('div', { style: SET_S.title }, SETTINGS_LABEL),
+          h('div', { style: SET_S.note }, error === '' ? '正在读取配置…' : `读不到配置：${error}`),
+          error === '' ? null : h('div', { style: SET_S.note }, '如果是 501，说明这个 profile 不能保存插件配置（没有 config editor）。'),
+          h('button', { type: 'button', style: SET_S.button, onClick: () => { void load(); void loadHealth() } }, '重试'))
+      }
+
+      const patch = changed()
+      const dirty = Object.keys(patch).length > 0
+      const volatileKeys = Object.keys(doc.fields ?? {}).filter((key) => doc.fields[key] === 'volatile')
+      const status = health === null
+        ? '状态：读取中…'
+        : health.ok === true
+          ? `状态：桥 ${String(health.origin ?? '')} · 工具 ${String(health.diagnostics?.tools ?? '?')} 个 · 面板 client ${String(health.clients ?? 0)} 个`
+          : `状态：读取失败（${String(health.error ?? '未知')}）`
+
+      return h('div', { style: SET_S.page },
+        h('div', { style: SET_S.title }, SETTINGS_LABEL),
+        h('div', { style: SET_S.sub }, '让 Agent 在当前会话的右侧栏里操作真正的浏览器。这里改的是这个 profile 的这一行配置。'),
+        h('div', { style: SET_S.status },
+          h('span', null, status),
+          h('button', { type: 'button', style: SET_S.link, onClick: () => void loadHealth() }, '刷新状态')),
+        SETTINGS_GROUPS.map((group) => {
+          const rows = group.fields.filter((field) => at(draft, field.path) !== undefined).map((field) => h('label', { key: field.path.join('.'), style: SET_S.row },
+            h('span', { style: SET_S.label },
+              field.label,
+              field.hint === undefined ? null : h('span', { style: SET_S.fieldHint }, field.hint)),
+            control(field)))
+          if (rows.length === 0) return null
+          return h('section', { key: group.title, style: SET_S.group },
+            h('div', { style: SET_S.groupTitle }, group.title),
+            h('div', { style: SET_S.groupHint }, group.hint),
+            rows)
+        }),
+        h('div', { style: SET_S.bar },
+          h('button', {
+            type: 'button',
+            style: busy || !dirty ? { ...SET_S.button, opacity: 0.5 } : SET_S.button,
+            disabled: busy || !dirty,
+            onClick: () => void save(),
+          }, busy ? '保存中…' : '保存'),
+          h('button', {
+            type: 'button',
+            style: SET_S.link,
+            onClick: () => {
+              setDraft(JSON.parse(JSON.stringify(doc.values ?? {})))
+              setNote('已还原为当前配置。')
+              setError('')
+            },
+          }, '还原'),
+          h('span', { style: SET_S.note }, note !== '' ? note : (dirty ? '有未保存的改动。' : `保存后立即生效的字段：${volatileKeys.join('、') || '无'}`))),
+        error === '' ? null : h('div', { style: SET_S.error }, error))
+    }
+
     // ---------------------------------------------------------------- plugin
     /** Services this half needs; all are DSH client services. */
     const inject = ['slots', 'sidebarRight', 'sidebarRightTabs', 'layout']
@@ -2790,7 +3099,24 @@ window.__ModuleLoader__.load({
 
       ctx.effect(() => startPolling(ctx), 'agent-browser.poll')
 
-            report('client half applied', { rev: CLIENT_REV, tabs: typeof ctx.sidebarRightTabs?.register === 'function', sidebar: typeof ctx.sidebarRight?.openTab === 'function', openTabIn: typeof ctx.sidebarRight?.openTabIn === 'function', toolviews: TOOL_VIEW_KEYS.length })
+      // Settings page (TICKET-036). Every plugin with a page in the shell's
+      // Settings panel registers one of these; without it the plugin has no
+      // place there at all, which is why "where do I turn this on?" was a fair
+      // question. Wrapped like the other registrations: a shell without the
+      // slot must lose the page, not the panel.
+      let settingsPage = false
+      ctx.effect(() => {
+        const dispose = ctx.slots.inject('settings.section', () => ctx.slots.register({
+          name: 'settings.section',
+          id: ID,
+          order: SETTINGS_ORDER,
+          label: () => SETTINGS_LABEL,
+        }, SettingsPage))
+        settingsPage = true
+        return dispose
+      }, 'agent-browser.settings')
+
+            report('client half applied', { rev: CLIENT_REV, tabs: typeof ctx.sidebarRightTabs?.register === 'function', sidebar: typeof ctx.sidebarRight?.openTab === 'function', openTabIn: typeof ctx.sidebarRight?.openTabIn === 'function', toolviews: TOOL_VIEW_KEYS.length, settings: settingsPage })
     }
 
     return { inject, apply }

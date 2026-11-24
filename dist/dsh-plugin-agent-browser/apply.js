@@ -4,7 +4,7 @@
  * Two reasons for the split. First, unit-testable: `index.js` has to import
  * `@deepseek-ai/schemastery`, which only resolves inside the DSH host, so a test
  * that touches it cannot run under plain `node`. Second, TICKET-017 asks for one
- * `ctx.effect` with a defined teardown order — that is easier to see, and to
+ * `ctx.effect` with a defined teardown order  - that is easier to see, and to
  * test, when the wiring is a plain function over injected collaborators.
  *
  * Teardown order matters: the tools go first (a tool call must not reach a
@@ -22,7 +22,29 @@ import { StaticSites } from './static.js'
 import { createTools, guardsSource, snapshotSource } from './tools.js'
 
 /** Bumped whenever the host half changes, so a reload can be told apart from a cache. */
-export const HOST_REV = 34
+export const HOST_REV = 36
+
+/**
+ * Fields the settings page may edit, and whether saving one reloads the plugin.
+ *
+ * Mirrors the schema in `plugin/index.js`: a `volatile` field is read through
+ * `.get()` on every use, so saving it applies immediately; anything else makes
+ * the loader rebuild the plugin (the bridge gets a fresh port, the panel
+ * reconnects). Kept as a plain map so tests can assert it without the host.
+ */
+export const CONFIG_FIELDS = Object.freeze({
+  activation: 'volatile',
+  fitWidth: 'volatile',
+  evalEnabled: 'volatile',
+  claimBrowserUse: 'volatile',
+  routing: 'volatile',
+  bridge: 'restart',
+  limits: 'restart',
+  downloads: 'restart',
+  sessions: 'restart',
+  searchFallback: 'restart',
+  static: 'restart',
+})
 
 /**
  * Tool names the host already has registered, from this plugin's point of view.
@@ -61,6 +83,88 @@ function takenToolNames(ctx, names) {
   return taken
 }
 
+/**
+ * The resolved config the settings page paints, one entry per editable field.
+ *
+ * Volatile fields are unwrapped here rather than in the page, because a reader
+ * is not JSON and the page has no way to call it.
+ * @param {object} config - the row config (volatile fields may be readers).
+ * @param {object} settings - `normalizeConfig(config)`.
+ * @returns {object} plain JSON.
+ */
+export function snapshotConfig(config, settings) {
+  return {
+    activation: readField(config?.activation, settings.activation ?? DEFAULT_ACTIVATION),
+    fitWidth: readField(config?.fitWidth, settings.fitWidth ?? true) !== false,
+    evalEnabled: readField(config?.evalEnabled, settings.evalEnabled ?? true) !== false,
+    claimBrowserUse: readField(config?.claimBrowserUse, settings.claimBrowserUse ?? true) !== false,
+    routing: readField(config?.routing, DEFAULT_ROUTING),
+    bridge: { ...settings.bridge },
+    limits: { ...settings.limits },
+    downloads: {
+      ...settings.downloads,
+      extraBlockedExtensions: [...(settings.downloads?.extraBlockedExtensions ?? [])],
+    },
+    sessions: { allowlist: [...(settings.sessions?.allowlist ?? [])] },
+    searchFallback: { ...settings.searchFallback },
+    static: { ...settings.static },
+  }
+}
+
+/**
+ * Build the settings page's read/write path.
+ *
+ * Reading is always possible: resolved values plus which fields need a reload.
+ * Writing goes through DSH's config editor, the only supported way to change a
+ * row's own config (it validates the candidate and serializes the write).
+ * Without an editor - an older host, or a row the user cannot edit - the page
+ * is told so and offers no save button, rather than failing at the last step.
+ * @param {import('cordis').Context} ctx - plugin context.
+ * @param {object} config - the row config.
+ * @param {object} settings - `normalizeConfig(config)`.
+ * @param {(message: string) => void} log - diagnostic sink.
+ * @returns {null | { read: () => object, write: (patch: object) => Promise<object> }}
+ */
+export function createConfigChannel(ctx, config, settings, log = () => {}) {
+  const editor = typeof ctx?.get === 'function' ? ctx.get('configEditor') : undefined
+  const entry = ctx?.fiber?.entry
+  const values = () => snapshotConfig(config, settings)
+  if (editor === undefined || typeof editor.edit !== 'function' || entry === undefined) return null
+  // The bridge server is created while `apply()` runs inside DSH's HMR
+  // transaction, and every request handler it spawns inherits that async
+  // context. `editor.edit()` opens a transaction of its own, so a write from a
+  // request would be rejected as nested ("HMR transactions cannot be nested").
+  // Step out of the ambient context for the write; without the service the call
+  // is unchanged and the failure still surfaces to the page.
+  const hmr = typeof ctx?.get === 'function' ? ctx.get('hmr') : undefined
+  const exit = typeof hmr?.executing?.exit === 'function' ? (run) => hmr.executing.exit(run) : (run) => run()
+  return {
+    read: () => ({ values: values(), fields: CONFIG_FIELDS }),
+    /**
+     * @param {object} patch - shallow patch of top-level fields; the editor
+     *   replaces whole groups, so a nested change resends that group.
+     * @returns {Promise<object>} the resolved values after the write.
+     */
+    write: async (patch) => {
+      const unknown = Object.keys(patch).filter((key) => !(key in CONFIG_FIELDS))
+      if (unknown.length > 0) throw new Error(`unknown config fields: ${unknown.join(', ')}`)
+      const restart = Object.keys(patch).some((key) => CONFIG_FIELDS[key] === 'restart')
+      await exit(() => editor.edit(entry, (current) => ({ ...current, ...patch })))
+      log(`config saved from the settings page: ${Object.keys(patch).join(', ')}${restart ? ' (restart)' : ''}`)
+      return { values: values(), fields: CONFIG_FIELDS, restart }
+    },
+  }
+}
+
+/** Whether the HMR service and its ambient-context escape hatch are visible. */
+export function configChannelDiagnostics(ctx) {
+  const hmr = typeof ctx?.get === 'function' ? ctx.get('hmr') : undefined
+  return {
+    service: hmr !== undefined && hmr !== null,
+    exit: typeof hmr?.executing?.exit === 'function',
+  }
+}
+
 /** Same-origin route the panel reads the bridge address and token from. */
 export const DISCOVERY_PATH = '/agent-browser/discovery'
 
@@ -81,8 +185,8 @@ function makeLogger(ctx) {
  *
  * The seam is a process-wide mutex, not a tool source (see
  * `docs/design/browser-use-contract.md`): claiming it is how two browser controllers
- * avoid driving one page. Claiming is best-effort — if the seam is absent the
- * plugin must still work — and re-synced on every command so the
+ * avoid driving one page. Claiming is best-effort  - if the seam is absent the
+ * plugin must still work  - and re-synced on every command so the
  * `claimBrowserUse` switch can be flipped live.
  * @param {import('cordis').Context} ctx - plugin context.
  * @param {() => boolean} wanted - read the `claimBrowserUse` volatile.
@@ -141,7 +245,7 @@ function createClaim(ctx, wanted, log) {
  * second DSH instance, so the address has to be handed over at runtime. The
  * route lives on the host's own web server, behind `connection.admit()`: only a
  * browser already holding this deployment's auth cookie can read it. That holds
- * for both shells — a GUI tab is same-origin, and the Electron renderer's
+ * for both shells  - a GUI tab is same-origin, and the Electron renderer's
  * non-asset `dsh-app://` requests are forwarded to the host with the cookie
  * attached (`lib/main.js` `forwardWebRequest`).
  *
@@ -249,7 +353,7 @@ export const ROUTING_ORDER = 3050
  * Deliberately factual: it says what this browser offers that the cheap read
  * path does not (the user's own session, a visible page they can take over, a
  * downloaded file, a screenshot on disk) and leaves the choice to the model.
- * It never names another plugin — a profile that ships two browser backends is
+ * It never names another plugin  - a profile that ships two browser backends is
  * the operator's arrangement, not something this plugin should editorialise.
  */
 export const ROUTING_TEXT = 'Browser panel: the `browser_*` tools drive the Electron browser in this session\'s '
@@ -312,7 +416,7 @@ export function routingState(ctx, config) {
  * Register the routing paragraph as a system-prompt section.
  *
  * Why a prompt section and not just a tool description: descriptions lose to
- * skill bodies and to the user's own AGENTS.md — measured in
+ * skill bodies and to the user's own AGENTS.md  - measured in
  * `docs/design/web-tools-and-agent-browser.md` §10, where a profile shipping
  * `dsh-pilot` kept choosing `pilot_navigate` even after the descriptions were
  * rewritten. A section is assembled for every step, above both.
@@ -398,16 +502,23 @@ export function applyAgentBrowser(ctx, config = {}, overrides = {}) {
   // the pipeline still shows the message, but `error.info.code` stays empty.
   log(`error codes: ${Object.keys(ERROR_CODES).length} (base: ${HARNESS_ERROR_BASE})`)
 
+  // The settings page saves through the config editor; a profile without one
+  // gets a page that says so (the bridge answers 501) instead of a dead button.
+  const configChannel = createConfigChannel(ctx, config, settings, log)
   const bridge = new BridgeClass({
     logger: log,
     port: settings.bridge.port,
     timeoutMs: settings.bridge.requestTimeoutMs,
+    config: configChannel,
     // The panel may need page-side code outside a tool call (the digest it shows
     // the agent when the human hands control back). Serving it from here keeps a
     // single copy of each in-page script, owned by the half that also ships it.
     sources: { snapshot: snapshotSource, guards: guardsSource },
   })
-  bridge.note(`host half applied (rev ${HOST_REV})`, { activation })
+  bridge.note(`host half applied (rev ${HOST_REV})`, { activation, config: configChannel !== null })
+  // Published so the settings page's save failures can be told apart: a missing
+  // HMR service means the write cannot escape the reload context.
+  bridge.setDiagnostics?.({ config: configChannel !== null, hmr: configChannelDiagnostics(ctx) })
   // Listen eagerly: a tool call may arrive before the first poll, and the bind
   // is cheap. Failures are logged and retried by the next `request`.
   bridge.start().catch((error) => { log(`bridge failed to start: ${error.message}`) })
