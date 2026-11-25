@@ -78,6 +78,10 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
     searchFallback:
       enabled: false
       maxResults: 5
+    approvals:
+      mode: first-touch
+      timeoutMs: 30000
+      sensitiveSites: []
 ```
 
 ### 完整字段表
@@ -101,10 +105,13 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 | `sessions.allowlist` | 字符串数组 | `[]` | 改后重载 | 允许驱动浏览器的会话 id 列表；空 = 所有会话可用。名单外会话会被 guard 在工具执行前拦下（`session_not_allowed`） |
 | `searchFallback.enabled` | boolean | `false` | 即时 | 导航失败后的"同站候选"开关：`browser_open` 失败时多搜一次，把同站链接附在错误里。**默认关**，见下方计费提示 |
 | `searchFallback.maxResults` | 整数 ≥ 1 | `5` | 改后重载 | 最多列几条候选（超过 10 按 10 算） |
+| `approvals.mode` | `first-touch` \| `off` | `first-touch` | 即时 | 写动作确认：`first-touch` = 读动作从不打扰、每个站点第一次写动作（输入 / 提交 / 下载 / 执行脚本）在面板里问一次；`off` = 与 1.4.x 完全一致、不问。见下文「写动作确认」 |
+| `approvals.timeoutMs` | 整数 | `30000` | 改后重载 | 面板确认条等你作答的上限（2s–120s）；超时按拒绝处理，动作不会发出 |
+| `approvals.sensitiveSites` | 字符串数组 | `[]` | 改后重载 | 每次都问的站点（主机名或 URL）；即使本会话已允许该站点也照问 |
 
 要点：
 
-- **标"即时"的字段**（前四个）改动后不用重启插件，下一条命令就按新值走（面板在被接管时也不会被打断）。
+- **标"即时"的字段**（前五个：`activation`、`fitWidth`、`evalEnabled`、`claimBrowserUse`、`routing`，以及 `approvals.mode`）改动后不用重启插件，下一条命令就按新值走（面板在被接管时也不会被打断）。
 - **标"改后重载"的字段**改动后插件会自动重载一次：桥重启、在飞命令失败、面板标签保留。不要频繁改这些字段。
 - 拒绝类策略（scheme / 扩展名 / 大小 / 会话名单 / eval 开关）统一在 `plugin/policy.js` 里判定，错误都带稳定 code（`scheme_rejected`、`download_rejected`、`eval_disabled`、`session_not_allowed` 等），见 `docs/tickets/024-policy-guards.md`。
 
@@ -216,6 +223,17 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 
 遇到 Cloudflare / reCAPTCHA 这类人机验证，插件**只检测、不绕过**：页面内会画一圈红框提示你，徽章转成「等待你处理」，你手动点完再交还。Agent 的调用会拿到 `needs_human`，它应当把控制权交给你而不是硬试。
 
+## 写动作确认（`approvals`，默认开启）
+
+这块浏览器带着你的登录态，Agent 会在你没看的时候往里写字，所以默认姿势是：**读动作从不打扰，写动作每个站点第一次问一次**。
+
+- **不问**（读动作）：`browser_open`、`browser_snapshot`、`browser_scroll`、`browser_hover`、`browser_zoom`、`browser_screenshot`，以及点到普通链接/按钮的 `browser_click`。
+- **要问**（写动作）：`browser_type`（密码框本来就一律拒绝）、`browser_click` 命中提交类控件（`button[type=submit]`、`input[type=submit|image]`、表单里没有 `type` 的按钮）、表单内的 `browser_press` Enter、`browser_eval`、`browser_download`。
+- 面板顶部会弹一条黄色确认条：`Agent 想在 example.com 点击「提交」提交表单` + 倒计时 +「允许一次」「本会话允许本站」「拒绝」。**Enter = 拒绝**（反射性按键不该等于同意），快捷键 Alt+1 / Alt+2 / Alt+3。
+- 拒绝或超时（默认 30 秒）：动作**不会发出**，Agent 拿到 `approval_denied` / `approval_timeout`。面板没打开或窗口不可见：`approval_required`，Agent 应当先请你打开面板，而不是干等。
+- 粒度是「会话 + 站点」：换个站点重新问，会话结束作废；`approvals.sensitiveSites` 里的站点每次都问。你点「我来接管」时，未作答的确认自动按拒绝处理。
+- 想完全回到 1.4.x 的无声行为：`approvals.mode: off`。
+
 ## 页面自动适配面板宽度
 
 默认 `fitWidth: true`：导航完成后（以及侧栏宽度变化时）面板会按页面的 `scrollWidth / innerWidth` 把缩放调到"整行排版塞得进侧栏"的值，只缩不放、下限 25%。这样 1200px 宽的桌面站在窄侧栏里不会只剩一列，截图也就能拍到完整的横向布局。
@@ -231,6 +249,9 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 | 工具突然全部变成 `unknown tool "browser_open"` | 同一 profile 里还有另一个浏览器插件（例如 CDP 原型）抢先注册了同名 `browser_*` 工具；宿主仓库里一次只能有一套 | 只启用一个：`plugin_manager list_bundles` 找到另一个 `*-browser` bundle 停用，保留 `dsh-plugin-agent-browser`，然后重启/重载。可用带令牌的 `GET /health` 看 `diagnostics.conflicts` 确认是哪一个 |
 | 工具报 `session_not_allowed` | 配了 `sessions.allowlist` 且不含当前会话 | 把当前会话 id 加进名单，或清空名单 |
 | 工具报 `needs_human` | 页面是人机验证墙 | 在面板里手动完成验证，再点「交还 Agent」 |
+| 工具报 `approval_required` | 写动作需要你确认，但面板没开或窗口不可见 | 点开右侧栏「浏览器」面板，让确认条出现后重试 |
+| 工具报 `approval_timeout` | 确认条 30 秒内没作答 | 重试，并在确认条上点「允许一次」或「本会话允许本站」 |
+| 工具报 `approval_denied` | 你点了拒绝，或点了「我来接管」 | 想让它做就重试并允许；不想就让它换个做法（`approvals.mode: off` 可整体关闭） |
 | 点击"没反应" / 截图超时 | DSH 窗口在后台或最小化，Chromium 不绘制也不收合成输入 | 把窗口切到前台再试（这是 Electron 行为，不是插件 bug） |
 | 截图报 `the browser panel is hidden right now…` | 面板页签不可见 | 切到面板页签再截 |
 | 打开页面报 `navigation_failed: nav_…: …ERR_…` | 网络/DNS/证书/端口被拦/页面自身错误（`nav_dns` / `nav_refused` / `nav_reset` / `nav_cert` / `nav_blocked` / `nav_timeout`…） | 失败时面板已自动回到上一页；提示 "could not go back" 才说明停在了浏览器错误页，直接 `browser_open` 一个可达地址即可。换 `web_fetch` 试一次也可以 |
@@ -257,3 +278,5 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 - **附件链接是黑洞**：`target=_blank` 的 PDF/DOC 附件点了既不导航也不落盘（Electron 当下载处理，本插件没有下载处理器）。附件一律用 `browser_download({ url })`。
 - `browser_screenshot` 的整页拼接有上限：默认 `maxHeight:10000` CSS 像素、最多 16000 设备像素行，超了就停下并在结果里说 `truncated`。`fixed`/`sticky` 元素在拼接期间会被临时隐藏（否则每一帧都会重复印一遍页头），拼完恢复。面板在后台或最小化时截图会超时，和点击一样要把窗口切到前台。
 - 取消（`browser_*` 调用被中断）保证的是"不再等、不再下发新命令"；**已经发到页面里的动作不会撤销**（例如已经按下的点击）。
+- 写动作确认按「站点」判断，不是按「这一页是否登录后」：面板读不到 HttpOnly Cookie，无法判断登录状态，所以规则是"每个站点第一次写动作问一次"（见 SPEC-003 / 决策 010）。
+- 确认只覆盖四类已知写动作（输入、提交、下载、执行脚本）。页面自己接住的副作用（例如"加入购物车"这类 AJAX 按钮）按普通点击处理，不触发确认。

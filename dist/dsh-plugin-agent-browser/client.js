@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
      * The renderer caches `client.js` aggressively, and a stale half looks
      * exactly like a bug in the host half.
      */
-    const CLIENT_REV = 46
+    const CLIENT_REV = 48
     /** The panel talks to the host half over loopback; both sides carry this mark. */
     const BRIDGE_PREFIX = '/dsh-agent-browser'
     const BRIDGE_MARK = 'dsh-plugin-agent-browser/1'
@@ -149,6 +149,13 @@ window.__ModuleLoader__.load({
       commands: 0,
       /** Challenge box to outline, in viewport CSS pixels. */
       detection: /** @type {null | { rect: { x: number, y: number, width: number, height: number }, signals: string[] }} */ (null),
+      /**
+       * The permission prompt this panel should show, or null.
+       *
+       * Owned by the host: the panel only draws it and posts the answer. It is
+       * here, next to the phase, because both are "what the human must know".
+       */
+      approval: /** @type {null | { session: string, id: string, origin: string, actionClass: string, summary: string, timeoutMs: number, issuedAt: number }} */ (null),
       digest: '',
     }
     const subscribers = new Set()
@@ -333,7 +340,7 @@ window.__ModuleLoader__.load({
           setPhaseLocal(sessionId, String(state_.phase ?? 'idle'), since, String(state_.reason ?? ''))
         }
       }
-      return data.sessions ?? {}
+      return { sessions: data.sessions ?? {}, approvals: data.approvals ?? [] }
     }
 
     /** Report one command's outcome back to the host. */
@@ -384,6 +391,115 @@ window.__ModuleLoader__.load({
       const list = deferred.get(sessionId) ?? []
       list.push(command)
       deferred.set(sessionId, list)
+    }
+
+    // ------------------------------------------------------------ permissions
+    /**
+     * Tell the host where this session's panel is.
+     *
+     * A permission prompt is scoped to a site, and the host cannot read the
+     * webview's address itself: the page is the only place that knows it. Failure
+     * is silent on purpose — a stale address degrades the prompt's wording, and
+     * nothing else.
+     */
+    async function reportPage(sessionId, page) {
+      if (typeof sessionId !== 'string' || sessionId === '') return
+      try {
+        await callHost('/page', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ session: sessionId, url: String(page?.url ?? ''), title: String(page?.title ?? '') }),
+        })
+      } catch (error) {
+        report('page report failed', { error: String(error?.message ?? error) })
+      }
+    }
+
+    /**
+     * Answer one permission prompt.
+     *
+     * `clientVisible` is the honesty bit: a hidden panel cannot claim a human
+     * saw the prompt, and the host turns that into `approval_required` instead
+     * of treating silence as consent. The local prompt is cleared first so a
+     * double click cannot answer twice.
+     * @param {string} sessionId - the session that owns the prompt.
+     * @param {string} id - the host's prompt id.
+     * @param {'once' | 'site' | 'deny' | 'unavailable'} decision - the answer.
+     */
+    async function answerApproval(sessionId, id, decision) {
+      clearApproval(id)
+      try {
+        await callHost('/decision', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            id,
+            session: sessionId,
+            decision,
+            clientVisible: globalThis.document?.visibilityState === 'visible',
+          }),
+        })
+        report('approval answered', { id, decision })
+      } catch (error) {
+        // The host times the prompt out on its own; a lost answer is not worth
+        // retrying (a second answer for the same id would be dropped anyway).
+        report('approval answer failed', { id, decision, error: String(error?.message ?? error) })
+      }
+    }
+
+    /** Forget a prompt locally (answered, expired, or withdrawn by the host). */
+    function clearApproval(id) {
+      const current = state.approval
+      if (current === null || current.id !== id) return
+      setState({ approval: null })
+    }
+
+    /**
+     * Take the prompts the host is waiting on: show the newest, refuse the ones
+     * this panel cannot honestly ask about.
+     *
+     * Refusing is the whole point. A prompt with no panel behind it (that session
+     * is not mounted in this window, or the window is hidden) would otherwise sit
+     * until the host's 30-second budget expired and the agent would look stuck.
+     * @param {Array<object>} frames - `approvals` from one poll response.
+     */
+    function takeApprovals(frames) {
+      if (Array.isArray(frames) === false) return
+      const open = new Set()
+      for (const frame of frames) {
+        if (frame === null || typeof frame !== 'object') continue
+        const session = String(frame.session ?? '')
+        const id = String(frame.id ?? '')
+        if (session === '' || id === '') continue
+        open.add(id)
+        if (globalThis.document?.visibilityState === 'visible' && executors.has(session)) {
+          const shown = state.approval
+          if (shown !== null && shown.id === id) continue
+          setState({
+            approval: {
+              session,
+              id,
+              origin: String(frame.origin ?? ''),
+              actionClass: String(frame.actionClass ?? ''),
+              summary: String(frame.summary ?? ''),
+              timeoutMs: Number(frame.timeoutMs) > 0 ? Number(frame.timeoutMs) : 30_000,
+              issuedAt: Number(frame.issuedAt) > 0 ? Number(frame.issuedAt) : Date.now(),
+            },
+          })
+          continue
+        }
+        report('approval refused locally', { id, session: short(session), visible: globalThis.document?.visibilityState })
+        void answerApproval(session, id, 'unavailable')
+      }
+      const current = state.approval
+      if (current !== null && open.has(current.id) === false) clearApproval(current.id)
+    }
+
+    /** Answer `deny` for whatever this session is waiting on (takeover path). */
+    function denyPendingApproval(sessionId) {
+      const current = state.approval
+      if (current === null || current.session !== sessionId) return
+      void answerApproval(sessionId, current.id, 'deny')
     }
 
     // ---------------------------------------------------------------- control
@@ -533,7 +649,15 @@ window.__ModuleLoader__.load({
         let result
         if (command.type === 'open') {
           result = await guest.load(command.params?.url)
-          const detection = await detectChallenge(sessionId, guest, command.params?.detect)
+          let detection = await detectChallenge(sessionId, guest, command.params?.detect)
+          // A Turnstile widget mounts after the document settles, so the first
+          // look can see the wall's words and still no iframe. The detector
+          // answers `pending`, and we look twice more before settling the tool
+          // call (TICKET-033: the open call itself must return needs_human).
+          for (let look = 0; look < 2 && detection?.pending === true; look += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 700))
+            detection = await detectChallenge(sessionId, guest, command.params?.detect)
+          }
           if (detection?.hit === true) {
             result = {
               ...result,
@@ -547,6 +671,9 @@ window.__ModuleLoader__.load({
           if (detection !== null) result = { ...result, detection }
         } else if (command.type === 'click') {
           result = await guest.click(command.params)
+        } else if (command.type === 'inspect') {
+          // Classification for the permission gate: read-only, no input events.
+          result = await guest.act('inspect', command.params)
         } else if (command.type === 'scroll') {
           result = await guest.scroll(command.params)
         } else if (command.type === 'hover') {
@@ -730,7 +857,11 @@ window.__ModuleLoader__.load({
         running = true
         try {
           const hidden = globalThis.document?.visibilityState === 'hidden'
-          const sessions = await drain(hidden ? POLL_HIDDEN_MS : POLL_WAIT_MS)
+          const pulled = await drain(hidden ? POLL_HIDDEN_MS : POLL_WAIT_MS)
+          const sessions = pulled.sessions
+          // A permission prompt is a first-class payload of the poll, not a
+          // command: it is drawn in the panel and answered from there.
+          takeApprovals(pulled.approvals)
           lastRound = Date.now()
           if (failures > 0) report('poll recovered')
           failures = 0
@@ -980,9 +1111,15 @@ window.__ModuleLoader__.load({
         })
 
         element.addEventListener('did-start-loading', () => { if (!this.detached) setState({ note: 'Loading…' }) })
-        element.addEventListener('did-stop-loading', () => { if (!this.detached) setState({ note: 'Ready', url: this.url() }); this.applyDriver(); void this.injectGuards(); this.syncHistory() })
-        element.addEventListener('did-navigate', (event) => { this.remember(event.url); this.applyDriver(); void this.injectGuards(); this.syncHistory(); if (!this.detached) setState({ url: this.url() }) })
-        element.addEventListener('did-navigate-in-page', (event) => { this.remember(event.url); this.applyDriver(); void this.injectGuards(); this.syncHistory(); if (!this.detached) setState({ url: this.url() }) })
+        element.addEventListener('did-stop-loading', () => {
+          if (!this.detached) setState({ note: 'Ready', url: this.url() })
+          void reportPage(this.sessionId, { url: this.url() })
+          this.applyDriver()
+          void this.injectGuards()
+          this.syncHistory()
+        })
+        element.addEventListener('did-navigate', (event) => { this.remember(event.url); void reportPage(this.sessionId, { url: event.url }); this.applyDriver(); void this.injectGuards(); this.syncHistory(); if (!this.detached) setState({ url: this.url() }) })
+        element.addEventListener('did-navigate-in-page', (event) => { this.remember(event.url); void reportPage(this.sessionId, { url: event.url }); this.applyDriver(); void this.injectGuards(); this.syncHistory(); if (!this.detached) setState({ url: this.url() }) })
         element.addEventListener('page-title-updated', () => { /* title is read on demand */ })
         element.addEventListener('crashed', () => { setState({ note: 'The page crashed' }) })
 
@@ -2277,6 +2414,14 @@ window.__ModuleLoader__.load({
       // while the window is hidden (no one is looking, and it costs nothing).
       const [, setTick] = React.useState(0)
       const control = phases.get(sessionId) ?? { phase: 'booting', since: 0, reason: '' }
+      // Only this session's prompt belongs on this panel; another session's one
+      // is drawn by the body that owns it.
+      const approval = view.approval !== null && view.approval.session === sessionId ? view.approval : null
+      /** Answer the shown prompt; the helpers do the clearing and the POST. */
+      const answer = (decision) => {
+        if (approval === null) return
+        void answerApproval(approval.session, approval.id, decision)
+      }
       React.useEffect(() => {
         const timer = setInterval(() => {
           if (document.visibilityState === 'hidden') return
@@ -2285,6 +2430,50 @@ window.__ModuleLoader__.load({
         }, 1_000)
         return () => clearInterval(timer)
       }, [control.phase])
+
+      // A prompt is a countdown, so it needs its own faster clock: one repaint a
+      // second would show the wrong second half the time.
+      React.useEffect(() => {
+        if (approval === null) return undefined
+        const timer = setInterval(() => {
+          if (document.visibilityState === 'hidden') return
+          setTick((value) => value + 1)
+        }, 500)
+        return () => clearInterval(timer)
+      }, [approval?.id])
+
+      // Enter refuses. A prompt that can be dismissed by reflex defaults to
+      // "no": consent has to be a deliberate click on a button that says yes.
+      React.useEffect(() => {
+        if (approval === null) return undefined
+        const onKey = (event) => {
+          if (event.key === 'Enter') {
+            // The address bar's Enter means "go", not "answer the prompt".
+            if (event.target === addressInputRef.current) return
+            event.preventDefault()
+            answer('deny')
+            return
+          }
+          if (event.altKey !== true) return
+          if (event.key === '1') { event.preventDefault(); answer('once'); return }
+          if (event.key === '2') { event.preventDefault(); answer('site'); return }
+          if (event.key === '3') { event.preventDefault(); answer('deny') }
+        }
+        document.addEventListener('keydown', onKey)
+        return () => document.removeEventListener('keydown', onKey)
+      }, [approval?.id])
+
+      // Hidden window: nobody can read the prompt, so nobody can consent to it.
+      // Answer `unavailable` at once instead of letting the host wait 30 seconds.
+      React.useEffect(() => {
+        if (approval === null) return undefined
+        const onVisibility = () => {
+          if (document.visibilityState === 'visible') return
+          void answerApproval(approval.session, approval.id, 'unavailable')
+        }
+        document.addEventListener('visibilitychange', onVisibility)
+        return () => document.removeEventListener('visibilitychange', onVisibility)
+      }, [approval?.id])
 
       // Mirror the guest's URL into the address bar unless the user is typing.
       React.useEffect(() => {
@@ -2425,7 +2614,11 @@ window.__ModuleLoader__.load({
       }
 
       /** Hand the panel to the human. */
-      const takeOver = () => {        const guest = guestRef.current
+      const takeOver = () => {
+        // A prompt about to be answered by the person who is taking the wheel is
+        // moot: the agent must stop, not act on a consent that was never given.
+        denyPendingApproval(sessionId)
+        const guest = guestRef.current
         if (guest !== null) {
           // Leave the page focused so the human can type straight away.
           void guest.evaluate('document.body?.focus?.(), true').catch(() => undefined)
@@ -2528,6 +2721,17 @@ window.__ModuleLoader__.load({
             }, '＋'),
           ),
         ),
+        approval === null
+          ? null
+          : h('div', { style: S.approval, role: 'alertdialog', 'aria-label': '写操作确认' },
+              h('div', { style: S.approvalText },
+                h('div', { style: S.approvalTitle }, `Agent 想${approvalTitle(approval)}`),
+                h('div', { style: S.approvalHint }, `若 ${approvalSecondsLeft(approval)} 秒内不作答将自动拒绝 · Enter 拒绝 · Alt+1/2/3 选择`),
+              ),
+              h('button', { type: 'button', style: S.approvalAllow, title: '只允许这一次', onClick: () => answer('once') }, '允许一次'),
+              h('button', { type: 'button', style: S.approvalSite, title: '本站本会话不再询问', onClick: () => answer('site') }, '本会话允许本站'),
+              h('button', { type: 'button', style: S.approvalDeny, title: '拒绝这次操作', onClick: () => answer('deny') }, '拒绝'),
+            ),
         h('div', { ref: wrapRef, style: S.hostWrap },
           h('div', { ref: hostRef, style: S.host }),
           box === null || box === undefined
@@ -2578,6 +2782,18 @@ window.__ModuleLoader__.load({
       return { background: '#ecfdf3', color: '#027a48', borderColor: '#bbf7d0' }
     }
 
+    /** Seconds left on a prompt. The host also times it out; this is the display. */
+    function approvalSecondsLeft(approval) {
+      return Math.max(0, Math.ceil((approval.issuedAt + approval.timeoutMs - Date.now()) / 1_000))
+    }
+
+    /** What a prompt is about, in one readable line. */
+    function approvalTitle(approval) {
+      return approval.summary !== ''
+        ? approval.summary
+        : `在 ${approval.origin === '' ? '当前页面' : approval.origin} 做一次写操作`
+    }
+
     /** Inline styles: the panel ships no CSS file, so nothing to scope. */
     const S = {
       panel: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, background: '#fff' },
@@ -2594,6 +2810,13 @@ window.__ModuleLoader__.load({
       hostWrap: { position: 'relative', flex: '1 1 auto', minHeight: 0, display: 'flex' },
       host: { position: 'relative', flex: '1 1 auto', minHeight: 0, display: 'flex', background: '#fff' },
       detectNote: { position: 'absolute', right: 8, top: 8, fontSize: 11, padding: '2px 8px', borderRadius: 999, background: '#fffaeb', color: '#b54708', border: '1px solid #fec84b', pointerEvents: 'none' },
+      approval: { display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', padding: '8px 10px', borderBottom: '1px solid #fec84b', background: '#fffaeb' },
+      approvalText: { flex: '1 1 140px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 },
+      approvalTitle: { fontSize: 12, color: '#7a2e0e', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      approvalHint: { fontSize: 11, color: '#b54708', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      approvalAllow: { height: 28, padding: '0 10px', fontSize: 12, borderRadius: 6, border: '1px solid #12b76a', background: '#ecfdf3', color: '#027a48', cursor: 'pointer', whiteSpace: 'nowrap' },
+      approvalSite: { height: 28, padding: '0 10px', fontSize: 12, borderRadius: 6, border: '1px solid #d0d5dd', background: '#fff', color: '#344054', cursor: 'pointer', whiteSpace: 'nowrap' },
+      approvalDeny: { height: 28, padding: '0 10px', fontSize: 12, borderRadius: 6, border: '1px solid #fda29b', background: '#fff', color: '#b42318', cursor: 'pointer', whiteSpace: 'nowrap' },
     }
 
     // ------------------------------------------------------------- tool views

@@ -14,3 +14,4 @@
 | 007 | [007-single-package-three-roles.md](007-single-package-three-roles.md) | 保持单包（host / client / 资源三角色） | 已定 |
 | 008 | [008-auth-dynamic-port.md](008-auth-dynamic-port.md) | 动态端口 + 每进程令牌 + 宿主发现路由 | 已定并实现 |
 | 009 | [009-web-tools-division-of-labor.md](009-web-tools-division-of-labor.md) | 不新增搜索工具；搜索引擎只当失败路径的 URL 解析器 | 已定（失败换路待 TICKET-027） |
+| 010 | [010-first-touch-approval.md](010-first-touch-approval.md) | 共用浏览器的默认信任姿势：站点级首次写动作确认 | 已定（SPEC-003 / TICKET-037–039） |

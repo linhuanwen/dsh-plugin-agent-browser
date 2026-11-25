@@ -25,6 +25,8 @@ test('an empty row resolves to the 1.1.x behaviour', () => {
     // TICKET-027: the search fallback ships off; a row without the group must
     // not turn it on.
     searchFallback: { enabled: false, maxResults: 5 },
+    // SPEC-003: a row without the group asks on the first write per site.
+    approvals: { mode: 'first-touch', timeoutMs: 30_000, sensitiveSites: [] },
   })
   assert.deepEqual(settings.bridge, DEFAULTS.bridge)
 })
@@ -48,6 +50,24 @@ test('a partial group keeps the defaults for untouched keys', () => {
   assert.equal(settings.static.maxBytes, 1024)
   assert.deepEqual(settings.sessions, { allowlist: [] })
   assert.deepEqual(settings.searchFallback, { enabled: false, maxResults: 5 })
+  assert.deepEqual(settings.approvals, { mode: 'first-touch', timeoutMs: 30_000, sensitiveSites: [] })
+})
+
+test('SPEC-003 group: the approval stance can be switched off and pinned per site', () => {
+  const settings = normalizeConfig({
+    approvals: { mode: 'off', timeoutMs: 5000, sensitiveSites: ['example.com', ' https://mail.example.com/inbox '] },
+  })
+  assert.deepEqual(settings.approvals, {
+    mode: 'off',
+    timeoutMs: 5000,
+    sensitiveSites: ['example.com', 'https://mail.example.com/inbox'],
+  })
+})
+
+test('SPEC-003 group: an unknown mode is refused instead of silently asking', () => {
+  assert.throws(() => normalizeConfig({ approvals: { mode: 'auto' } }), /approvals\.mode/)
+  assert.throws(() => normalizeConfig({ approvals: { timeoutMs: 1.5 } }), /approvals\.timeoutMs/)
+  assert.throws(() => normalizeConfig({ approvals: { sensitiveSites: [42] } }), /approvals\.sensitiveSites/)
 })
 
 test('TICKET-027 group: the fallback can be enabled and capped', () => {

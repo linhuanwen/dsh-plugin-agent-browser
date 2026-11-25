@@ -47,6 +47,14 @@ export const DEFAULTS = Object.freeze({
     // Empty = every session may drive the browser (the shipped default).
     allowlist: Object.freeze([]),
   }),
+  approvals: Object.freeze({
+    // Site-level first-write confirmation (SPEC-003). Reads never prompt; the
+    // first write on each site does. 'off' restores the 1.4.x behaviour exactly.
+    mode: 'first-touch',
+    timeoutMs: 30_000,
+    // Extra sites that prompt on every write, on top of the per-session site grant.
+    sensitiveSites: Object.freeze([]),
+  }),
   searchFallback: Object.freeze({
     // Off by default: on this host a search is billed per call, so a failed open
     // must never silently spend the operator's money (TICKET-027).
@@ -120,6 +128,15 @@ function texts(value, fallback, name) {
   return value.map((entry) => entry.trim())
 }
 
+/** Reject anything that is not one of the allowed strings. */
+function oneOf(value, fallback, allowed, name) {
+  if (value === undefined || value === null) return fallback
+  if (typeof value !== 'string' || allowed.includes(value) === false) {
+    throw new TypeError(`agent-browser config: ${name} must be one of ${allowed.map((entry) => JSON.stringify(entry)).join(', ')}, got ${JSON.stringify(value)}`)
+  }
+  return value
+}
+
 /**
  * Flatten a validated loader row into the plain settings the host half uses.
  *
@@ -164,6 +181,11 @@ export function normalizeConfig(config = {}) {
       // unwrapped before the shape check — the reader itself is a valid value.
       enabled: flag(readField(fallback.enabled, DEFAULTS.searchFallback.enabled), DEFAULTS.searchFallback.enabled, 'searchFallback.enabled'),
       maxResults: natural(fallback.maxResults, DEFAULTS.searchFallback.maxResults, 'searchFallback.maxResults'),
+    },
+    approvals: {
+      mode: oneOf(readField(row.approvals?.mode, DEFAULTS.approvals.mode), DEFAULTS.approvals.mode, ['first-touch', 'off'], 'approvals.mode'),
+      timeoutMs: natural(row.approvals?.timeoutMs, DEFAULTS.approvals.timeoutMs, 'approvals.timeoutMs'),
+      sensitiveSites: texts(row.approvals?.sensitiveSites, [...DEFAULTS.approvals.sensitiveSites], 'approvals.sensitiveSites'),
     },
   }
 }

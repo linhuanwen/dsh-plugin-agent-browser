@@ -1,0 +1,82 @@
+# 1.5.x 发布说明（信任闸门版）
+
+> 目的：把 1.5.x 说清楚——它只做两件事：**验证墙漏报的修复**（TICKET-033）与**首次写动作确认**（SPEC-003 / TICKET-037–039）。没有新增工具、没有改工具 schema、没有动通道与快照格式。
+>
+> 1.5.1 是 1.5.0 的验收期修正，修两个只有装上真机才看得见的问题：
+> 1. `plugin/apply.js` 交给工具体的是「claim + 展示策略」薄门（`gate`），而 `createGate` 靠 `approve`/`hasClient`/`pageOf` 判断宿主能不能问人；薄门没转发这三个方法，导致 `canAsk()` 永远为 false，写动作在真机上**一次都不确认**（单测的假桥本来就没有这些方法，所以 231 例全绿没照出它）。
+> 2. 密码框的「硬拒」发生在**页面侧**（`inject/actions.js`），而审批在**宿主侧**先跑：打密码框会先弹出确认条、用户点了「允许」也只会换来拒绝，白等 30 秒。修法是 `browser_type` 先 `inspect` 目标，`role === 'password'` 就不进确认、交给页面直接硬拒。
+>
+> 修法都配了 `plugin/test/gate.test.mjs`（11 例）锁住：type/提交点击先 inspect 再问、密码框不问、普通链接与坐标点击不问、站点授权只问一次、mode off、宿主不能问时退回 1.4 行为、下载与拒绝路径、eval 先 inspect 拿页面 origin。单测 231→241。
+>
+> **1.5.2 是 1.5.1 的验收收口**，修三个真面板验收才暴露的问题：
+> 1. `bridge.request()` 把除 `snapshot` 外的一切命令都当成「agent 在动作」，于是审批前的 `inspect` 会把 `needs_human` / `taken_over` 相位清回 `agent`——验证墙页面上 `browser_eval` 竟能直接跑掉。修法：`READ_TYPES = {snapshot, inspect}` 的读命令不再抢相位。
+> 2. `bridge.approve()` 没先看人工相位，会在验证墙/接管期间弹出注定无法履行的确认条。修法：`approve()` 开头 `#assert(sessionId, 'type')`，人工相位优先（SPEC-003 C8）。
+> 3. eval 提示的站点名取自面板 `/page` 遥测，本机宿主上该上报未落地，提示写成「当前页面」。修法：eval 审批前先让页面侧 `inspect` 提供 `location.href`，origin 不依赖遥测（`/page` 保留为遥测）。
+> 同批补齐：`bridge.test.mjs` 新增 3 例（needs_human/taken_over 优先、读命令不抢相位）；`docs/cases/015` §4 记录全量真机验收。单测 241→245。
+>
+> 日期：2026-11-24（1.5.1 验收于 2026-11-25，1.5.2 同日晚收口）。适用对象：DSH **Desktop**，宿主实测 `0.2.2-rc.5`。上一版基线：1.4.24。
+> 相关：用户侧文档 `dist/dsh-plugin-agent-browser/README.md`；契约 `docs/spec/003-first-touch-approval-spec.md`；决策 `docs/decisions/010-first-touch-approval.md`；夹具 `docs/cases/015-first-touch-cases.md`。
+
+## 1. 发布物
+
+| 项 | 值 |
+|---|---|
+| 包名 / 版本 | `dsh-plugin-agent-browser` @ **1.5.2**（1.5.0 + 两轮验收期修正，见开头） |
+| 产物 | `dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.2.tgz`，317,228 B / 27 文件；sha256 `093E706CCC19404BB2EC7710B7D816DE7F54A47F4D023950AF477E4FC3D8A787` |
+| 许可 / 元数据 | `license: MIT`、`private: false`、`engines.dsh: ">=0.2.2-rc.3 <0.3.0"`、peer+dev `@deepseek-ai/schemastery ^3.19.0` |
+| 新增源文件 | `plugin/approvals.js`（纯逻辑，已进 `tools/pack.mjs` 的 COPY 与 `package.json` 的 `files`） |
+| 单测 | `245 / 245` 通过（`node --test plugin/test/*.test.mjs`；`gate.test.mjs` 11 例、`bridge.test.mjs` 新增 3 例审批相位、`approvals.test.mjs` 18 例） |
+| 文档一致性 | `node tools/check-docs.mjs` 六项全绿（配置字段 20、工具 11、YAML 12 顶层字段、decisions 10、B11、file:line 12） |
+
+## 2. 安装 / 升级 / 卸载
+
+```powershell
+plugin_manager install_bundle target="D:\...\dist\dsh-plugin-agent-browser\dsh-plugin-agent-browser-1.5.2.tgz"
+plugin_manager list_plugins   # 目标行：include:agent-browser-panel / enabled true / fiberPhase active
+```
+
+- 装完**刷新一次 DSH 页面**：本次 `CLIENT_REV` 47→48（确认条属于客户端 bundle），不刷新看不到。
+- **`plugin/apply.js`、`bridge.js`、`tools.js` 属于宿主半**：本机实测 1.5.1 重装后新工具代码即时生效（`browser_type` 打密码框从「弹确认条等 30 秒」变成页面侧当场硬拒）；若装完行为没变，先重启 DSH 再看。同版本重装需 `remove_bundle` 再 `install_bundle`（同版本会被「already installed」挡回）。
+- 升级保留 profile 里的 `config` 行；没写 `approvals` 的 profile 走默认值（`first-touch`，即**默认开启**）。
+- 想完全回到 1.4.x 的无声行为：`approvals.mode: 'off'`，不需要降级包。
+- 卸载同 1.4：删 profile patch 条目并重载，`screenshots/`、`downloads/` 是用户数据。
+
+## 3. 相对 1.4.24 的行为变化（会让人"咦"的地方）
+
+| 变化 | 1.4.24 | 1.5.0 | 影响 |
+|---|---|---|---|
+| 写动作 | 直接执行 | 默认**站点 × 会话第一次**问一次（输入 / 提交类点击/Enter / 下载 / eval） | Agent 的自主动作会多一次等待；`approvals.mode='off'` 可关 |
+| 面板 | 只有地址栏 + 四态徽章 | 顶部多一条确认条（允许一次 / 本会话允许本站 / 拒绝，30s 倒计时，Enter=拒绝） | 面板高度多约 88px，窄面板按钮换行仍三键可见 |
+| 错误码 | 13 个 | **16 个**：新增 `approval_required`（面板不在/不可见，未下发）、`approval_timeout`（超时）、`approval_denied`（拒绝/接管） | 旧日志里的 13 码语义不变；新增三个都在 message 里带可读文案 |
+| 验证墙 | 漏报 Cloudflare Turnstile 演示页 | 补「正在进行安全验证 / 验证您是人类 / 请稍候」等文案、`challenge-platform` iframe、打开后 2 秒内二次复检；meta refresh 秒跳页与纯静态验证页不再误报 | 判定函数 14 例单测；真站仍只回归过 nopecha 一例 |
+| 接管 | 清空队列 | 接管时把**待确认**的写动作自动判为拒绝 | 不会出现「你接管了，30 秒后动作又冒出来」 |
+| client 侧 | — | `POST /page` 上报地址、`POST /decision` 回传决定、`/pending` 响应多 `approvals` 帧 | 纯新增；旧面板（不刷新页面）不会有确认条，但也不会崩：`/decision` 不会被调用 |
+
+## 4. 写动作确认怎么工作（用户视角）
+
+- **读动作从不打扰**：`open`/`snapshot`/`scroll`/`hover`/`zoom`/`screenshot`、普通链接导航。
+- **四类写动作**：输入文字、会提交表单的点击或表单内 Enter、下载、执行页面脚本。密码框仍然是**直接硬拒**，不弹确认（密码不进文案、不进日志）。
+- 第一次在某站点写：面板顶部出现「{站点} 想让 agent {做什么}」，三个选择：
+  - **允许一次**：只放行这一次（批准与执行是同一个请求，动作恰好发生 0 或 1 次）；
+  - **本会话允许本站**：本会话内同站点不再问（切换站点重置、会话结束作废）；
+  - **拒绝** / 按 Enter：什么都不发，工具回 `approval_denied`。
+- 30 秒不回答：按拒绝处理（`approval_timeout`），**不会**在你离开后偷偷执行。
+- 面板不可见 / 没打开：立即失败（`approval_required`），不烧 30 秒预算，也不会在没有人的时候执行。
+- 你点「我来接管」：待确认的写动作立即作废。
+
+## 5. 已知限制与未验证项
+
+- **按站点判断，不按登录态**：面板读不到 HttpOnly Cookie，无法区分「登录后页面」；用「站点首次写动作」这个可观测信号代替（ADR 010 §2）。
+- **只覆盖四类写动作**：非表单按钮的副作用（如「删除」按钮发 `fetch`）按读处理。
+- **页面侧标记可伪造**：页面能把自己伪装成提交按钮，但最坏结果只是**多问一次**，不会少问。
+- **未验证（需改配置）**：F7（`sensitiveSites` 每次必问）与 F8（`mode:'off'` 逐字回退）属配置级，需改 profile 并重载，本轮未做真机；由 `plugin/test/config.test.mjs`、`plugin/test/approvals.test.mjs`、`plugin/test/gate.test.mjs` 在契约层锁住。U1 窗口隐藏时 `visibilityState` 的真实取值已由 F5 间接证实（面板不可见时 `<1s` 返回 `approval_required`）；U2（提交判定对 `form.submit()`/`requestSubmit()`/`fetch` 的覆盖）与 U4（30s 默认值）仍待更多真机样本。
+- **面板 `/page` 遥测在本机宿主未落地**：不影响判定（写动作的 origin 来自页面侧 `inspect`），只影响遥测与未来的提示文案；已记入 TICKET-037 的后续项。
+- **真实验证墙**只回归过 `nopecha.com/demo/cloudflare` 一页（needs_human → eval 被拒 → 人工过墙后恢复，均通过）；其他厂商墙未取样。
+
+## 6. 回滚
+
+| 手段 | 做什么 |
+|---|---|
+| 配置回滚 | `approvals.mode: 'off'` → 读/写动作都与 1.4.24 一致（F8 夹具验收项） |
+| 版本回滚 | 重装 `dsh-plugin-agent-browser-1.4.24.tgz`（sha256 `55086470b4bb7c615ffbed19dfa998e08783b63158e66a1d269713d6b46620f5`） |
+| 只回滚验证墙 | 无单独开关；033 的改动只在 `inject/detect.js` + `client.js` 的 open 复检，回滚整包即可 |

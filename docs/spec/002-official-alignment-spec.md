@@ -111,6 +111,8 @@
 要求：定义 `AgentBrowserError`，携带 `{ code, details, retryable }`；code 至少覆盖 `panel_not_open`、`panel_taken_over`、`needs_human`、`bridge_timeout`、`bridge_closed`、`unauthorized`、`scheme_rejected`、`eval_disabled`、`navigation_failed`、`download_rejected`、`cancelled`、`budget_exceeded`（完整码表见 `docs/tickets/020-structured-errors.md` §2.2）。人读文案保留，但程序判定只看 `code`。
 
 > **实现期修正（2026-11-21，TICKET-020）**：官方 cookbook 的 `AgentBrowserError extends HarnessError`（从 `@deepseek-ai/dsh-llm` 导入）对**外部插件不成立**——宿主跑在 `app.asar` 里，插件按裸包名解析到的是 Node 全局目录中另一份 DSH（实测 `%APPDATA%\npm\node_modules\@deepseek-ai\dsh\...`，另一个模块实例），子类化它过不了宿主 `dsh-tools` 的 `instanceof` 检查，`@deepseek-ai/dsh-error` 更是解析不到。最终用**本地同形基类**（`name`/`code`/`cause` 形状一致），`HARNESS_ERROR_BASE = 'local'`；`error.info` 恒为空是已知偏差，code 通过 message（`Error: <code>: <text>`）被模型读到。取证与偏差记录见 `docs/tickets/020-structured-errors.md` §6.2。
+>
+> **实现期修正（2026-11-24，**1.5.0**，TICKET-037/039）**：码表由 13 增到 16，新增 `approval_required`（面板不在/不可见，写动作未下发）、`approval_timeout`（用户没在时限内回答）、`approval_denied`（用户拒绝或接管）。三者都遵守既有约定：人读文案在 message 里，程序只看 `code`；`required`/`timeout` 可重试，`denied` 不可重试。码表与处置见 `dist/dsh-plugin-agent-browser/README.md` 故障排查表。
 
 ### B6 取消：尊重 `exec.signal`（P1）
 

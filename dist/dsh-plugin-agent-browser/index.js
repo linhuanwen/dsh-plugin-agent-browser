@@ -128,6 +128,23 @@ export const Config = z.object({
   })
     .default({})
     .description('The read-only workspace server that lets the panel open local files.'),
+
+  approvals: z.object({
+    // Volatile: the panel asks for consent per action, so flipping the mode in the
+    // config editor applies to the next write without a reload.
+    mode: z.string()
+      .default(DEFAULTS.approvals.mode)
+      .description('Write-action confirmation: first-touch (the default — reads never prompt, the first write on each site does) or off (1.4.x behaviour).')
+      .volatile(),
+    timeoutMs: z.natural()
+      .default(DEFAULTS.approvals.timeoutMs)
+      .description('How long the panel has to answer a confirmation prompt before the action is refused (2s–120s).'),
+    sensitiveSites: z.array(z.string())
+      .default([])
+      .description('Sites that prompt on every write, even after the user allowed the site for this session. Host names or URLs.'),
+  })
+    .default({})
+    .description('Site-level first-write confirmation for actions that change the page (SPEC-003, TICKET-037/038).'),
 })
 
 /**

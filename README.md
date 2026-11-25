@@ -9,10 +9,10 @@
 `dsh-plugin-agent-browser` · DSH 桌面端插件
 
 <p>
-  <img alt="version 1.4.24" src="https://img.shields.io/badge/version-1.4.24-2563eb?style=flat-square" />
+  <img alt="version 1.5.2" src="https://img.shields.io/badge/version-1.5.2-2563eb?style=flat-square" />
   <img alt="DSH 0.2.2 - 0.3.0" src="https://img.shields.io/badge/DSH-0.2.2%20~%200.3.0-1d4ed8?style=flat-square" />
   <img alt="11 tools" src="https://img.shields.io/badge/tools-11-0f766e?style=flat-square" />
-  <img alt="196 tests passed" src="https://img.shields.io/badge/tests-196%20passed-16a34a?style=flat-square" />
+  <img alt="245 tests passed" src="https://img.shields.io/badge/tests-245%20passed-16a34a?style=flat-square" />
   <img alt="platform Windows and macOS" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-475569?style=flat-square" />
   <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-0284c7?style=flat-square" />
 </p>
@@ -62,7 +62,7 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 | 留下整页证据、把附件下载回来 | | | ✅ 手动 | ✅ 带 sha256 |
 | 遇到人机验证 | | | ✅ | 检测到就交给你 |
 
-浏览器本身不缺，缺的是**给 Agent 用的那一层**：可寻址的元素（`ref`）、可回放的错误（13 个稳定错误码）、可交还的控制权（顶部那条接管按钮）。这三样才是这个插件的正文。
+浏览器本身不缺，缺的是**给 Agent 用的那一层**：可寻址的元素（`ref`）、可回放的错误（16 个稳定错误码）、可交还的控制权（顶部那条接管按钮）。这三样才是这个插件的正文。
 
 判据、计费与边界讨论见 [`docs/design/web-tools-and-agent-browser.md`](docs/design/web-tools-and-agent-browser.md)。
 
@@ -78,7 +78,7 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 | **失败不毁现场** | 导航失败自动退回上一页，错误里带 `nav_dns` / `nav_cert` / `nav_blocked` 等具体原因；错误页上不会返回空树假成功 |
 | **过程看得见** | Web 端为截图 / 打开 / 下载各出一张工具卡片，模型调了什么、页面长什么样，一眼可查 |
 | **设置就在 DSH 里** | 装好后「设置」左侧多一页 **浏览器面板**：行为、预算、下载、搜索兜底、会话白名单、本地文件服务六组表单，改完保存即可，不用手改 YAML |
-| **工程化底座** | 动态端口 + 每进程令牌、13 个稳定错误码、取消、策略接缝、196 个单测 |
+| **工程化底座** | 动态端口 + 每进程令牌、16 个稳定错误码、取消、策略接缝、245 个单测 |
 
 ## 快速开始
 
@@ -97,7 +97,7 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 
 ```text
 plugin_manager action: install_bundle
-                target: dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.4.24.tgz
+                target: dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.2.tgz
 ```
 
 ### 3. 打开面板
@@ -228,6 +228,13 @@ client 半 · 侧栏 tab / 四态徽章 / 三张工具卡片 / <webview>
 | `activation` | `auto` | `auto` 只有需要页面的动作才展开面板；`always` 每次都亮；`manual` 要你自己先开 |
 | `evalEnabled` | `true` | 是否允许 `browser_eval` 在页面里跑任意 JS；不可信页面建议关 |
 | `searchFallback.enabled` | `false` | 导航失败时附上同站候选（按次计费，默认关，绝不自动打开） |
+| `approvals.mode` | `first-touch` | 写动作（输入、提交、下载、脚本）在同站点第一次出现时问一次；`off` 回到 1.4.x 的直接执行 |
+| `approvals.timeoutMs` | `30000` | 确认条等待时长，超时按「拒绝」处理，不执行 |
+| `approvals.sensitiveSites` | `[]` | 这些站点每次都问，即使选过「本会话允许本站」 |
+
+## 写动作确认（`approvals`，默认开启）
+
+读动作从不打扰：`open`、`snapshot`、`scroll`、`hover`、`screenshot`、普通链接近导航都直接执行。四类写动作会在一处**站点 × 会话**粒度上问一次：输入文字（type）、会提交表单的点击/Enter（submit）、下载（download）、页面脚本（eval）。确认条长在面板顶部，三个按钮「允许一次 / 本会话允许本站 / 拒绝」，Enter 等于拒绝；面板不可见时立即失败而不是干等 30 秒；你点「我来接管」的那一瞬，待确认的写动作自动作废。
 
 ## 已知限制
 
@@ -235,7 +242,9 @@ client 半 · 侧栏 tab / 四态徽章 / 三张工具卡片 / <webview>
 - **一个 profile 只能启用一个浏览器后端**。两套插件都注册 `browser_*` 工具，宿主会拒绝第二次注册；启用前先停掉另一个。
 - **DSH 窗口在后台或最小化时不绘制**，也不接收合成输入：点击会"没反应"、截图会超时。把窗口切到前台即可，这不是插件 bug。
 - **跨域 iframe 只能给占位**，里面的元素必须用坐标点；canvas 同理。
-- **验证墙可能漏报**。检测器按 URL / 标题 / DOM / 文案判断，真实 Cloudflare 挑战页有漏报记录（[`docs/tickets/033`](docs/tickets/033-challenge-detection-gap.md)）；上线按"检测可能不触发，请人工接管"使用。
+- **验证墙可能漏报**。检测器按 URL / 标题 / DOM / 文案判断；1.5.x 补上了「正在进行安全验证 / 验证您是人类」这类文案、`challenge-platform` iframe 与打开后 2 秒内的二次复检，并已在 `nopecha.com/demo/cloudflare` 真站回归通过（`needs_human` → 脚本被拒 → 人工过墙后恢复，[`docs/tickets/033`](docs/tickets/033-challenge-detection-gap.md)）；其他厂商的墙尚未取样，上线仍按「检测可能不触发，请人工接管」使用。
+- **写动作确认按站点判断，不按登录态**：面板读不到 HttpOnly Cookie，所以无法区分「登录后的页面」；只好用「站点首次写动作」这个可观测信号代替（[`docs/spec/003`](docs/spec/003-first-touch-approval-spec.md)）。
+- **只覆盖四类写动作**：输入、会提交表单的点击/Enter、下载、脚本。非表单按钮的副作用（比如「删除」按钮发 `fetch`）按读处理，不会被拦。
 - **`browser_download` 走宿主侧 `fetch`，不带页面 Cookie**：需要登录态才能下载的链接会拿到登录页而不是文件。
 - **`target=_blank` 的附件是黑洞**：点了既不导航也不落盘，附件一律用 `browser_download({ url })`。
 - **取消只保证"不再等、不再下发新命令"**，已经发到页面里的动作不会撤销。
@@ -274,7 +283,7 @@ screenshots/    运行截图 —— 案例证据与复跑留档
 仓库是纯 JS，**没有构建步骤**；插件源码在 `plugin/`，发布产物在 `dist/`。
 
 ```bash
-# 单测（196 例）
+# 单测（245 例）
 node --test --test-timeout=60000 plugin/test/*.test.mjs
 
 # 打包 tgz

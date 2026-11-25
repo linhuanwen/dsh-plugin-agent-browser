@@ -16,10 +16,11 @@
 | --- | --- |
 | [001-agent-browser-plugin-spec.md](spec/001-agent-browser-plugin-spec.md) | 工具契约、状态机、快照格式、安全边界、A1–A13 验收项 |
 | [002-official-alignment-spec.md](spec/002-official-alignment-spec.md) | B1–B11 / M1–M5 / U1–U7 与版本线 1.1.0–1.4.3 的对齐 |
+| [003-first-touch-approval-spec.md](spec/003-first-touch-approval-spec.md) | 站点级首次写动作确认：C1–C12 可验收契约、判定表、桥协议、面板规格、验收与回滚（实现见 TICKET-037–039） |
 
 ## decisions/ —— 为什么要这样选
 
-9 篇短记录，每篇一个取舍（通道选型、不用 CDP、动态端口与令牌、单一包三种角色……），索引见 [decisions/README.md](decisions/README.md)。
+10 篇短记录，每篇一个取舍（通道选型、不用 CDP、动态端口与令牌、单一包三种角色、站点级首次写动作确认……），索引见 [decisions/README.md](decisions/README.md)。
 
 ## cases/ —— 取证与案例
 
@@ -31,12 +32,19 @@
 | [012-industry-research-cases.md](cases/012-industry-research-cases.md) | R1–R8 行业调研案例 |
 | [013-hardening-cases.md](cases/013-hardening-cases.md) | H1–H8 加固案例（鉴权、守卫、配置面、错误契约） |
 | [014-practical-cases.md](cases/014-practical-cases.md) | S1–S6 实用案例（取表、下载、隔离、故障处置） |
+| [015-first-touch-cases.md](cases/015-first-touch-cases.md) | F1–F12 首次写动作确认夹具（读动作零打扰、首次确认、拒绝/超时/不可见、站点豁免、敏感站、off 回退、提交分类、接管作废） |
 | [cases/shots/](cases/shots/) | 案例截图原图 |
 | [cases/outputs/](cases/outputs/) | 案例执行产物：R4/R8/S1–S6 的记录、素材与报告 |
 
-## tickets/ —— 34 张工单
+## research/ —— 外部调研
 
-按时间编号，每张记录一个失败模式、根因与验收证据（`034-screenshot-large-capture-hang.md` 是最近的截图大载荷修复）。
+| 文件 | 讲什么 |
+| --- | --- |
+| [2026-11-24-browser-automation-competitive-report.md](research/2026-11-24-browser-automation-competitive-report.md) | 5 个同类项目（BrowserSkill / browserpaw / browser-mcp / browser-automation / dsh-browser-cdp）的横评，与我们护城河和短板的对照，P0–P2 建议与两周清单 |
+
+## tickets/ —— 39 张工单
+
+按时间编号，每张记录一个失败模式、根因与验收证据（`034-screenshot-large-capture-hang.md` 是截图大载荷修复，`037`–`039` 是「首次写动作确认」的实现拆分：host 判定/门 → 面板确认条 → 配置与夹具）。
 
 ## release/ —— 上线与发布
 
@@ -45,8 +53,9 @@
 | [launch-test-plan.md](release/launch-test-plan.md) | G0–G5 上线门禁与逐项执行结果 |
 | [launch-report-1.4.13.md](release/launch-report-1.4.13.md) | 1.4.13 Windows 首发的上线报告与签字 |
 | [release-notes-1.4.md](release/release-notes-1.4.md) | 1.4.x 的产物、行为变化、未验证项与回滚 |
+| [release-notes-1.5.md](release/release-notes-1.5.md) | 1.5.0 信任闸门版：验证墙漏报修复 + 首次写动作确认（16 错误码、面板确认条、off 回退与回滚） |
 | [g3-ptc-prompt.md](release/g3-ptc-prompt.md) / [g3-ptc-result.md](release/g3-ptc-result.md) | G3 PTC 冒烟门的提示词与执行结果 |
-| [profile-install-baseline.md](release/profile-install-baseline.txt) | 装机事故前的依赖基线快照 |
+| [profile-install-baseline.txt](release/profile-install-baseline.txt) | 装机事故前的依赖基线快照 |
 
 ## assets/
 

@@ -192,6 +192,23 @@ function dshAction(op, params) {
     return { tag: tag, role: role, name: String(name).replace(/\s+/g, ' ').trim().slice(0, 80) }
   }
 
+  /**
+   * Whether activating this control submits a form.
+   *
+   * The three shapes the spec names (SPEC-003 C2): an explicit submit button, a
+   * submit/image input, or a `<button>` inside a form with no type of its own —
+   * whose default type is submit. Everything else (links, `type="button"`) is a
+   * read as far as the permission gate is concerned.
+   */
+  function isSubmitControl(element) {
+    if (!element || element.nodeType !== 1) return false
+    var tag = element.tagName.toLowerCase()
+    var type = String(element.getAttribute('type') || '').toLowerCase()
+    if (tag === 'button') return type === '' || type === 'submit'
+    if (tag === 'input') return type === 'submit' || type === 'image'
+    return false
+  }
+
   /** Inline style says "not rendered" (display/visibility) or fully transparent. */
   function hiddenByStyle(element) {
     var style = null
@@ -435,6 +452,19 @@ function dshAction(op, params) {
   installGuards()
   if (op === 'scroll') return doScroll()
 
+  // `inspect` answers "what is this address?" before a write is approved. With
+  // no ref/selector it describes the focused control, which is what an Enter
+  // press will act on. Nothing is mutated here.
+  if (op === 'inspect' && typeof input.selector !== 'string' && typeof input.ref !== 'string') {
+    var focused = document.activeElement
+    return JSON.stringify({
+      ok: true,
+      info: focused && focused !== document.body ? describe(focused, document) : null,
+      isSubmit: isSubmitControl(focused),
+      url: String(location.href || ''),
+    })
+  }
+
   var element = null
   var doc = document
   var frame = ''
@@ -460,7 +490,12 @@ function dshAction(op, params) {
   }
 
   if (op === 'inspect') {
-    return JSON.stringify({ ok: true, info: describe(element, doc) })
+    return JSON.stringify({
+      ok: true,
+      info: describe(element, doc),
+      isSubmit: isSubmitControl(element),
+      url: String(location.href || ''),
+    })
   }
 
   try {

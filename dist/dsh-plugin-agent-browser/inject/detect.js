@@ -7,10 +7,14 @@
  * It only ever *reports*. Nothing here tries to solve, spoof, or click a
  * challenge: the product rule is that a verification wall is handed to the
  * human (decision D03), so a false negative is cheap and a false positive is
- * annoying — which is why two independent signal kinds have to agree.
+ * annoying — which is why two independent signal kinds normally have to agree.
+ * TICKET-033 added the two narrow single-kind exceptions below (an iframe wall
+ * whose top document only carries the title, and a wall whose words sit beside
+ * a handful of links) and the `pending` hint the client half uses to re-run the
+ * detector once a late-mounting Turnstile widget appears.
  *
  * @param {{maxText?: number}} [options]
- * @returns {string} JSON: { hit, categories, signals, rect, title, url }
+ * @returns {string} JSON: { hit, pending, categories, signals, rect, title, url }
  */
 function dshDetect(options) {
   var maxText = (options && options.maxText) || 20000
@@ -33,6 +37,22 @@ function dshDetect(options) {
   var TITLE_RE = /just a moment|attention required|请稍候|安全验证|验证码拦截|滑动验证|人机验证|security check|checking your browser|verifying you are human/i
   if (TITLE_RE.test(title)) add('title', title)
 
+  // ---- 1b. a redirect is not a wall -----------------------------------------
+  // 「请稍候…」 is what a challenge page says, and also what a one-second
+  // interstitial says. The page itself tells them apart: a meta refresh with a
+  // short delay is a redirect, and TICKET-033 acceptance 3 says it must not be
+  // reported. Anything that *does* show a challenge widget keeps its dom signal
+  // even behind a refresh, so only the weak rules are suppressed below.
+  var redirect = false
+  try {
+    var meta = document.querySelector('meta[http-equiv="refresh" i]')
+    if (meta !== null) {
+      var metaContent = meta.getAttribute ? String(meta.getAttribute('content') || '') : ''
+      var delaySeconds = parseFloat(metaContent)
+      redirect = !Number.isFinite(delaySeconds) || delaySeconds <= 3
+    }
+  } catch (error) { redirect = false }
+
   // ---- 2. challenge widgets in the DOM -------------------------------------
   // Ordered: outer containers first, so the outline lands on the whole widget.
   var SELECTORS = [
@@ -42,6 +62,12 @@ function dshDetect(options) {
     '#px-captcha',
     '.cf-turnstile',
     'iframe[src*="challenges.cloudflare.com"]',
+    // Cloudflare's newer orchestrate pages and Turnstile widgets are iframes
+    // whose path or title says `challenge`; the cross-origin iframe element is
+    // still readable from the top document (TICKET-033).
+    'iframe[src*="challenge-platform"]',
+    'iframe[title*="challenge" i]',
+    '#cf-challenge-running',
     'iframe[src*="recaptcha"]',
     'iframe[src*="hcaptcha"]',
     'iframe[src*="captcha"]',
@@ -90,6 +116,7 @@ function dshDetect(options) {
     'verify you are a human',
     'checking your browser',
     'checking if the site connection is secure',
+    'verifying you are human',
     '请完成安全验证',
     '拖动滑块',
     // Alibaba's slider wall says it this way, and the morning this was written
@@ -101,29 +128,62 @@ function dshDetect(options) {
     '滑块验证',
     '滑动验证',
     '人机验证',
+    // TICKET-033: the Cloudflare Turnstile demo page only says these in its
+    // body (the title is the site's own), so the widget iframe was the sole
+    // signal and a lone dom hit never promotes the session.
+    '正在进行安全验证',
+    '验证您是人类',
+    '请稍候',
+  ]
+  var STRONG_PHRASES = [
+    '正在进行安全验证',
+    '验证您是人类',
+    'verify you are human',
+    'verifying you are human',
+    'checking your browser',
+    '请完成安全验证',
   ]
   var lower = text.toLowerCase()
+  var strongText = false
   for (var p = 0; p < PHRASES.length; p += 1) {
-    if (lower.indexOf(PHRASES[p]) >= 0) add('text', PHRASES[p])
+    if (lower.indexOf(PHRASES[p]) >= 0) {
+      add('text', PHRASES[p])
+      if (STRONG_PHRASES.indexOf(PHRASES[p]) >= 0) strongText = true
+    }
   }
 
   // ---- verdict --------------------------------------------------------------
   // Two kinds must agree, and a lone DOM class is never enough on its own: a
   // widget without a challenge context is usually just a site's own form.
   //
-  // One exception, learned from Alibaba's slider wall: a page that says "拖动滑块"
-  // in its body but carries none of the known containers has exactly one signal,
-  // and the agent drove straight into a wall. So a text hit on a page with almost
-  // nothing to interact with also counts — a real form has more than three
-  // controls. Over-reporting only costs the user one annoyed glance (D03).
+  // Three exceptions, each learned from a real miss:
+  // - Alibaba's slider wall says "拖动滑块" in its body and carries none of the
+  //   known containers, so a text hit on a page with almost nothing to interact
+  //   with also counts (a real form has more than three controls).
+  // - TICKET-033: the Turnstile demo page puts the wall's words beside a small
+  //   nav, so the same text hit counts with up to ten controls, but only when
+  //   the phrase is one only a wall says (STRONG_PHRASES).
+  // - TICKET-033: the challenge controls live in a cross-origin iframe, so the
+  //   top document may carry only the title. A title hit on an empty page also
+  //   counts — except behind a short meta refresh, which is the redirect
+  //   interstitial that looks identical.
+  // Over-reporting only costs the user one annoyed glance (D03).
   var interactive = 0
   try {
     interactive = document.querySelectorAll('input,button,select,textarea,a[href]').length
   } catch (error) { interactive = 0 }
+  var html = /html/i.test(contentType)
   var kinds = Object.keys(categories)
   var textOnly = kinds.length === 1 && categories.text === true && interactive <= 3
-  if (textOnly && !/html/i.test(contentType)) textOnly = false
-  var hit = (kinds.length >= 2 && (categories.dom === true || categories.location === true)) || textOnly
+  if (textOnly && !html) textOnly = false
+  var strongTextOnly = kinds.length === 1 && categories.text === true && strongText === true && html && interactive <= 10
+  var titleOnly = kinds.length === 1 && categories.location === true && html && interactive <= 3
+  var hit = (kinds.length >= 2 && (categories.dom === true || categories.location === true)) || textOnly || strongTextOnly || titleOnly
+  if (redirect && categories.dom !== true) hit = false
+  // `pending` tells the client half the page may still be mounting its widget:
+  // the wall's words are here, the second signal has not landed yet, so the open
+  // tool should look again after a moment (TICKET-033).
+  var pending = hit === false && !redirect && html && interactive <= 30 && (categories.text === true || categories.location === true)
 
   // ---- outline --------------------------------------------------------------
   // The outline is drawn *in the page*, not in the panel: a <webview> composites
@@ -172,6 +232,8 @@ function dshDetect(options) {
 
   return JSON.stringify({
     hit: hit,
+    pending: pending,
+    redirect: redirect,
     categories: kinds,
     signals: signals,
     rect: rect,

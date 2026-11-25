@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>写动作确认夹具</title>
+<style>
+  body { font: 15px/1.6 system-ui, sans-serif; margin: 28px; color: #1f2328; }
+  h1 { font-size: 18px; }
+  section { margin: 18px 0; padding: 14px 16px; border: 1px solid #d8dee4; border-radius: 8px; }
+  label { display: block; margin: 6px 0; }
+  input[type="text"], input[type="password"] { width: 260px; padding: 5px 8px; }
+  output { font-weight: 600; }
+  a { color: #0969da; }
+</style>
+</head>
+<body>
+<h1>写动作确认夹具（F1–F12）</h1>
+<p>这个页面只做一件事：让 SPEC-003 的四类写动作各有一个可观察的落点。表单提交次数写进 <code>#count</code>，用来验收「提交恰好 1 次」。</p>
+
+<section>
+  <form id="form" action="#submitted" method="get">
+    <label>昵称 <input type="text" name="nick" placeholder="普通文本框"></label>
+    <label>密码 <input type="password" name="secret" placeholder="密码框（硬拒，不进确认）"></label>
+    <button type="submit">提交</button>
+    <button type="button" id="plain">普通按钮</button>
+  </form>
+  <p>表单提交次数：<output id="count">0</output></p>
+</section>
+
+<section>
+  <p><a href="#read-target" id="link">普通链接（按读处理）</a></p>
+  <p><a href="approval.txt" download="approval.txt" id="file">可下载文件 approval.txt</a></p>
+</section>
+
+<section>
+  <p>用 <code>browser_eval({ expression: 'document.title' })</code> 触发脚本类写动作；<code>browser_download</code> 用任意 http(s) 地址即可。<code>browser_type</code> 打到上面的文本框验证「允许一次」，打到密码框应直接硬拒。</p>
+</section>
+
+<script>
+  // Count real submissions so an assertion can prove "exactly once".
+  let count = 0
+  document.getElementById('form').addEventListener('submit', (event) => {
+    // Keep the page on screen so `#count` survives: that is what makes
+    // "exactly one submission" observable instead of a one-shot navigation.
+    event.preventDefault()
+    count += 1
+    document.getElementById('count').textContent = String(count)
+  })
+  document.getElementById('plain').addEventListener('click', () => {
+    document.getElementById('count').textContent = 'button-ok'
+  })
+</script>
+</body>
+</html>

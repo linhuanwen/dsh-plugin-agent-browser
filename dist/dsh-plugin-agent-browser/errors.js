@@ -22,7 +22,7 @@
  * as `'local'` and keeps the code inside the message, where the model reads it.
  */
 
-/** @typedef {'panel_not_open'|'panel_taken_over'|'needs_human'|'bridge_timeout'|'bridge_closed'|'cancelled'|'unauthorized'|'scheme_rejected'|'eval_disabled'|'session_not_allowed'|'navigation_failed'|'download_rejected'|'budget_exceeded'} AgentBrowserErrorCode */
+/** @typedef {'panel_not_open'|'panel_taken_over'|'needs_human'|'bridge_timeout'|'bridge_closed'|'cancelled'|'unauthorized'|'scheme_rejected'|'eval_disabled'|'session_not_allowed'|'navigation_failed'|'download_rejected'|'budget_exceeded'|'approval_required'|'approval_timeout'|'approval_denied'} AgentBrowserErrorCode */
 
 /**
  * The contract a caller can branch on: every code, whether trying again can
@@ -82,6 +82,18 @@ export const ERROR_CODES = {
   budget_exceeded: {
     retryable: true,
     hint: 'the output was cut at the character budget; read a smaller region or pass a larger maxChars.',
+  },
+  approval_required: {
+    retryable: true,
+    hint: 'the panel could not ask the user for permission (it is closed or not visible). Open the right sidebar browser tab, then retry; nothing was sent to the page.',
+  },
+  approval_timeout: {
+    retryable: true,
+    hint: 'the user did not answer the permission prompt in time; nothing was sent to the page, so ask again (or wait for them to come back).',
+  },
+  approval_denied: {
+    retryable: false,
+    hint: 'the user refused this write action (or took the panel over); nothing was sent to the page. Ask what they want done instead.',
   },
 }
 

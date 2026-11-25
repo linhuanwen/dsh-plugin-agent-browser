@@ -11,6 +11,16 @@ import { createHash } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { basename, join } from 'node:path'
 import { activationPolicy, DEFAULT_ACTIVATION } from './activation.js'
+import {
+  clickClass,
+  createGrantBook,
+  normalizeApprovals,
+  originOf,
+  pressClass,
+  shouldConfirm,
+  SUBMIT_KEYS,
+  summarize,
+} from './approvals.js'
 import { short } from './bridge.js'
 import { readField } from './config.js'
 import { DownloadError, downloadTo } from './downloads.js'
@@ -1483,10 +1493,11 @@ function relativeFrom(root, absolute) {
  * error, because the recovery is a *different* call (`browser_snapshot` the page,
  * `browser_eval` the href again) and the card should still render what happened.
  * @param {import('cordis').Context} ctx - host context, for `workingDirectory`.
+ * @param {{ requestApproval?: Function }} gate - the gated bridge, for the first-touch permission check.
  * @param {{ dir?: string, maxBytes?: number, rules?: ReturnType<typeof createPolicy> }} [options] - target directory and size
  *   ceiling, plus the policy object, from config (`downloads.dir` / `downloads.maxBytes`).
  */
-export function browserDownloadTool(ctx, options = {}) {
+export function browserDownloadTool(ctx, gate, options = {}) {
   const dir = typeof options.dir === 'string' && options.dir !== '' ? options.dir : 'downloads'
   const maxBytes = Number.isInteger(options.maxBytes) && options.maxBytes > 0 ? options.maxBytes : undefined
   const rules = options.rules ?? createPolicy()
@@ -1576,6 +1587,10 @@ export function browserDownloadTool(ctx, options = {}) {
     async execute(args, exec) {
       if (typeof args?.url !== 'string' || args.url.trim() === '') throw new Error('url is required')
       const root = await workspaceOf(ctx, exec)
+      // A download is a write against the site even though the page never sees
+      // it, so it takes the same first-touch question as `type` and `submit`.
+      // Running it before the fetch is what makes "nothing was sent" true.
+      await gate?.requestApproval?.(sessionOf(exec), { actionClass: 'download', url: args.url.trim() })
       try {
         return await downloadTo(root, {
           url: args.url.trim(),
@@ -1705,37 +1720,208 @@ export function browserZoomTool(bridge) {
 }
 
 /**
- * Wrap the bridge so every command carries the current display policy.
+ * Wrap the bridge so every command carries the current display policy, and a
+ * write waits for the human the first time it touches a site.
  *
  * `activation` and `fitWidth` are volatile fields: their readers return the live
  * value, and a config-editor change must take effect on the next command without
- * re-registering the tools. That is why the policy is read here, per request,
- * instead of being captured once when the tools are built.
+ * re-registering the tools. The approval mode is read the same way, for a
+ * sharper reason: it is a permission decision, and capturing it at build time
+ * would let a settings change be silently ignored.
+ *
+ * Reads never ask (SPEC-003 C1): the user can watch the page change, and a read
+ * cannot destroy anything. A click is classified from the page's own answer
+ * about its target, so a plain link stays free and a submit asks.
  * @param {import('./bridge.js').Bridge} bridge - host half of the channel.
- * @param {{ activation?: unknown, fitWidth?: unknown }} [policy] - volatile readers.
- * @returns {{ request: Function, takeDigest: Function }} the gated bridge.
+ * @param {{ activation?: unknown, fitWidth?: unknown, approvals?: unknown }} [policy] - volatile readers.
+ * @returns {{ request: Function, takeDigest: Function, requestApproval: Function }} the gated bridge.
  */
 export function createGate(bridge, policy = {}) {
-  return {
-    request: (sessionId, type, params, timeoutMs) => {
-      // `exec.signal` reaches the tools through async context (see `createTools`),
-      // so every tool call can be aborted without threading the signal through
-      // eleven signatures — and a call that was aborted before it started never
-      // touches the page at all.
-      const signal = execSignals.getStore()?.signal
-      if (signal?.aborted === true) {
-        throw new AgentBrowserError(
-          'cancelled',
-          'the caller stopped this call before it reached the browser panel, so nothing was sent to the page.',
-        )
+  const grants = createGrantBook()
+  // `mode` is volatile (the schema wraps it in a reader), so it is unwrapped
+  // here rather than in the pure approvals module: one place knows about readers.
+  const settingsOf = () => {
+    const raw = readField(policy?.approvals, undefined)
+    if (raw === null || typeof raw !== 'object') return normalizeApprovals(undefined)
+    return normalizeApprovals({
+      mode: readField(raw.mode, undefined),
+      timeoutMs: raw.timeoutMs,
+      sensitiveSites: raw.sensitiveSites,
+    })
+  }
+  const pageUrlOf = (sessionId) => {
+    try {
+      const page = typeof bridge.pageOf === 'function' ? bridge.pageOf(sessionId) : null
+      return page !== null && typeof page === 'object' && typeof page.url === 'string' ? page.url : ''
+    } catch (error) {
+      return ''
+    }
+  }
+  // Approval exists only when the host can actually ask: no transport (an older
+  // profile, or a bare test bridge) keeps the 1.4.x behaviour of just acting.
+  const canAsk = () => typeof bridge.approve === 'function' && typeof bridge.hasClient === 'function'
+  const send = (sessionId, type, params, timeoutMs) => {
+    // `exec.signal` reaches the tools through async context (see `createTools`),
+    // so every tool call can be aborted without threading the signal through
+    // eleven signatures — and a call that was aborted before it started never
+    // touches the page at all.
+    const signal = execSignals.getStore()?.signal
+    if (signal?.aborted === true) {
+      throw new AgentBrowserError(
+        'cancelled',
+        'the caller stopped this call before it reached the browser panel, so nothing was sent to the page.',
+      )
+    }
+    const activation = readField(policy?.activation, DEFAULT_ACTIVATION)
+    const fit = readField(policy?.fitWidth, true) === false ? 'none' : 'width'
+    const options = { show: activationPolicy(activation).show(), fit }
+    if (signal !== undefined) options.signal = signal
+    return bridge.request(sessionId, type, params, timeoutMs, options)
+  }
+  /**
+   * Ask the page what an address points at — classification only.
+   *
+   * A failure here is not a failed action: the target is then unknown, and an
+   * unknown target is treated as a submit. Cancellation and a lost panel are the
+   * exception, because they mean the action itself cannot happen and a prompt
+   * would ask the user about nothing.
+   */
+  const inspect = async (sessionId, params) => {
+    try {
+      const seen = await send(sessionId, 'inspect', { ...params, source: actionSource() }, 8_000)
+      if (seen === null || typeof seen !== 'object' || seen.ok === false) {
+        return { known: false, isSubmit: false, target: null, url: '' }
       }
-      const activation = readField(policy?.activation, DEFAULT_ACTIVATION)
-      const fit = readField(policy?.fitWidth, true) === false ? 'none' : 'width'
-      const options = { show: activationPolicy(activation).show(), fit }
-      if (signal !== undefined) options.signal = signal
-      return bridge.request(sessionId, type, params, timeoutMs, options)
+      const target = seen.info !== null && typeof seen.info === 'object' ? seen.info : null
+      return {
+        known: true,
+        isSubmit: seen.isSubmit === true,
+        target,
+        url: typeof seen.url === 'string' ? seen.url : '',
+      }
+    } catch (error) {
+      if (isAgentBrowserError(error) === true
+        && (error.code === 'cancelled' || error.code === 'bridge_closed'
+          || error.code === 'panel_taken_over' || error.code === 'needs_human')) {
+        throw error
+      }
+      return { known: false, isSubmit: false, target: null, url: '' }
+    }
+  }
+  /**
+   * Ask the human, once, whether this write may happen.
+   *
+   * `bridge.approve` carries the panel's `approval_*` failures unchanged: the
+   * tool layer turns them into "nothing was sent to the page", and that honesty
+   * is the product. A closed panel fails closed instead of guessing consent.
+   */
+  const confirmWrite = async (sessionId, request) => {
+    const settings = settingsOf()
+    if (settings.mode === 'off') return
+    if (canAsk() === false) return
+    const origin = typeof request?.origin === 'string' && request.origin !== ''
+      ? request.origin
+      : originOf(request?.url !== undefined ? request.url : pageUrlOf(sessionId))
+    const actionClass = request?.actionClass
+    if (shouldConfirm({
+      mode: settings.mode,
+      actionClass,
+      origin,
+      sensitiveSites: settings.sensitiveSites,
+      grants,
+      sessionId,
+    }) === false) return
+    if (bridge.hasClient() === false) {
+      throw new AgentBrowserError(
+        'approval_required',
+        '面板不在，没法向用户确认。The panel is not attached right now, so the user cannot be asked; '
+        + 'open the right sidebar browser tab for this session and retry. Nothing was sent to the page.',
+      )
+    }
+    const target = request?.target ?? null
+    const summary = summarize(actionClass, origin, target)
+    const answer = await bridge.approve(sessionId, {
+      origin,
+      actionClass,
+      summary,
+      ...(settings.timeoutMs === undefined ? {} : { timeoutMs: settings.timeoutMs }),
+    })
+    if (answer !== null && typeof answer === 'object' && answer.decision === 'site') {
+      grants.grant(sessionId, origin)
+    }
+  }
+  /**
+   * The write class of one tool call, and the target that decides it.
+   *
+   * Only two tools need the page to answer first: a click's class depends on
+   * whether its element submits a form, and an Enter press depends on whether
+   * the focused control is inside one. Everything else is known from the call.
+   */
+  const confirmBefore = async (sessionId, type, params) => {
+    // Nothing to ask when the feature is off or no panel can answer. Returning
+    // here also keeps the pre-016 shape of a bare test bridge: one command per
+    // tool call, no classification round trip.
+    if (settingsOf().mode === 'off' || canAsk() === false) return
+    if (type === 'click') {
+      // A coordinate click names no element; it is treated as a read (C2), and
+      // the user can see the pointer land in the panel.
+      if (params?.x !== undefined || params?.y !== undefined) return
+      const address = typeof params?.ref === 'string' && params.ref !== ''
+        ? { ref: params.ref }
+        : { selector: params?.selector, strict: params?.strict }
+      const seen = await inspect(sessionId, address)
+      await confirmWrite(sessionId, {
+        actionClass: clickClass(seen.known === false ? null : { isSubmit: seen.isSubmit }),
+        origin: originOf(seen.url),
+        url: seen.url,
+        target: seen.target,
+      })
+      return
+    }
+    if (type === 'type') {
+      // A password box is hard-refused by the page itself (SPEC-003 C2), so
+      // asking the user about it would promise something that can never happen.
+      // Inspect first: one extra round trip only on the first write per site,
+      // and the page's own refusal still produces the error the model sees.
+      const seen = await inspect(sessionId, { ref: params?.ref })
+      if (seen.known === true && seen.target?.role === 'password') return
+      await confirmWrite(sessionId, {
+        actionClass: 'type',
+        origin: originOf(seen.url),
+        url: seen.url,
+        target: seen.target,
+      })
+      return
+    }
+    if (type === 'eval') {
+      // The page is the only reliable witness of its own address. The panel's
+      // `/page` telemetry is advisory and may not have landed yet; asking the
+      // page costs one round trip and keeps the prompt naming the real site
+      // (and keeps `sensitiveSites` honest) instead of saying "当前页面".
+      const seen = await inspect(sessionId, {})
+      await confirmWrite(sessionId, { actionClass: 'eval', origin: originOf(seen.url), url: seen.url })
+      return
+    }
+    if (type === 'press') {
+      if (SUBMIT_KEYS.includes(String(params?.key ?? '')) === false) return
+      const seen = await inspect(sessionId, {})
+      await confirmWrite(sessionId, {
+        actionClass: pressClass(params?.key, seen.known === false ? null : { isSubmit: seen.isSubmit }),
+        origin: originOf(seen.url),
+        url: seen.url,
+        target: seen.target,
+      })
+    }
+  }
+  return {
+    request: async (sessionId, type, params, timeoutMs) => {
+      await confirmBefore(sessionId, type, params)
+      return send(sessionId, type, params, timeoutMs)
     },
     takeDigest: (sessionId) => bridge.takeDigest(sessionId),
+    // `browser_download` never calls the bridge (the host fetches the file
+    // itself), so it gets the permission check directly instead of via `request`.
+    requestApproval: (sessionId, request) => confirmWrite(sessionId, request),
   }
 }
 
@@ -1752,6 +1938,7 @@ export function createGate(bridge, policy = {}) {
  * @param {{
  *   activation?: unknown,
  *   fitWidth?: unknown,
+ *   approvals?: unknown,
  *   evalEnabled?: unknown,
  *   sessions?: { allowlist?: unknown },
  *   limits?: { navigationTimeoutMs?: number, snapshotMaxChars?: number, evalMaxChars?: number },
@@ -1806,7 +1993,7 @@ export function createTools(ctx, bridge, sites, policy = {}) {
     browserTypeTool(gate),
     browserPressTool(gate),
     browserEvalTool(gate, { maxChars: limits.evalMaxChars, rules }),
-    browserDownloadTool(ctx, { dir: downloads.dir, maxBytes: downloads.maxBytes, rules }),
+    browserDownloadTool(ctx, gate, { dir: downloads.dir, maxBytes: downloads.maxBytes, rules }),
   ]
   // `exec.signal` is per call and the gate is shared, so the signal is carried in
   // async context instead of every tool parameter list. One wrapper here covers

@@ -21,6 +21,7 @@
 import { createServer } from 'node:http'
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { AgentBrowserError, fromPanelMessage, isAgentBrowserError } from './errors.js'
+import { DEFAULT_APPROVAL_TIMEOUT_MS, parseDecision } from './approvals.js'
 
 /** Default port: 0 asks the OS for a free one, so two instances never collide. */
 export const BRIDGE_PORT = 0
@@ -50,6 +51,16 @@ export const PHASES = ['idle', 'agent', 'taken_over', 'needs_human']
 
 /** Tools that change or navigate the page; refused while a human has the wheel. */
 const INPUT_TYPES = new Set(['open', 'click', 'scroll', 'hover', 'zoom', 'screenshot', 'type', 'press', 'eval'])
+
+/**
+ * Tools that only look; they must never take the wheel back from the human.
+ *
+ * `inspect` exists so the approval gate can classify an element before asking.
+ * If a read like that flipped the phase to `agent`, a pending `needs_human` or
+ * `taken_over` would be erased by the very call that checks whether asking is
+ * allowed (SPEC-003 C8 keeps the human's phase on top of the approval gate).
+ */
+const READ_TYPES = new Set(['snapshot', 'inspect'])
 
 /** A session that has not acted for this long reads as `idle` instead of `agent`. */
 const IDLE_MS = 45_000
@@ -122,6 +133,34 @@ export class Bridge {
   #cancelled = new Set()
   /** Cap for `#cancelled`. */
   #cancelledLimit = 64
+  /**
+   * What the panel last said about each session's page.
+   *
+   * Approvals are scoped per origin, so the host has to know which site the
+   * panel is on before it can decide whether to ask. The panel reports every
+   * navigation; the value is advisory (the page could have moved on), but it is
+   * the only origin the host can see.
+   * @type {Map<string, { url: string, title: string }>}
+   */
+  #pages = new Map()
+  /**
+   * The one approval each session is waiting on, if any.
+   *
+   * One per session on purpose: two stacked prompts on a narrow panel would be
+   * two chances to click the wrong one, and the tool layer never needs two
+   * answers at once (commands for a session run in order).
+   * @type {Map<string, object>}
+   */
+  #approvals = new Map()
+  #approvalSeq = 0
+  /**
+   * When a panel last asked for work.
+   *
+   * A pending approval needs a visible panel to be shown on. If no poll arrives
+   * after it was issued, nobody can see the prompt, so the host fails the call
+   * fast (`approval_required`) instead of waiting out the whole timeout.
+   */
+  #lastPollAt = 0
   /**
    * Host-side facts `/health` should expose but the bridge cannot discover on its
    * own (which tools actually got registered, and whether another browser plugin
@@ -306,8 +345,160 @@ export class Bridge {
     return digest
   }
 
+  /**
+   * What the panel last said about a session's page.
+   * @param {string} sessionId - the agent session.
+   * @returns {{ url: string, title: string }} the last reported address and title.
+   */
+  pageOf(sessionId) {
+    return this.#pages.get(sessionId) ?? { url: '', title: '' }
+  }
+
+  /**
+   * Record where a session's panel is now.
+   *
+   * The panel reports this on every navigation; it is what a permission prompt
+   * is scoped to, so a stale address here means a prompt for the wrong site.
+   * @param {string} sessionId - the agent session.
+   * @param {{ url?: unknown, title?: unknown }} [page] - what the panel saw.
+   */
+  notePage(sessionId, page = {}) {
+    if (typeof sessionId !== 'string' || sessionId === '') return
+    const url = typeof page?.url === 'string' ? page.url : ''
+    const title = typeof page?.title === 'string' ? page.title : ''
+    const previous = this.#pages.get(sessionId)
+    this.#pages.set(sessionId, { url, title })
+    if (previous === undefined || previous.url !== url) {
+      this.note('page', { session: short(sessionId), url: shortUrl(url) })
+    }
+  }
+
+  /** Pending approvals, in the shape the panel renders them. */
+  #approvalFrames() {
+    const frames = []
+    for (const [sessionId, approval] of this.#approvals) {
+      frames.push({
+        session: sessionId,
+        id: approval.id,
+        origin: approval.origin,
+        actionClass: approval.actionClass,
+        summary: approval.summary,
+        timeoutMs: approval.timeoutMs,
+        issuedAt: approval.issuedAt,
+      })
+    }
+    return frames
+  }
+
+  /**
+   * Ask the human in the panel to allow one write action.
+   *
+   * Resolves with `{ decision: 'once' | 'site' }` when the user allowed it, and
+   * rejects with a stable `approval_*` error in every other case. Half an hour
+   * of argument went into this shape: it fails closed on every path (closed
+   * panel, hidden window, no answer, refusal, takeover), it never retries the
+   * action itself, and it returns only once the human has decided or the budget
+   * is gone.
+   * @param {string} sessionId - the agent session whose panel should ask.
+   * @param {{ origin?: string, actionClass?: string, summary?: string, timeoutMs?: number }} [options]
+   * @returns {Promise<{ decision: 'once' | 'site' }>} the user's answer.
+   */
+  async approve(sessionId, options = {}) {
+    if (this.#closed) throw new AgentBrowserError('bridge_closed', 'the browser panel bridge is shut down')
+    // The human's phase outranks the prompt (SPEC-003 C8): asking "may I type?"
+    // while a verification wall is up, or while the user owns the panel, would
+    // paint a prompt the answer to which cannot be honoured anyway.
+    this.#assert(sessionId, 'type')
+    if (this.#approvals.has(sessionId)) {
+      throw new AgentBrowserError(
+        'approval_required',
+        '另一个确认还在等你。Another permission prompt is already waiting for the user in this session; finish that one first.',
+      )
+    }
+    if (this.#seen.size === 0) {
+      throw new AgentBrowserError(
+        'approval_required',
+        '面板还没连上，没法向用户确认。The panel has never connected, so the user cannot be asked; '
+        + 'open the right sidebar browser tab for this session (browser_open does it for you), then retry. '
+        + 'Nothing was sent to the page.',
+      )
+    }
+    const origin = typeof options.origin === 'string' ? options.origin : ''
+    const actionClass = typeof options.actionClass === 'string' ? options.actionClass : 'write'
+    const summary = typeof options.summary === 'string' ? options.summary : ''
+    const wanted = Number(options.timeoutMs)
+    const timeoutMs = Number.isFinite(wanted) && wanted > 0 ? Math.round(wanted) : DEFAULT_APPROVAL_TIMEOUT_MS
+    return await new Promise((resolve, reject) => {
+      const entry = {
+        id: `a${++this.#approvalSeq}`,
+        sessionId, origin, actionClass, summary, timeoutMs,
+        issuedAt: Date.now(), resolve, reject, timer: null, watchdog: null,
+      }
+      this.#approvals.set(sessionId, entry)
+      this.note('approval asked', {
+        session: short(sessionId), origin: shortUrl(origin), actionClass, timeoutMs,
+      })
+      entry.timer = setTimeout(() => { this.#finishApproval(sessionId, entry, 'timeout') }, timeoutMs)
+      entry.timer.unref?.()
+      // Nobody is polling: the prompt cannot be on screen. Failing this fast is
+      // what keeps a queued write from burning its whole budget on a closed tab.
+      entry.watchdog = setTimeout(() => {
+        if (this.#lastPollAt < entry.issuedAt) this.#finishApproval(sessionId, entry, 'unavailable')
+      }, 500)
+      entry.watchdog.unref?.()
+      this.#wake()
+    })
+  }
+
+  /**
+   * Resolve one approval exactly once and drop it from the pending map.
+   * @param {string} sessionId - the session that owns it.
+   * @param {object} entry - the approval record created by `approve`.
+   * @param {'once' | 'site' | 'deny' | 'timeout' | 'unavailable'} decision - the outcome.
+   */
+  #finishApproval(sessionId, entry, decision) {
+    const current = this.#approvals.get(sessionId)
+    if (current === undefined || current.id !== entry.id) return
+    this.#approvals.delete(sessionId)
+    clearTimeout(entry.timer)
+    clearTimeout(entry.watchdog)
+    if (decision === 'once' || decision === 'site') {
+      this.note('approval granted', { session: short(sessionId), decision, origin: shortUrl(entry.origin) })
+      entry.resolve({ decision })
+      return
+    }
+    this.note('approval refused', { session: short(sessionId), decision })
+    const what = entry.summary === '' ? '这次写操作' : entry.summary
+    /** @type {{ code: string, text: string }} */
+    let failure
+    if (decision === 'deny') {
+      failure = {
+        code: 'approval_denied',
+        text: `用户拒绝了${what}。The user refused this write action; nothing was sent to the page. `
+          + 'Ask what they want done instead.',
+      }
+    } else if (decision === 'unavailable') {
+      failure = {
+        code: 'approval_required',
+        text: '面板看不到，没法向用户确认。The panel could not show the permission prompt (closed or hidden), so nothing was sent to the page. '
+          + 'Open the right sidebar browser tab for this session and retry.',
+      }
+    } else {
+      failure = {
+        code: 'approval_timeout',
+        text: `用户 ${entry.timeoutMs}ms 内没有确认${what}。The user did not answer the permission prompt in time; `
+          + 'nothing was sent to the page. Ask again when they are back.',
+      }
+    }
+    entry.reject(new AgentBrowserError(failure.code, failure.text))
+  }
+
   /** Drop one session's queue and fail its in-flight commands. */
   #flushSession(sessionId, reason) {
+    // A pending prompt belongs to the agent's turn: once the human takes the
+    // wheel, the answer would be about a page the agent no longer controls.
+    const approval = this.#approvals.get(sessionId)
+    if (approval !== undefined) this.#finishApproval(sessionId, approval, 'deny')
     const queue = this.#queues.get(sessionId)
     if (queue !== undefined && queue.length > 0) {
       this.note('flush', { session: short(sessionId), dropped: queue.length })
@@ -345,7 +536,7 @@ export class Bridge {
     if (this.#closed) throw new AgentBrowserError('bridge_closed', 'the browser panel bridge is shut down')
     if (signal?.aborted === true) throw cancelledError()
     this.#assert(sessionId, type)
-    if (type !== 'snapshot') {
+    if (READ_TYPES.has(type) === false) {
       const state = this.stateOf(sessionId)
       if (state.phase !== 'agent') this.setPhase(sessionId, 'agent', { reason: '' })
     }
@@ -548,6 +739,12 @@ export class Bridge {
     for (const [id, entry] of this.#waiting) {
       entry.reject(new AgentBrowserError('bridge_closed', `the bridge stopped before ${id} settled`))
     }
+    for (const [sessionId, approval] of [...this.#approvals]) {
+      this.#approvals.delete(sessionId)
+      clearTimeout(approval.timer)
+      clearTimeout(approval.watchdog)
+      approval.reject(new AgentBrowserError('bridge_closed', 'the plugin stopped while the user was being asked for permission'))
+    }
     this.#waiting.clear()
     this.#queues.clear()
     this.#wake()
@@ -572,6 +769,12 @@ export class Bridge {
     this.#closed = true
     for (const [id, entry] of this.#waiting) {
       entry.reject(new AgentBrowserError('bridge_closed', `the bridge stopped before ${id} settled`))
+    }
+    for (const [sessionId, approval] of [...this.#approvals]) {
+      this.#approvals.delete(sessionId)
+      clearTimeout(approval.timer)
+      clearTimeout(approval.watchdog)
+      approval.reject(new AgentBrowserError('bridge_closed', 'the plugin stopped while the user was being asked for permission'))
     }
     this.#waiting.clear()
     this.#queues.clear()
@@ -637,6 +840,7 @@ export class Bridge {
         seen: [...this.#seen].map(short),
         queued,
         waiting: this.#waiting.size,
+        approvals: this.#approvals.size,
         parked: this.#waiters.size,
         enqueued: this.#enqueued,
         pulled: this.#pulled,
@@ -738,7 +942,7 @@ export class Bridge {
         return
       }
       this.#seen.add(who)
-      send(res, 200, { ok: true, mark: BRIDGE_MARK, state: this.stateOf(who) })
+      send(res, 200, { ok: true, mark: BRIDGE_MARK, state: this.stateOf(who), page: this.pageOf(who) })
       return
     }
 
@@ -769,18 +973,75 @@ export class Bridge {
       if (who !== null && who !== '') this.#seen.add(who)
       // Long-poll: an idle panel parks its request here instead of asking again
       // every 100 ms, so a command reaches the page with no polling delay.
+      this.#lastPollAt = Date.now()
       const waitMs = Math.min(Math.max(Number(url.searchParams.get('wait') ?? 0) || 0, 0), 5_000)
       let pulled = this.#drain()
-      if (pulled.total === 0 && waitMs > 0) {
+      if (pulled.total === 0 && this.#approvals.size === 0 && waitMs > 0) {
         await this.#park(waitMs)
         pulled = this.#drain()
       }
+      // Only a returned poll proves a panel is there to show a prompt; the
+      // timestamp is what `approve` watches to fail fast on a closed tab.
+      this.#lastPollAt = Date.now()
       if (pulled.total > 0) this.#logger(`pull ${pulled.total} by ${short(who ?? '?')}`)
       const states = {}
       for (const [sessionId, state] of this.#states) {
         states[sessionId] = { ...state, phase: this.stateOf(sessionId).phase }
       }
-      send(res, 200, { ok: true, mark: BRIDGE_MARK, sessions: pulled.sessions, states })
+      send(res, 200, {
+        ok: true,
+        mark: BRIDGE_MARK,
+        sessions: pulled.sessions,
+        states,
+        approvals: this.#approvalFrames(),
+      })
+      return
+    }
+
+    // The panel's answer to a permission prompt. Rejected unless it names a
+    // prompt this bridge is actually waiting on, and the answer is dropped for
+    // an invisible panel (it cannot prove a human saw the prompt).
+    if (route === '/decision' && req.method === 'POST') {
+      const read = await readJsonOrRefuse(req, res)
+      if (!read.ok) return
+      const body = read.body ?? {}
+      const id = typeof body.id === 'string' ? body.id : ''
+      const who = typeof body.session === 'string' ? body.session : ''
+      let owner = ''
+      for (const [sessionId, approval] of this.#approvals) {
+        if (approval.id !== id) continue
+        if (who !== '' && who !== sessionId) continue
+        owner = sessionId
+        break
+      }
+      const entry = owner === '' ? undefined : this.#approvals.get(owner)
+      if (entry === undefined) {
+        send(res, 200, { ok: false, mark: BRIDGE_MARK, error: 'unknown or expired approval' })
+        return
+      }
+      const decision = parseDecision(body.decision, { clientVisible: body.clientVisible !== false })
+      if (decision === '') {
+        send(res, 400, { ok: false, mark: BRIDGE_MARK, error: `unknown decision: ${String(body.decision)}` })
+        return
+      }
+      this.#finishApproval(owner, entry, decision)
+      send(res, 200, { ok: true, mark: BRIDGE_MARK })
+      return
+    }
+
+    // Where the panel is, so a permission prompt can be scoped to the site.
+    if (route === '/page' && req.method === 'POST') {
+      const read = await readJsonOrRefuse(req, res)
+      if (!read.ok) return
+      const body = read.body ?? {}
+      const who = typeof body.session === 'string' ? body.session : ''
+      if (who === '') {
+        send(res, 400, { ok: false, mark: BRIDGE_MARK, error: 'session is required' })
+        return
+      }
+      this.#seen.add(who)
+      this.notePage(who, { url: body.url, title: body.title })
+      send(res, 200, { ok: true, mark: BRIDGE_MARK, page: this.pageOf(who) })
       return
     }
 
@@ -943,6 +1204,18 @@ async function readJsonOrRefuse(req, res) {
 export function short(sessionId) {
   const text = String(sessionId ?? '')
   return text.length <= 8 ? text : `${text.slice(0, 8)}…`
+}
+
+/** Origin plus path for a log line; query and hash can carry tokens and must stay out. */
+function shortUrl(address) {
+  const text = String(address ?? '')
+  if (text === '') return ''
+  try {
+    const url = new URL(text)
+    return `${url.origin}${url.pathname}`.slice(0, 160)
+  } catch {
+    return text.slice(0, 160)
+  }
 }
 
 /** Id for a command nobody asked for yet; exported for tests. */

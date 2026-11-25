@@ -542,6 +542,13 @@ export function applyAgentBrowser(ctx, config = {}, overrides = {}) {
       return bridge.request(sessionId, type, params, timeoutMs, options)
     },
     takeDigest: (sessionId) => bridge.takeDigest(sessionId),
+    // The first-touch approval (TICKET-037) lives on the real bridge, because it
+    // needs the panel channel (`hasClient`) and the last reported page (`pageOf`).
+    // Forwarding them keeps `createGate`'s `canAsk` honest: without this the gate
+    // would decide the host cannot ask and every write would bypass the prompt.
+    hasClient: () => bridge.hasClient(),
+    approve: (sessionId, request) => bridge.approve(sessionId, request),
+    pageOf: (sessionId) => bridge.pageOf(sessionId),
   }
 
   const tools = makeTools(ctx, gate, sites, {
@@ -558,6 +565,13 @@ export function applyAgentBrowser(ctx, config = {}, overrides = {}) {
       maxResults: settings.searchFallback.maxResults,
     },
     rules,
+    approvals: {
+      // `mode` stays a reader (volatile: flipping it applies to the next write);
+      // timeout and the site list are plain data, validated by `normalizeConfig`.
+      mode: config?.approvals?.mode,
+      timeoutMs: settings.approvals.timeoutMs,
+      sensitiveSites: settings.approvals.sensitiveSites,
+    },
   })
 
   // Snapshot before registering: after this point every name above is ours.

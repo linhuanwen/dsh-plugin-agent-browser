@@ -30,6 +30,7 @@ const dist = join(workspace, 'dist', 'dsh-plugin-agent-browser')
 const COPY = [
   'index.js',
   'apply.js',
+  'approvals.js',
   'config.js',
   'activation.js',
   'bridge.js',

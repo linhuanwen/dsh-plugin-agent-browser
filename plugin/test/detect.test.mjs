@@ -39,7 +39,14 @@ function run(page) {
     contentType: page.contentType ?? 'text/html',
     body: { innerText: page.text ?? '', appendChild: () => {} },
     documentElement: body,
-    querySelector: (selector) => ((page.widgets ?? []).includes(selector) ? { getBoundingClientRect: () => ({ left: 1, top: 2, width: 30, height: 40 }) } : null),
+    querySelector: (selector) => {
+      // TICKET-033: the detector asks for a short meta refresh to tell a wall
+      // apart from a redirect interstitial.
+      if (selector === 'meta[http-equiv="refresh" i]') {
+        return page.metaRefresh ? { getAttribute: () => page.metaRefresh } : null
+      }
+      return (page.widgets ?? []).includes(selector) ? { getBoundingClientRect: () => ({ left: 1, top: 2, width: 30, height: 40 }) } : null
+    },
     querySelectorAll: (selector) => {
       if (selector === 'input,button,select,textarea,a[href]') {
         return { length: page.interactive ?? 0 }
@@ -159,4 +166,88 @@ test('a lone captcha class without context is not enough', () => {
     interactive: 12,
   })
   assert.equal(verdict.hit, false, 'a site form with a captcha field is not a wall')
+})
+
+// ---- TICKET-033: the Cloudflare Turnstile demo page --------------------------
+// https://nopecha.com/demo/cloudflare on 2026-11-23: the title is the site's
+// own, the wall's words are in the body, and the widget is a cross-origin
+// iframe. Three signals that only add up to `hit` when the body phrases exist.
+
+test('turnstile demo: body phrases plus the challenge iframe are a wall', () => {
+  const verdict = run({
+    url: 'https://nopecha.com/demo/cloudflare',
+    title: 'NopeCHA: Cloudflare Turnstile Demo',
+    text: '请稍候…\n正在进行安全验证\n验证您是人类',
+    widgets: ['iframe[src*="challenges.cloudflare.com"]'],
+    interactive: 12,
+  })
+  assert.equal(verdict.hit, true, 'the demo page must report needs_human (TICKET-033 acceptance 1)')
+  assert.deepEqual(verdict.categories.sort(), ['dom', 'text'])
+  assert.equal(verdict.pending, false)
+})
+
+test('turnstile demo before the widget mounts: pending for a second look', () => {
+  const verdict = run({
+    url: 'https://nopecha.com/demo/cloudflare',
+    title: 'NopeCHA: Cloudflare Turnstile Demo',
+    text: '请稍候…\n正在进行安全验证\n验证您是人类',
+    widgets: [],
+    interactive: 12,
+  })
+  // The wall's words are here, the iframe is not (yet). The client half uses
+  // `pending` to run the detector again after a moment instead of answering the
+  // open call with a false negative.
+  assert.equal(verdict.hit, false)
+  assert.equal(verdict.pending, true)
+})
+
+test('wall words beside a small nav still count', () => {
+  const verdict = run({
+    url: 'https://site.test/verify',
+    title: 'Site',
+    text: '正在进行安全验证',
+    widgets: [],
+    interactive: 8,
+  })
+  assert.equal(verdict.hit, true)
+  assert.deepEqual(verdict.categories, ['text'])
+})
+
+test('title-only wall on an otherwise empty document is a wall', () => {
+  const verdict = run({
+    url: 'https://site.test/challenge',
+    title: 'Just a moment...',
+    text: '',
+    widgets: [],
+    interactive: 0,
+  })
+  assert.equal(verdict.hit, true)
+  assert.deepEqual(verdict.categories, ['location'])
+})
+
+test('a short meta refresh is a redirect interstitial, not a wall', () => {
+  const verdict = run({
+    url: 'https://site.test/redirect',
+    title: '请稍候…',
+    text: '请稍候…即将跳转',
+    metaRefresh: '1;url=/next',
+    widgets: [],
+    interactive: 0,
+  })
+  // TICKET-033 acceptance 3: the 1-second interstitial must never take the
+  // panel from the user.
+  assert.equal(verdict.hit, false)
+  assert.equal(verdict.pending, false)
+})
+
+test('a challenge widget behind a short refresh is still a wall', () => {
+  const verdict = run({
+    url: 'https://site.test/challenge',
+    title: 'Just a moment...',
+    text: '正在进行安全验证',
+    metaRefresh: '2;url=/next',
+    widgets: ['#challenge-stage'],
+    interactive: 0,
+  })
+  assert.equal(verdict.hit, true, 'a dom signal outranks the redirect heuristic')
 })
