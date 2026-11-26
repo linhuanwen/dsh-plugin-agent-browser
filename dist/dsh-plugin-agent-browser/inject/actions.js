@@ -257,7 +257,14 @@ function dshAction(op, params) {
     if (!element || element.nodeType !== 1) return false
     var tag = element.tagName.toLowerCase()
     var type = String(element.getAttribute('type') || '').toLowerCase()
-    if (tag === 'button') return type === '' || type === 'submit'
+    if (tag === 'button') {
+      if (type === 'submit') return true
+      if (type !== '') return false
+      // A button with no type attribute defaults to submit, but it can only
+      // submit when it has a form owner; outside a form the click is a plain
+      // click (SPEC-003 C2 says "form 内无 type button", TICKET-049 acceptance).
+      return element.form !== null && element.form !== undefined
+    }
     if (tag === 'input') return type === 'submit' || type === 'image'
     return false
   }

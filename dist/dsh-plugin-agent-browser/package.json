@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-agent-browser",
-  "version": "1.5.9",
+  "version": "1.5.10",
   "description": "A real browser panel in the DSH right sidebar that the agent can drive with browser_* tools, and the user can take over at any time.",
   "private": false,
   "license": "MIT",

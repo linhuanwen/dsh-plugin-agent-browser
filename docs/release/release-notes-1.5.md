@@ -30,28 +30,30 @@
 >
 > **1.5.9 是阶段 B 的第五个能力（TICKET-048，`browser_scroll` 寻址滚动）**：`browser_scroll` 过去只能移动页面（`dy` / `to` / `container`），想把某个元素滚进视口只能反复 snapshot、或 eval 写 `scrollIntoView`（写动作、要审批）、或点它（会真的点击）。现在 `browser_scroll({ref?,loc?,selector?})` 使用与动作工具相同的地址（`loc > selector > ref`，三者互斥，且不能与 `dy`/`to`/`container` 混用），在页面内 `scrollIntoView({block:"center",inline:"center"})`，回执新增 `mode:"into-view"`、元素 `rect`、`visible`、`fullyVisible`、`info`、`frame`；旧的 `dy`/`to` 行为逐字不变（`mode:"by-dy"`/`"to-edge"`）。它是**纯读**：零审批；但和既有的 `browser_scroll` 一样仍属 `INPUT_TYPES`——`needs_human`/`taken_over` 相位下会被直接挡住（`needs_human`/`panel_taken_over`）且不改变相位，不新增例外。地址失效复用 `stale_loc`/`bad_loc`，`effect:"none"`。无新增错误码（仍 19 个），`CLIENT_REV` 不变（`Guest.act` 白名单已含这些字段）。单测新增 `scroll.test.mjs` 8 例 + bridge 1 例，309→**318**；真机证据见 `docs/cases/022`。
 >
-> 日期：2026-11-24（1.5.1 验收于 2026-11-25，1.5.2 同日晚收口，1.5.3 与 1.5.4 于 2026-11-26，1.5.5、1.5.6、1.5.7、1.5.8 与 1.5.9 于 2026-11-27）。适用对象：DSH **Desktop**，宿主实测 `0.2.2-rc.5`。上一版基线：1.4.24。
+> **1.5.10 是阶段 B 的第六个能力（TICKET-049，页面 console 尾巴）**：agent 点了按钮、页面没反应时，此前只能看到「DOM 没变」，看不到页面自己在 console 里说了什么。现在 `browser_snapshot` 的末尾会附上两次快照之间页面打印的 console 日志与未捕获错误（最近 10 条，每条带 `[log]`/`[warn]`/`[error]`/`[pageerror]`/`[unhandled]` 前缀），**每次快照清空**缓冲，同一条日志不会重复占上下文。实现上不新增工具、不新增错误码：guards 注入（rev 3→4）包装 `console.log/info/warn/error/debug`（仍调用原函数）并监听 `window` 的 `error`/`unhandledrejection`，环形缓冲 40 条、每条截 240 字；面板 `readConsole()` 读出即清空（`CLIENT_REV` 54→55）。验收期修掉一个分类缺陷：无 `type` 的 `<button>` 此前被一律当成提交类（导致普通按钮也弹确认条），现在只有**表单内**的无 type 按钮才算提交（`type="submit"` 始终算），符合 SPEC-003 C2 原文。单测新增 `console.test.mjs` 4 例 + guards 4 例 + actions 1 例，318→**327**；真机证据见 `docs/cases/023`。
+
+> 日期：2026-11-24（1.5.1 验收于 2026-11-25，1.5.2 同日晚收口，1.5.3 与 1.5.4 于 2026-11-26，1.5.5–1.5.10 于 2026-11-27）。适用对象：DSH **Desktop**，宿主实测 `0.2.2-rc.5`。上一版基线：1.4.24。
 > 相关：用户侧文档 `dist/dsh-plugin-agent-browser/README.md`；契约 `docs/spec/003-first-touch-approval-spec.md`；决策 `docs/decisions/010-first-touch-approval.md`；夹具 `docs/cases/015-first-touch-cases.md`。
 
 ## 1. 发布物
 
 | 项 | 值 |
 |---|---|
-| 包名 / 版本 | `dsh-plugin-agent-browser` @ **1.5.9**（1.5.0 + 两轮验收期修正 + TICKET-041 JS 弹窗 + TICKET-042 写动作回执三态 + TICKET-044 `browser_wait` + TICKET-045 快照 `loc=` + TICKET-046 快照 `cursor` + TICKET-047 `browser_upload` + TICKET-048 `browser_scroll` 寻址滚动，见开头） |
-| 产物 | `dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.9.tgz`，337,820 B / 28 文件；sha256 `707FC466A4D5EC08D8BE6C0C9E70AE226A1D07D9D04A3C3FE42C06C912B6A0DC`（历史 1.5.8 = 336,112 B / `9ED041CB…`、1.5.7 = 330,413 B / `1EF93A55…`、1.5.6 = 328,742 B / `1D2933C7…`、1.5.5 = 325,936 B / `F75E76AE…`、1.5.4 = 322,516 B / `A757E17C…`） |
+| 包名 / 版本 | `dsh-plugin-agent-browser` @ **1.5.10**（1.5.0 + 两轮验收期修正 + TICKET-041 JS 弹窗 + TICKET-042 写动作回执三态 + TICKET-044 `browser_wait` + TICKET-045 快照 `loc=` + TICKET-046 快照 `cursor` + TICKET-047 `browser_upload` + TICKET-048 `browser_scroll` 寻址滚动 + TICKET-049 页面 console 尾巴，见开头） |
+| 产物 | `dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.10.tgz`，339,454 B / 28 文件；sha256 `0E1E4FFE5B6D64F80E5936CD29564B2C83F6ED358E6DD7B022FB472F412735CA`（历史 1.5.9 = 337,820 B / `707FC466…`、1.5.8 = 336,112 B / `9ED041CB…`、1.5.7 = 330,413 B / `1EF93A55…`、1.5.6 = 328,742 B / `1D2933C7…`、1.5.5 = 325,936 B / `F75E76AE…`、1.5.4 = 322,516 B / `A757E17C…`） |
 | 许可 / 元数据 | `license: MIT`、`private: false`、`engines.dsh: ">=0.2.2-rc.3 <0.3.0"`、peer+dev `@deepseek-ai/schemastery ^3.19.0` |
 | 新增源文件 | `plugin/approvals.js`（1.5.0 起，纯逻辑）；`inject/guards.js` rev 3（1.5.3 起含弹窗守卫）；`plugin/inject/wait.js`（1.5.5 起，等待探针）；`plugin/inject/snapshot.js` 的 `cssPathOf` + `plugin/inject/actions.js` 的 `resolveLoc`（1.5.6 起，快照 `loc=` 生成与嗅探）；`plugin/inject/snapshot.js` 的 `cursor` 分页与 `stamp` 指纹（1.5.7 起，快照续读）；`inject/actions.js` 的 `isFileInput`/`base64ToBytes` 与 `upload` 分支、`plugin/tools.js` 的 `browserUploadTool`/`readUploadFile`（1.5.8 起，文件上传） |
-| 单测 | `318 / 318` 通过（`node --test plugin/test/*.test.mjs`；`scroll.test.mjs` 8 例、`upload.test.mjs` 10 例、`snapshot-cursor.test.mjs` 7 例、`snapshot-loc.test.mjs` 3 例、`wait.test.mjs` 16 例、`effect.test.mjs` 8 例、`guards.test.mjs` 12 例、`config.test.mjs` 12 例、`approvals.test.mjs` 18 例、`gate.test.mjs` 17 例） |
+| 单测 | `327 / 327` 通过（`node --test plugin/test/*.test.mjs`；`console.test.mjs` 4 例、`scroll.test.mjs` 8 例、`upload.test.mjs` 10 例、`snapshot-cursor.test.mjs` 7 例、`snapshot-loc.test.mjs` 3 例、`wait.test.mjs` 16 例、`effect.test.mjs` 8 例、`guards.test.mjs` 16 例、`config.test.mjs` 12 例、`approvals.test.mjs` 18 例、`gate.test.mjs` 17 例） |
 | 文档一致性 | `node tools/check-docs.mjs` 六项全绿（配置字段 21、工具 13、YAML 13 顶层字段、decisions 10、B11、file:line 12） |
 
 ## 2. 安装 / 升级 / 卸载
 
 ```powershell
-plugin_manager install_bundle target="D:\...\dist\dsh-plugin-agent-browser\dsh-plugin-agent-browser-1.5.9.tgz"
+plugin_manager install_bundle target="D:\...\dist\dsh-plugin-agent-browser\dsh-plugin-agent-browser-1.5.10.tgz"
 plugin_manager list_plugins   # 目标行：include:agent-browser-panel / enabled true / fiberPhase active
 ```
 
-- 装完**刷新一次 DSH 页面**：本次 `CLIENT_REV` 48→49→50→51→52→53→54（弹窗结果回传、二次解码修复、`wait` 命令分发都属于客户端 bundle），不刷新看不到。
+- 装完**刷新一次 DSH 页面**：本次 `CLIENT_REV` 48→49→50→51→52→53→54→55（弹窗结果回传、二次解码修复、`wait` 命令分发、`cursor`/`console` 读取都属于客户端 bundle），不刷新看不到。
 - **`plugin/apply.js`、`bridge.js`、`tools.js` 属于宿主半**：本机实测 1.5.1 重装后新工具代码即时生效（`browser_type` 打密码框从「弹确认条等 30 秒」变成页面侧当场硬拒）；若装完行为没变，先重启 DSH 再看。同版本重装需 `remove_bundle` 再 `install_bundle`（同版本会被「already installed」挡回）。
 - 升级保留 profile 里的 `config` 行；没写 `approvals` 的 profile 走默认值（`first-touch`，即**默认开启**）。
 - 想完全回到 1.4.x 的无声行为：`approvals.mode: 'off'`，不需要降级包。

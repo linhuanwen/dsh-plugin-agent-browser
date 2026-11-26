@@ -26,6 +26,7 @@ function element(init = {}) {
   const rect = init.rect ?? { left: 0, top: 0, width: 100, height: 40 }
   return {
     tagName: init.tagName ?? 'DIV',
+    nodeType: 1,
     type: init.type,
     id: attrs.id ?? '',
     className: init.cls ?? '',
@@ -33,6 +34,7 @@ function element(init = {}) {
     innerText: init.text ?? '',
     disabled: init.disabled === true,
     parentElement: init.parent ?? null,
+    form: init.form ?? null,
     style: init.style ?? {},
     getAttribute: (name) => (name in attrs ? attrs[name] : null),
     setAttribute: (name, value) => {
@@ -451,6 +453,25 @@ test('loc click: the css path is resolved against the page and clicked', async (
   const result = await run('click', { loc: 'css:#save' }, stub)
   assert.equal(result.ok, true, JSON.stringify(result))
   assert.equal(result.info.name, '保存')
+})
+
+test('inspect: a type-less button only counts as submit when it has a form owner', async () => {
+  const plain = element({ tagName: 'BUTTON', attrs: { id: 'plain' } })
+  const form = element({ tagName: 'FORM', attrs: { id: 'f' } })
+  const inForm = element({ tagName: 'BUTTON', attrs: { id: 'in-form' }, form })
+  const explicit = element({ tagName: 'BUTTON', attrs: { id: 'submit', type: 'submit' } })
+  const stub = dom({ find: (selector) => ({
+    '#plain': plain,
+    '#in-form': inForm,
+    '#submit': explicit,
+  }[selector] ?? null) })
+  const plainSeen = await run('inspect', { loc: 'css:#plain' }, stub)
+  assert.equal(plainSeen.ok, true, JSON.stringify(plainSeen))
+  assert.equal(plainSeen.isSubmit, false, 'outside a form a click is a click')
+  const formSeen = await run('inspect', { loc: 'css:#in-form' }, stub)
+  assert.equal(formSeen.isSubmit, true, 'inside a form the default type can submit')
+  const explicitSeen = await run('inspect', { loc: 'css:#submit' }, stub)
+  assert.equal(explicitSeen.isSubmit, true, 'an explicit submit button always counts')
 })
 
 test('loc inspect: describes the element the locator points at', async () => {

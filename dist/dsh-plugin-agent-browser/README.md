@@ -202,7 +202,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 | 工具 | 作用 |
 |---|---|
 | `browser_open` | 打开一个 http(s) 地址；或传 `path` 打开工作区里的 HTML（自动起只读本地服务） |
-| `browser_snapshot` | 读当前页面的无障碍树（带 `[ref=eN]`；能算出稳定路径时紧跟 `[loc="css:…"]`）+ 一张截图；`includeImage:false` 可省掉截图；被字符预算截断时返回 `cursor`，带 `cursor` 再调用可续读下一段（页面变了会返回 `stale_cursor`） |
+| `browser_snapshot` | 读当前页面的无障碍树（带 `[ref=eN]`；能算出稳定路径时紧跟 `[loc="css:…"]`）+ 一张截图；`includeImage:false` 可省掉截图；被字符预算截断时返回 `cursor`，带 `cursor` 再调用可续读下一段（页面变了会返回 `stale_cursor`）；页面自己打印的 console/未捕获错误也会附在末尾（最多 10 条，每次快照清空） |
 | `browser_wait` | 等某个 CSS 选择器或页面文字出现（`gone:true` 等它消失），超时返回 `timedOut`；纯读、无需确认，异步加载先等再快照（默认等 10s，最长 15s） |
 | `browser_click` | 点某个 `ref`；ref 过期时传快照里的 `loc="css:…"`（跨快照有效），没有可用地址时传 CSS `selector`（命中测试失败会分型报告 `not_found` / `multiple` / `occluded` / `disabled`）；canvas 与跨域 iframe 才用坐标（`x`/`y`，CSS 像素）。`target=_blank` 会被改成同视图导航 |
 | `browser_scroll` | 滚动页面或某个容器（`dy` 像素 / `to:"top"|"bottom"` / `container` 选择器），或按 `ref` / `loc` / `selector` 把某个元素滚进视口（返回元素 `rect`、`visible` / `fullyVisible`）；返回位置与 `atBottom`，懒加载列表靠它触发 |

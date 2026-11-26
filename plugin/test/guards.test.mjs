@@ -35,7 +35,16 @@ function element(init = {}) {
 /** Build the stub document/window pair guards.js expects, plus its listeners. */
 function dom(init = {}) {
   const listeners = new Map()
+  const winListeners = new Map()
   const assigned = []
+  const calls = []
+  const consoleStub = {
+    log: (...args) => calls.push(['log', ...args]),
+    info: (...args) => calls.push(['info', ...args]),
+    warn: (...args) => calls.push(['warn', ...args]),
+    error: (...args) => calls.push(['error', ...args]),
+    debug: (...args) => calls.push(['debug', ...args]),
+  }
   const doc = {
     addEventListener: (type, handler) => {
       const list = listeners.get(type) ?? []
@@ -46,8 +55,19 @@ function dom(init = {}) {
   const win = {
     location: init.location ?? { assign: (url) => assigned.push(url) },
     open: init.open ?? (() => 'popup'),
+    console: init.console ?? consoleStub,
+    addEventListener: (type, handler) => {
+      const list = winListeners.get(type) ?? []
+      list.push(handler)
+      winListeners.set(type, list)
+    },
   }
-  return { doc, win, listeners, assigned }
+  return { doc, win, listeners, winListeners, assigned, consoleCalls: calls }
+}
+
+/** Fire every window listener of one type with a stub event. */
+function fireWindow(stub, type, event) {
+  for (const handler of stub.winListeners.get(type) ?? []) handler(event)
 }
 
 /** Install the guards with the stubs in place; returns the result object. */
@@ -91,8 +111,8 @@ function withGlobals(stub, fn) {
 test('install: one set of listeners, revision stamped, driver recorded', () => {
   const stub = dom()
   const result = install(stub, 'human')
-  assert.deepEqual(result, { rev: 3, driver: 'human' })
-  assert.equal(stub.win.__dshGuardRev, 3)
+  assert.deepEqual(result, { rev: 4, driver: 'human' })
+  assert.equal(stub.win.__dshGuardRev, 4)
   assert.equal(stub.win.__dshGuardInstalled, true)
   assert.equal(stub.listeners.get('click').length, 1)
   assert.equal(stub.listeners.get('submit').length, 1)
@@ -212,3 +232,63 @@ test('dialogs: the record keeps only the last 20 entries and caps the message', 
   assert.equal(long.length, 300)
 })
 
+
+test('console: log/info/warn/error are recorded and the page still logs', () => {
+  const stub = dom()
+  install(stub, 'agent')
+  withGlobals(stub, () => {
+    stub.win.console.log('hello', 'world')
+    stub.win.console.error(new TypeError('boom'))
+    stub.win.console.warn('careful')
+  })
+  const entries = stub.win.__dshConsole
+  assert.equal(entries.length, 3)
+  assert.deepEqual(
+    entries.map((entry) => entry.level),
+    ['log', 'error', 'warn'],
+  )
+  assert.equal(entries[0].text, 'hello world')
+  assert.equal(entries[1].text, 'TypeError: boom')
+  // The page's own logging still happens: the wrapper calls through.
+  assert.deepEqual(stub.consoleCalls.map((call) => call[0]), ['log', 'error', 'warn'])
+})
+
+test('console: the buffer is capped and long lines are trimmed', () => {
+  const stub = dom()
+  install(stub, 'agent')
+  withGlobals(stub, () => {
+    for (let index = 0; index < 45; index += 1) stub.win.console.log('line ' + index)
+    stub.win.console.log('x'.repeat(500))
+  })
+  const entries = stub.win.__dshConsole
+  assert.equal(entries.length, 40, 'oldest entries are dropped')
+  assert.equal(entries[39].text.length, 240, 'one entry is capped')
+  assert.equal(entries[38].text, 'line 44')
+})
+
+test('console: uncaught errors and unhandled rejections are recorded', () => {
+  const stub = dom()
+  install(stub, 'agent')
+  withGlobals(stub, () => {
+    fireWindow(stub, 'error', { message: 'kaboom', filename: 'https://example.com/app.js', lineno: 12 })
+    fireWindow(stub, 'unhandledrejection', { reason: new Error('late') })
+    fireWindow(stub, 'unhandledrejection', { reason: 'plain text' })
+  })
+  const levels = stub.win.__dshConsole.map((entry) => entry.level)
+  assert.deepEqual(levels, ['pageerror', 'unhandled', 'unhandled'])
+  assert.match(stub.win.__dshConsole[0].text, /^kaboom \(https:\/\/example\.com\/app\.js:12\)$/)
+  assert.equal(stub.win.__dshConsole[1].text, 'Error: late')
+  assert.equal(stub.win.__dshConsole[2].text, 'plain text')
+})
+
+test('console: a page that replaced the buffer still gets a working one', () => {
+  const stub = dom()
+  install(stub, 'agent')
+  withGlobals(stub, () => {
+    stub.win.__dshConsole = 'not an array'
+    fireWindow(stub, 'error', { message: 'still works' })
+  })
+  assert.ok(Array.isArray(stub.win.__dshConsole))
+  assert.equal(stub.win.__dshConsole.length, 1)
+  assert.equal(stub.win.__dshConsole[0].text, 'still works')
+})

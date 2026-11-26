@@ -36,7 +36,7 @@
  * @returns {{ rev: number, driver: string }} what was installed
  */
 function dshGuards(driver, options) {
-  var REV = 3
+  var REV = 4
   var NAV_TARGETS = { _self: true, _top: true, _parent: true }
   var input = options || {}
   if (input.dialogs === 'off' || input.dialogs === 'record') window.__dshDialogsMode = input.dialogs
@@ -116,6 +116,92 @@ function dshGuards(driver, options) {
     }
   }
 
+  /**
+   * Record one console line and keep the last few, newest last (TICKET-049).
+   *
+   * The page's own log is often the only account of why a click did nothing;
+   * without it the agent can only guess from the DOM. Entries are capped and
+   * trimmed because a page can log without limit and every character comes back
+   * to the model.
+   */
+  function rememberLog(level, text) {
+    try {
+      if (Array.isArray(window.__dshConsole) === false) window.__dshConsole = []
+      window.__dshConsole.push({
+        level: level,
+        text: String(text === undefined || text === null ? '' : text).slice(0, 240),
+        at: Date.now(),
+      })
+      if (window.__dshConsole.length > 40) window.__dshConsole.splice(0, window.__dshConsole.length - 40)
+    } catch (error) {
+      // A page that froze the array keeps its own console behaviour.
+    }
+  }
+
+  function logText(args) {
+    var parts = []
+    for (var index = 0; index < args.length; index += 1) {
+      var value = args[index]
+      var text
+      try {
+        if (typeof value === 'string') text = value
+        else if (value instanceof Error) text = String(value.name || 'Error') + ': ' + String(value.message || '')
+        else text = String(value)
+      } catch (error) {
+        text = '[unprintable]'
+      }
+      parts.push(text)
+    }
+    return parts.join(' ')
+  }
+
+  /**
+   * Wrap the page's console and record uncaught errors, keeping the page's own
+   * logging intact: the original function still runs. `__dshConsole` is drained
+   * by the panel after a snapshot.
+   */
+  function installConsole() {
+    if (window.__dshConsoleInstalled === true) return
+    try {
+      window.__dshConsoleInstalled = true
+      window.__dshConsole = Array.isArray(window.__dshConsole) ? window.__dshConsole : []
+      var levels = ['log', 'info', 'warn', 'error', 'debug']
+      for (var index = 0; index < levels.length; index += 1) {
+        (function (level) {
+          var original = window.console && window.console[level]
+          if (typeof original !== 'function') return
+          window.console[level] = function () {
+            try {
+              rememberLog(level, logText(arguments))
+            } catch (error) {
+              // Recording is a courtesy; the page keeps running.
+            }
+            return original.apply(window.console, arguments)
+          }
+        })(levels[index])
+      }
+      window.addEventListener('error', function (event) {
+        var message = event && event.message ? String(event.message) : 'script error'
+        var where = event && event.filename ? ' (' + String(event.filename) + ':' + String(event.lineno || 0) + ')' : ''
+        rememberLog('pageerror', message + where)
+      })
+      window.addEventListener('unhandledrejection', function (event) {
+        var reason = event && event.reason
+        var text
+        try {
+          text = reason instanceof Error
+            ? String(reason.name || 'Error') + ': ' + String(reason.message || '')
+            : String(reason)
+        } catch (error) {
+          text = '[unprintable]'
+        }
+        rememberLog('unhandled', text)
+      })
+    } catch (error) {
+      // No console surface to patch: the page keeps its own logging.
+    }
+  }
+
   function rewriteTarget(node) {
     try {
       if (node === null || node === undefined || typeof node.getAttribute !== 'function') return
@@ -156,6 +242,7 @@ function dshGuards(driver, options) {
       // No capture phase: agent clicks still rewrite the target eagerly.
     }
     installDialogs()
+    installConsole()
     // 1688's search button calls `form.submit()` directly, which fires no
     // `submit` event. Patching the method is the only way to catch that path.
     try {

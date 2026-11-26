@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>页面 console 观测夹具</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 24px; max-width: 720px; }
+  button { margin: 4px 6px 4px 0; padding: 6px 10px; }
+  #log { margin-top: 16px; padding: 10px; background: #f6f7f8; border-radius: 6px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>页面 console 观测夹具</h1>
+<p>每个按钮让页面自己说一句话：普通日志、警告、错误、未捕获异常、未处理的 Promise 拒绝。</p>
+<p>
+  <button id="log-one">console.log 一条</button>
+  <button id="log-warn">console.warn 一条</button>
+  <button id="log-error">console.error 一条</button>
+  <button id="throw-sync">抛出未捕获异常</button>
+  <button id="reject-async">未处理的 Promise 拒绝</button>
+</p>
+<div id="log">（还没点过按钮）</div>
+<script>
+  var logBox = document.getElementById('log')
+  var count = 0
+  function note(text) {
+    count += 1
+    logBox.textContent = '点击次数：' + count + '\n最近一次：' + text
+  }
+  document.getElementById('log-one').addEventListener('click', function () {
+    console.log('夹具：普通日志', count + 1)
+    note('console.log 普通日志')
+  })
+  document.getElementById('log-warn').addEventListener('click', function () {
+    console.warn('夹具：这是一条警告')
+    note('console.warn 警告')
+  })
+  document.getElementById('log-error').addEventListener('click', function () {
+    console.error('夹具：这是一条错误')
+    note('console.error 错误')
+  })
+  document.getElementById('throw-sync').addEventListener('click', function () {
+    note('未捕获异常')
+    throw new Error('夹具：同步抛出的异常')
+  })
+  document.getElementById('reject-async').addEventListener('click', function () {
+    note('未处理的 Promise 拒绝')
+    Promise.reject(new Error('夹具：Promise 拒绝'))
+  })
+</script>
+</body>
+</html>

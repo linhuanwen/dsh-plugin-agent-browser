@@ -316,6 +316,8 @@ export function browserSnapshotTool(ctx, bridge, options = {}) {
       + 'When the tree is cut at the character budget the result also carries a cursor: call '
       + 'browser_snapshot again with that cursor to read the next slice without repeating the earlier '
       + 'lines (a page that changed under the cursor answers stale_cursor; take a fresh snapshot). '
+      + 'When the page logged or threw since the last snapshot, the tail of its console is appended '
+      + '(last 10 entries; the guards drain it on each snapshot, so nothing repeats). '
       + 'Use it once the panel already holds the page (opened by browser_open, or by the user); for a public '
       + 'static page that `web_fetch` can read, that call is cheaper and needs no panel.',
     parameters: {
@@ -360,6 +362,17 @@ export function browserSnapshotTool(ctx, bridge, options = {}) {
           hint: { type: 'string' },
           signals: { type: 'array', items: { type: 'string' } },
           dialogs: { type: 'array', items: { type: 'string' } },
+          console: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                level: { type: 'string' },
+                text: { type: 'string' },
+              },
+              required: ['level', 'text'],
+            },
+          },
           digest: { type: 'string' },
           image: {
             type: 'object',
@@ -389,7 +402,8 @@ export function browserSnapshotTool(ctx, bridge, options = {}) {
           ? `\n\nneeds_human: true — ${value?.hint ?? 'this page is asking for a human.'}`
           : ''
         const dialogs = dialogNote(value)
-        const blocks = [{ type: 'text', text: `${header}\n${value?.text ?? ''}${footer}${warned}${dialogs}${digestLine(String(value?.digest ?? ''))}` }]
+        const consoled = consoleNote(value)
+        const blocks = [{ type: 'text', text: `${header}\n${value?.text ?? ''}${footer}${warned}${dialogs}${consoled}${digestLine(String(value?.digest ?? ''))}` }]
         if (value?.image) blocks.push({ type: 'image', attachment: value.image })
         return blocks
       },
@@ -438,6 +452,12 @@ export function browserSnapshotTool(ctx, bridge, options = {}) {
       }
       if (Array.isArray(result?.dialogs) && result.dialogs.length > 0) {
         value.dialogs = result.dialogs.map(String).slice(0, 5)
+      }
+      if (Array.isArray(result?.console) && result.console.length > 0) {
+        value.console = result.console
+          .filter((entry) => entry !== null && typeof entry === 'object')
+          .map((entry) => ({ level: String(entry?.level ?? 'log'), text: String(entry?.text ?? '') }))
+          .slice(0, 40)
       }
       if (typeof result?.image === 'string' && result.image !== '') {
         const image = await saveScreenshot(ctx, result.image)
@@ -735,6 +755,23 @@ function dialogNote(value) {
   const list = Array.isArray(value?.dialogs) ? value.dialogs : []
   if (list.length === 0) return ''
   return `\n\nblocked dialogs (answered conservatively; the page kept running):\n${list.map((line) => `- ${line}`).join('\n')}`
+}
+
+/**
+ * Render the tail of the page's own console (TICKET-049).
+ *
+ * Ten lines is the useful edge: enough to see the error a page threw after a
+ * click, small enough to keep a snapshot cheap. The count makes the truncation
+ * visible instead of silent.
+ */
+function consoleNote(value) {
+  const list = Array.isArray(value?.console) ? value.console : []
+  if (list.length === 0) return ''
+  const shown = list.slice(-10)
+  const lines = shown.map((entry) => `- [${String(entry?.level ?? 'log')}] ${String(entry?.text ?? '')}`)
+  const hidden = list.length - shown.length
+  const more = hidden > 0 ? `\n… ${hidden} earlier entries not shown` : ''
+  return `\n\npage console (${list.length} ${list.length === 1 ? 'entry' : 'entries'}):\n${lines.join('\n')}${more}`
 }
 
 /**

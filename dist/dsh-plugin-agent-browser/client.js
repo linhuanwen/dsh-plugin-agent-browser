@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
      * The renderer caches `client.js` aggressively, and a stale half looks
      * exactly like a bug in the host half.
      */
-    const CLIENT_REV = 54
+    const CLIENT_REV = 55
     /** The panel talks to the host half over loopback; both sides carry this mark. */
     const BRIDGE_PREFIX = '/dsh-agent-browser'
     const BRIDGE_MARK = 'dsh-plugin-agent-browser/1'
@@ -699,6 +699,11 @@ window.__ModuleLoader__.load({
           result = await guest.snapshot(command.params)
           const detection = await detectChallenge(sessionId, guest, command.params?.detect)
           if (detection !== null) result = { ...result, detection }
+          // TICKET-049: the page's own log, drained per snapshot.
+          const consoleEntries = await guest.readConsole()
+          if (consoleEntries.length > 0) {
+            result = result !== null && typeof result === 'object' ? { ...result, console: consoleEntries } : { console: consoleEntries }
+          }
         } else if (command.type === 'click') {
           result = await guest.click(command.params)
         } else if (command.type === 'inspect') {
@@ -1074,6 +1079,32 @@ window.__ModuleLoader__.load({
           return list
             .filter((entry) => entry !== null && typeof entry === 'object')
             .map((entry) => `${String(entry.kind ?? 'dialog')}: ${String(entry.message ?? '')}`)
+        } catch (error) {
+          return []
+        }
+      }
+
+      /**
+       * Drain the page's console buffer (TICKET-049).
+       *
+       * The guards wrap `console.*`, `error` and `unhandledrejection` into a
+       * bounded array. Draining it on every snapshot keeps the panel's copy small
+       * and lets the agent see what the page said since the last look.
+       * @returns {Promise<Array<{ level: string, text: string }>>} newest last.
+       */
+      async readConsole() {
+        if (this.element === null || this.detached) return []
+        try {
+          // Return the array itself: evaluate() JSON-decodes string results.
+          const raw = await this.evaluate('(() => { const list = window.__dshConsole ?? []; '
+            + 'window.__dshConsole = []; return list.slice(-20) })()')
+          const list = Array.isArray(raw) ? raw : []
+          return list
+            .filter((entry) => entry !== null && typeof entry === 'object')
+            .map((entry) => ({
+              level: String(entry.level ?? 'log'),
+              text: String(entry.text ?? ''),
+            }))
         } catch (error) {
           return []
         }
