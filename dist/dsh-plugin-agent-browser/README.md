@@ -202,7 +202,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 | 工具 | 作用 |
 |---|---|
 | `browser_open` | 打开一个 http(s) 地址；或传 `path` 打开工作区里的 HTML（自动起只读本地服务） |
-| `browser_snapshot` | 读当前页面的无障碍树（带 `[ref=eN]`；能算出稳定路径时紧跟 `[loc="css:…"]`）+ 一张截图；`includeImage:false` 可省掉截图 |
+| `browser_snapshot` | 读当前页面的无障碍树（带 `[ref=eN]`；能算出稳定路径时紧跟 `[loc="css:…"]`）+ 一张截图；`includeImage:false` 可省掉截图；被字符预算截断时返回 `cursor`，带 `cursor` 再调用可续读下一段（页面变了会返回 `stale_cursor`） |
 | `browser_wait` | 等某个 CSS 选择器或页面文字出现（`gone:true` 等它消失），超时返回 `timedOut`；纯读、无需确认，异步加载先等再快照（默认等 10s，最长 15s） |
 | `browser_click` | 点某个 `ref`；ref 过期时传快照里的 `loc="css:…"`（跨快照有效），没有可用地址时传 CSS `selector`（命中测试失败会分型报告 `not_found` / `multiple` / `occluded` / `disabled`）；canvas 与跨域 iframe 才用坐标（`x`/`y`，CSS 像素）。`target=_blank` 会被改成同视图导航 |
 | `browser_scroll` | 滚动页面或某个容器（`dy` 像素 / `to:"top"|"bottom"` / `container` 选择器），返回位置与 `atBottom`；懒加载列表靠它触发 |
@@ -267,6 +267,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 | 工具报 `approval_timeout` | 确认条 30 秒内没作答 | 重试，并在确认条上点「允许一次」或「本会话允许本站」 |
 | 工具报 `approval_denied` | 你点了拒绝，或点了「我来接管」 | 想让它做就重试并允许；不想就让它换个做法（`approvals.mode: off` 可整体关闭） |
 | 工具报 `action_unknown` | 写动作（点击/输入/按键/脚本）已经被面板拉走，但回执在超时、取消、接管或插件重载时丢了 | 页面**可能已经变了**：先 `browser_snapshot` 看状态，再决定下一步；不要直接重发同一动作 |
+| 工具报 `stale_cursor` | 快照续读用的 `cursor` 过期了：页面在两次快照之间变了（导航、列表增删、DOM 重渲染） | 重新 `browser_snapshot`（不带 `cursor`）拿一份新快照，再用它返回的新 `cursor` 续读 |
 | 工具结果里出现 `blocked dialogs` | 页面调用了 `alert` / `confirm` / `prompt` | 正常现象：已按保守答案处理并记录，页面没有卡死。想看真实弹窗内容就把 `dialogs.mode` 设为 `off`，但那会冻结页面直到你手动点掉 |
 | 点击"没反应" / 截图超时 | DSH 窗口在后台或最小化，Chromium 不绘制也不收合成输入 | 把窗口切到前台再试（这是 Electron 行为，不是插件 bug） |
 | 截图报 `the browser panel is hidden right now…` | 面板页签不可见 | 切到面板页签再截 |

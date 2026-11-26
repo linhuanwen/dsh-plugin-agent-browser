@@ -22,7 +22,7 @@
  * as `'local'` and keeps the code inside the message, where the model reads it.
  */
 
-/** @typedef {'panel_not_open'|'panel_taken_over'|'needs_human'|'bridge_timeout'|'bridge_closed'|'cancelled'|'unauthorized'|'scheme_rejected'|'eval_disabled'|'session_not_allowed'|'navigation_failed'|'download_rejected'|'budget_exceeded'|'approval_required'|'approval_timeout'|'approval_denied'|'action_unknown'} AgentBrowserErrorCode */
+/** @typedef {'panel_not_open'|'panel_taken_over'|'needs_human'|'bridge_timeout'|'bridge_closed'|'cancelled'|'unauthorized'|'scheme_rejected'|'eval_disabled'|'session_not_allowed'|'navigation_failed'|'download_rejected'|'budget_exceeded'|'approval_required'|'approval_timeout'|'approval_denied'|'action_unknown'|'stale_cursor'} AgentBrowserErrorCode */
 
 /**
  * The contract a caller can branch on: every code, whether trying again can
@@ -98,6 +98,10 @@ export const ERROR_CODES = {
   action_unknown: {
     retryable: false,
     hint: 'the action may already have reached the page but its result was lost. Take a browser_snapshot and check the page state before deciding; do NOT resend the same action.',
+  },
+  stale_cursor: {
+    retryable: true,
+    hint: 'the page changed since that cursor was issued; take a fresh browser_snapshot (without cursor) and continue from the cursor it returns.',
   },
 }
 

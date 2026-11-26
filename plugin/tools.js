@@ -313,6 +313,9 @@ export function browserSnapshotTool(ctx, bridge, options = {}) {
       + 'Each ref may also carry a stable locator like [loc="css:#save"]: that locator survives ref '
       + 'renumbering, so when you work from an older snapshot pass loc instead of ref and the action '
       + 'still lands on the same element (a page that re-rendered away from it answers stale_loc). '
+      + 'When the tree is cut at the character budget the result also carries a cursor: call '
+      + 'browser_snapshot again with that cursor to read the next slice without repeating the earlier '
+      + 'lines (a page that changed under the cursor answers stale_cursor; take a fresh snapshot). '
       + 'Use it once the panel already holds the page (opened by browser_open, or by the user); for a public '
       + 'static page that `web_fetch` can read, that call is cheaper and needs no panel.',
     parameters: {
@@ -328,6 +331,10 @@ export function browserSnapshotTool(ctx, bridge, options = {}) {
           // keyword, so the range is stated in text and clamped in the tool body.
           description: `Character budget for the tree, clamped to 500–30000. Defaults to ${defaultMaxChars}; the tree is cut at a line boundary.`,
         },
+        cursor: {
+          type: 'string',
+          description: 'Continue a snapshot that was cut at the budget: pass the cursor the previous snapshot returned. Do not combine with a new full read; the page must not have changed (otherwise stale_cursor).',
+        },
       },
       additionalProperties: false,
     },
@@ -341,6 +348,11 @@ export function browserSnapshotTool(ctx, bridge, options = {}) {
           text: { type: 'string' },
           refCount: { type: 'integer' },
           truncated: { type: 'boolean' },
+          cursor: { type: 'string' },
+          more: { type: 'boolean' },
+          totalLines: { type: 'integer' },
+          from: { type: 'integer' },
+          nextOffset: { type: 'integer' },
           nodes: { type: 'integer' },
           visited: { type: 'integer' },
           ms: { type: 'integer' },
@@ -367,8 +379,12 @@ export function browserSnapshotTool(ctx, bridge, options = {}) {
         const chars = typeof value?.text === 'string' ? value.text.length : 0
         const size = `${formatBytes(chars + (value?.image ? value.image.bytes : 0))}`
         const counts = `${value?.refCount ?? 0} refs · ${value?.nodes ?? 0} lines · ${value?.visited ?? 0} nodes walked · ${value?.ms ?? 0}ms · ${size}`
-        const header = `Snapshot gen ${value?.gen ?? 0} · ${counts}`
-        const footer = value?.truncated === true ? '\n… tree cut at the character budget; scroll or narrow the query and snapshot again.' : ''
+        const continued = Number.isInteger(value?.from) && value.from > 0 ? ` continued at line ${value.from + 1}/${value?.totalLines ?? 0}` : ''
+        const header = `Snapshot gen ${value?.gen ?? 0} · ${counts}${continued}`
+        const footer = value?.more === true
+          ? `\n… tree cut at the character budget (${value?.nextOffset ?? 0}/${value?.totalLines ?? 0} lines delivered). `
+            + `Call browser_snapshot({cursor:${JSON.stringify(String(value?.cursor ?? ''))}}) for the next slice.`
+          : ''
         const warned = value?.needs_human === true
           ? `\n\nneeds_human: true — ${value?.hint ?? 'this page is asking for a human.'}`
           : ''
@@ -381,13 +397,20 @@ export function browserSnapshotTool(ctx, bridge, options = {}) {
     async execute(args, exec) {
       const sessionId = sessionOf(exec)
       const maxChars = Number.isFinite(args?.maxChars) ? rules.clampChars(args.maxChars, MAX_CHARS, MIN_CHARS) : defaultMaxChars
-      const includeImage = args?.includeImage !== false
+      const cursor = typeof args?.cursor === 'string' ? args.cursor.trim() : ''
+      if (cursor.length > 300) throw new Error('cursor is not a value this plugin issued; take a fresh browser_snapshot and use the cursor it returns.')
+      const includeImage = args?.includeImage === true || (args?.includeImage !== false && cursor === '')
       const result = await bridge.request(
         sessionId,
         'snapshot',
-        { source: snapshotSource(), detect: detectSource(), maxChars, includeImage },
+        { source: snapshotSource(), detect: detectSource(), maxChars, includeImage, cursor },
         30_000,
       )
+      if (result?.stale === true) {
+        throw new AgentBrowserError('stale_cursor', 'the page changed since that cursor was issued; take a fresh browser_snapshot and continue from the cursor it returns.', {
+          details: { totalLines: Number.isInteger(result?.totalLines) ? result.totalLines : 0 },
+        })
+      }
       const value = {
         url: typeof result?.url === 'string' ? result.url : '',
         title: typeof result?.title === 'string' ? result.title : '',
@@ -395,6 +418,11 @@ export function browserSnapshotTool(ctx, bridge, options = {}) {
         text: typeof result?.text === 'string' ? result.text : '',
         refCount: Number.isInteger(result?.refCount) ? result.refCount : 0,
         truncated: result?.truncated === true,
+        cursor: typeof result?.cursor === 'string' ? result.cursor : '',
+        more: result?.more === true,
+        totalLines: Number.isInteger(result?.totalLines) ? result.totalLines : 0,
+        from: Number.isInteger(result?.from) ? result.from : 0,
+        nextOffset: Number.isInteger(result?.nextOffset) ? result.nextOffset : 0,
         nodes: Number.isInteger(result?.nodeCount) ? result.nodeCount : 0,
         visited: Number.isInteger(result?.visited) ? result.visited : 0,
         ms: Number.isInteger(result?.ms) ? result.ms : 0,

@@ -20,28 +20,30 @@
 >
 > **1.5.5 是阶段 B 的第一个能力（TICKET-044，`browser_wait`）**：页面异步是常态（等列表出现、等「保存成功」、等遮罩消失），此前 agent 只能用 `browser_eval` 轮询（写动作、要审批、容易跑在旧页面）、连续 `snapshot`（整棵 a11y 树，浪费上下文）或硬睡。现在新增第 12 个工具 `browser_wait({selector?, text?, gone?, timeoutMs?})`：恰好传一个 selector/text，`gone` 反转，`timeoutMs` 默认 10000（夹到 100–15000）；页面侧只做一次同步判定（`inject/wait.js`；selector 判定**可见**而不是 DOM 存在性——`display:none`/`visibility:hidden`/零盒子不算「出现」，避免隐藏骨架提前报成功；非法选择器按「没找到」处理），轮询在面板（150ms 间隔、可取消），**超时是正常结果**（`matched:false, timedOut:true`）而不是错误码。它是**纯读**：零审批；`needs_human` / `taken_over` 下仍可用且不抢相位（`bridge.js` 的 `READ_TYPES` 加 `wait`）。`CLIENT_REV` 50→51，工具总数 11→12（`check-docs` 期望数、根/用户 README 工具表同步）。单测新增 `wait.test.mjs` 16 例 + bridge 2 例，259→277。真机夹具 `demo/wait.html`，验收记录见 `docs/cases/018`。
 >
+> **1.5.7 是阶段 B 的第三个能力（TICKET-046，快照 `cursor` 续读）**：长页面的快照会超出字符预算被截断，此前只能拉大 `maxChars`（仍会截断）、缩小范围或重拍整棵树（重复付 token）。现在截断的快照会返回 `cursor`（`<stamp>@<offset>`，stamp 由 URL 指纹、总行数、引用数、字符数拼成），部署 `browser_snapshot({cursor})` 就取下一段：只包含新行、带一行续读抬头，续读默认不附图（省 token，可显式 `includeImage:true` 找回）。页面在两次快照之间变了（导航、列表增删、DOM 重渲染导致 stamp 变化）就返回**第 18 个错误码 `stale_cursor`**（可重试），不断言给出错位的一段。`CLIENT_REV` 52→53；单测新增 `snapshot-cursor.test.mjs` 7 例，289→296。真机证据见 `docs/cases/020`。
+>
 > **1.5.6 是阶段 B 的第二个能力（TICKET-045，快照稳定定位符 `loc=`）**：快照里的 `ref` 每次重编号，旧 ref 过期后只能整页重拍；现在快照会给每个交互节点追加 `[loc="css:…"]`——用 `#id` / `[data-testid]` / `tag[name]` 锚点加 `nth-of-type` 位置路径，路径经过 `querySelector` 自校验（指向别处就不打印），iframe 内带 `f1:` 前缀，超过约 120 字符省略。`browser_click` / `browser_hover` / `browser_type` 新增 `loc` 参数（跨快照有效；与 `selector`、坐标点击互斥；`type` 的 `ref`/`loc` 二选一）；审批门的提交类判断与密码框早退对 `loc` 同样生效。定位失败分 `bad_loc`（格式不认识）与 `stale_loc`（页面里已找不到），都带 `effect:'none'`、重试安全。`CLIENT_REV` 51→52。单测新增 `snapshot-loc.test.mjs` 3 例 + actions 6 例 + gate 3 例，277→289（第三例锁住「无法解析的 loc 不弹确认、直接由动作报 `stale_loc`」）。真机证据见 `docs/cases/019`。
 >
 > **TICKET-040（客户端重载后白屏）的结论与规避（2026-11-26）**：两次白屏都发生在「插件客户端/host 重载后约 1 分钟内 + 面板正在交互（确认条）」的窗口里，但四组最小实验（客户端 entry 重载、host 半重建 + 确认条、bundle 启停、重载后静置）均**未能复现**；静态勘察确认 DSH 外壳没有整页刷新、React slot 有错误边界、渲染进程异常会显示错误页而不是白屏，因此按「不可复现 + 文档化规避」收口。**使用与验收注意**：真机验收/演示前先重启一次 DSH、一次性配好插件配置；验收过程中不要改 `cordis.patch.yml`，也不要用 `plugin_manager` 启停插件 bundle；若必须改配置，等面板重挂（回 `about:blank`）后重新 `browser_open` 再继续。万一白屏，直接重启 DSH 即可恢复（会话与配置不丢）。详见 `docs/tickets/040-blank-window-on-client-reload.md`。
 >
-> 日期：2026-11-24（1.5.1 验收于 2026-11-25，1.5.2 同日晚收口，1.5.3 与 1.5.4 于 2026-11-26，1.5.5 与 1.5.6 于 2026-11-27）。适用对象：DSH **Desktop**，宿主实测 `0.2.2-rc.5`。上一版基线：1.4.24。
+> 日期：2026-11-24（1.5.1 验收于 2026-11-25，1.5.2 同日晚收口，1.5.3 与 1.5.4 于 2026-11-26，1.5.5、1.5.6 与 1.5.7 于 2026-11-27）。适用对象：DSH **Desktop**，宿主实测 `0.2.2-rc.5`。上一版基线：1.4.24。
 > 相关：用户侧文档 `dist/dsh-plugin-agent-browser/README.md`；契约 `docs/spec/003-first-touch-approval-spec.md`；决策 `docs/decisions/010-first-touch-approval.md`；夹具 `docs/cases/015-first-touch-cases.md`。
 
 ## 1. 发布物
 
 | 项 | 值 |
 |---|---|
-| 包名 / 版本 | `dsh-plugin-agent-browser` @ **1.5.6**（1.5.0 + 两轮验收期修正 + TICKET-041 JS 弹窗 + TICKET-042 写动作回执三态 + TICKET-044 `browser_wait` + TICKET-045 快照 `loc=`，见开头） |
-| 产物 | `dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.6.tgz`，328,742 B / 28 文件；sha256 `1D2933C768F2BAB28CF708F103323B5A94F0F20B57530B4C8B946701A5E4DA22`（历史 1.5.5 = 325,936 B / `F75E76AE…`、1.5.4 = 322,516 B / `A757E17C…`、1.5.3 = 320,316 B / `8F6C19AE…`） |
+| 包名 / 版本 | `dsh-plugin-agent-browser` @ **1.5.7**（1.5.0 + 两轮验收期修正 + TICKET-041 JS 弹窗 + TICKET-042 写动作回执三态 + TICKET-044 `browser_wait` + TICKET-045 快照 `loc=` + TICKET-046 快照 `cursor`，见开头） |（1.5.0 + 两轮验收期修正 + TICKET-041 JS 弹窗 + TICKET-042 写动作回执三态 + TICKET-044 `browser_wait` + TICKET-045 快照 `loc=`，见开头） |
+| 产物 | `dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.7.tgz`，330,413 B / 28 文件；sha256 `1EF93A55DADBF4783BD32BDCE78DE4EBC8ED935BC2554CE31964210C70613D3E`（历史 1.5.6 = 328,742 B / `1D2933C7…`、1.5.5 = 325,936 B / `F75E76AE…`、1.5.4 = 322,516 B / `A757E17C…`） |
 | 许可 / 元数据 | `license: MIT`、`private: false`、`engines.dsh: ">=0.2.2-rc.3 <0.3.0"`、peer+dev `@deepseek-ai/schemastery ^3.19.0` |
-| 新增源文件 | `plugin/approvals.js`（1.5.0 起，纯逻辑）；`inject/guards.js` rev 3（1.5.3 起含弹窗守卫）；`plugin/inject/wait.js`（1.5.5 起，等待探针）；`plugin/inject/snapshot.js` 的 `cssPathOf` + `plugin/inject/actions.js` 的 `resolveLoc`（1.5.6 起，快照 `loc=` 生成与嗅探） |
+| 新增源文件 | `plugin/approvals.js`（1.5.0 起，纯逻辑）；`inject/guards.js` rev 3（1.5.3 起含弹窗守卫）；`plugin/inject/wait.js`（1.5.5 起，等待探针）；`plugin/inject/snapshot.js` 的 `cssPathOf` + `plugin/inject/actions.js` 的 `resolveLoc`（1.5.6 起，快照 `loc=` 生成与嗅探）；`plugin/inject/snapshot.js` 的 `cursor` 分页与 `stamp` 指纹（1.5.7 起，快照续读） |
 | 单测 | `289 / 289` 通过（`node --test plugin/test/*.test.mjs`；`snapshot-loc.test.mjs` 3 例、`wait.test.mjs` 16 例、`effect.test.mjs` 8 例、`guards.test.mjs` 12 例、`config.test.mjs` 12 例、`approvals.test.mjs` 18 例、`gate.test.mjs` 12 例） |
 | 文档一致性 | `node tools/check-docs.mjs` 六项全绿（配置字段 21、工具 12、YAML 13 顶层字段、decisions 10、B11、file:line 12） |
 
 ## 2. 安装 / 升级 / 卸载
 
 ```powershell
-plugin_manager install_bundle target="D:\...\dist\dsh-plugin-agent-browser\dsh-plugin-agent-browser-1.5.6.tgz"
+plugin_manager install_bundle target="D:\...\dist\dsh-plugin-agent-browser\dsh-plugin-agent-browser-1.5.7.tgz"
 plugin_manager list_plugins   # 目标行：include:agent-browser-panel / enabled true / fiberPhase active
 ```
 

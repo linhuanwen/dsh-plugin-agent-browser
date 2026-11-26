@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
      * The renderer caches `client.js` aggressively, and a stale half looks
      * exactly like a bug in the host half.
      */
-    const CLIENT_REV = 52
+    const CLIENT_REV = 53
     /** The panel talks to the host half over loopback; both sides carry this mark. */
     const BRIDGE_PREFIX = '/dsh-agent-browser'
     const BRIDGE_MARK = 'dsh-plugin-agent-browser/1'
@@ -1488,17 +1488,21 @@ window.__ModuleLoader__.load({
         const source = typeof params?.source === 'string' ? params.source : ''
         if (source === '') throw new Error('the snapshot source was not delivered')
         const maxChars = Number.isFinite(params?.maxChars) ? params.maxChars : 8000
-        report('snapshot start', { sourceChars: source.length, maxChars })
+        const cursor = typeof params?.cursor === 'string' ? params.cursor : ''
+        report('snapshot start', { sourceChars: source.length, maxChars, cursor: cursor !== '' })
         // The source is an expression function declaration; call it with our options.
         const tree = await withTimeout(
-          this.evaluate(`(${source}\n)(${JSON.stringify({ maxChars })})`),
+          this.evaluate(`(${source}\n)(${JSON.stringify({ maxChars, cursor })})`),
           15_000,
           'the page did not answer the tree query',
         )
         if (tree === null || typeof tree !== 'object') throw new Error('the page returned no tree')
         report('snapshot evaluated', { gen: tree.gen, nodes: tree.nodeCount, refs: tree.refCount, ms: tree.ms })
         const result = { ...tree }
-        if (params?.includeImage !== false) {
+        // A continuation already has the reader oriented, so it does not spend a
+        // screenshot on the next slice unless the caller explicitly asks.
+        const wantImage = params?.includeImage === true || (params?.includeImage !== false && cursor === '')
+        if (wantImage) {
           try {
             result.image = await this.capture(768)
           } catch (error) {

@@ -11,6 +11,10 @@
 function dshSnapshot(options) {
   var opts = options || {}
   var maxChars = typeof opts.maxChars === 'number' && opts.maxChars > 0 ? opts.maxChars : 8000
+  // Continuation: `<stamp>@<line offset>`. The stamp pins the tree the offset
+  // was measured on, so a page that changed underneath answers `stale` instead
+  // of silently returning a shifted slice (TICKET-046).
+  var cursor = typeof opts.cursor === 'string' ? opts.cursor.trim() : ''
   var wantText = opts.includeText !== false
   var started = typeof performance !== 'undefined' ? performance.now() : Date.now()
 
@@ -66,7 +70,6 @@ function dshSnapshot(options) {
 
   var lines = []
   var chars = 0
-  var truncated = false
   var refCount = 0
   var nodeCount = 0
   var visited = 0
@@ -80,11 +83,6 @@ function dshSnapshot(options) {
   }
 
   function push(line) {
-    if (truncated) return false
-    if (chars + line.length + 1 > maxChars) {
-      truncated = true
-      return false
-    }
     lines.push(line)
     chars += line.length + 1
     nodeCount++
@@ -100,6 +98,18 @@ function dshSnapshot(options) {
 
   function quote(value) {
     return JSON.stringify(value)
+  }
+
+  // FNV-1a over the URL: a cheap page identity for the cursor stamp. The stamp
+  // also carries the line/ref/char totals, so a tree that changed in any of the
+  // visible ways invalidates an older cursor.
+  function hashUrl(value) {
+    var h = 0x811c9dc5
+    for (var i = 0; i < value.length; i++) {
+      h ^= value.charCodeAt(i)
+      h = (h * 0x01000193) >>> 0
+    }
+    return h.toString(36)
   }
 
   /**
@@ -291,7 +301,7 @@ function dshSnapshot(options) {
 
   function walk(start, startDepth, startPrefix, doc) {
     var stack = [{ node: start, depth: startDepth, prefix: startPrefix, named: false, muted: false }]
-    while (stack.length > 0 && !truncated) {
+    while (stack.length > 0) {
       var frame = stack.pop()
       var node = frame.node
       visited += 1
@@ -405,15 +415,65 @@ function dshSnapshot(options) {
   walk(doc.body || rootEl, 1, '', doc)
 
   var elapsed = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - started
+  var totalLines = lines.length
+  var stamp = hashUrl(location.href) + '.' + totalLines + '.' + refCount + '.' + chars
+  var from = 0
+  var staleCursor = false
+  if (cursor !== '') {
+    var at = cursor.lastIndexOf('@')
+    var offset = at > 0 ? parseInt(cursor.slice(at + 1), 10) : NaN
+    if (at <= 0 || isNaN(offset) || offset < 0 || cursor.slice(0, at) !== stamp) {
+      staleCursor = true
+    } else {
+      from = Math.min(offset, totalLines)
+    }
+  }
+  if (staleCursor) {
+    return JSON.stringify({
+      gen: gen,
+      url: location.href,
+      title: title,
+      text: '',
+      refCount: refCount,
+      nodeCount: 0,
+      visited: visited,
+      totalLines: totalLines,
+      stale: true,
+      ms: Math.round(elapsed),
+      budget: maxChars,
+    })
+  }
+
+  var out = []
+  var used = 0
+  if (from > 0) {
+    var banner = '- continued from line ' + (from + 1) + ' of ' + totalLines + ' (earlier part already delivered)'
+    out.push(banner)
+    used += banner.length + 1
+  }
+  var next = from
+  while (next < totalLines) {
+    var line = lines[next]
+    if (used + line.length + 1 > maxChars) break
+    out.push(line)
+    used += line.length + 1
+    next++
+  }
+  var more = next < totalLines
   return JSON.stringify({
     gen: gen,
     url: location.href,
     title: title,
-    text: lines.join('\n'),
+    text: out.join('\n'),
     refCount: refCount,
-    nodeCount: nodeCount,
+    nodeCount: out.length,
     visited: visited,
-    truncated: truncated,
+    truncated: more,
+    more: more,
+    totalLines: totalLines,
+    from: from,
+    nextOffset: next,
+    cursor: more ? stamp + '@' + next : '',
     frames: frameIndex,
     ms: Math.round(elapsed),
     budget: maxChars,
