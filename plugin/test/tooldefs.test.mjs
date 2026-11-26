@@ -1,5 +1,5 @@
 /**
- * Contract tests for the eleven tool definitions.
+ * Contract tests for the twelve tool definitions.
  *
  * The host is stricter than a tool body suggests:
  *
@@ -34,7 +34,7 @@ const ANNOTATION_KEYWORDS = new Set(['description', 'title', 'default', 'example
 const SCHEMA_TYPES = new Set(['object', 'array', 'string', 'number', 'integer', 'boolean', 'null'])
 const SCALAR_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'null'])
 const OUTPUT_NAMES = [
-  'browser_open', 'browser_snapshot', 'browser_click', 'browser_scroll', 'browser_hover', 'browser_zoom',
+  'browser_open', 'browser_snapshot', 'browser_wait', 'browser_click', 'browser_scroll', 'browser_hover', 'browser_zoom',
   'browser_screenshot', 'browser_type', 'browser_press', 'browser_eval', 'browser_download',
 ]
 
@@ -152,7 +152,7 @@ function sampleValue(schema) {
   return null
 }
 
-/** Build the eleven tools against stubs: no Electron, no HTTP, no filesystem. */
+/** Build the twelve tools against stubs: no Electron, no HTTP, no filesystem. */
 function buildTools() {
   const bridge = {
     async request() {
@@ -172,7 +172,7 @@ function buildTools() {
   return createTools(ctx, bridge, sites, policy)
 }
 
-test('exposes the eleven browser tools under their documented names', () => {
+test('exposes the twelve browser tools under their documented names', () => {
   const names = buildTools().map((tool) => tool.name)
   assert.deepEqual(names, OUTPUT_NAMES)
   assert.equal(new Set(names).size, names.length)

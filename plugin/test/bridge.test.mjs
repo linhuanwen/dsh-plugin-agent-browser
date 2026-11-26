@@ -319,3 +319,27 @@ test('a read never takes the wheel back from the human', async () => {
     await bridge.close()
   }
 })
+
+// --- TICKET-044: `wait` is a read (SPEC-004 B5) ------------------------------
+
+test('a wait runs under needs_human and does not flip the phase', async () => {
+  const { bridge } = await listening()
+  try {
+    bridge.setPhase('s1', 'needs_human', { reason: 'human verification on screen' })
+    await assert.rejects(bridge.request('s1', 'wait', { selector: '#done' }, 150), /bridge_timeout:/)
+    assert.equal(bridge.stateOf('s1').phase, 'needs_human', 'wait is a read: it must not take the wheel')
+  } finally {
+    await bridge.close()
+  }
+})
+
+test('a wait still runs while the user has taken over', async () => {
+  const { bridge } = await listening()
+  try {
+    bridge.setPhase('s1', 'taken_over', { reason: 'user took over' })
+    await assert.rejects(bridge.request('s1', 'wait', { text: 'Saved' }, 150), /bridge_timeout:/)
+    assert.equal(bridge.stateOf('s1').phase, 'taken_over')
+  } finally {
+    await bridge.close()
+  }
+})

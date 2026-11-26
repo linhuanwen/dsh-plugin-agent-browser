@@ -18,30 +18,32 @@
 >
 > **1.5.4 是阶段 A 的第二件（TICKET-042，写动作回执三态）**：写动作过去只有「成功 / 抛错」两种结局，无法回答「这次到底发出去了没有」。现在：成功结果带 `effect:'committed'`；没发出（参数/审批/策略/相位/入队前失败）带 `details.effect:'none'`；**已下发但回执丢失**（超时/断线/取消/接管/关闭）返回新错误码 `action_unknown`（`retryable:false`，hint 明确「先 `browser_snapshot` 核对，不要重发」）。`browser_eval` 的页面侧抛错也改报 `action_unknown`（脚本到过页面）。`bridge_timeout` 语义不变（未发出）。单测新增 `effect.test.mjs` 8 例、`cancel.test.mjs` 改断言，251→259；真机两条 unknown（eval 页面抛错、接管中断），见 `docs/cases/017`。已知边界：已下发后页面回报 `ok:false` 仍统一按 `none`（`browser_eval` 抛错除外），`type` 中途失败边界尚未细拆。
 >
+> **1.5.5 是阶段 B 的第一个能力（TICKET-044，`browser_wait`）**：页面异步是常态（等列表出现、等「保存成功」、等遮罩消失），此前 agent 只能用 `browser_eval` 轮询（写动作、要审批、容易跑在旧页面）、连续 `snapshot`（整棵 a11y 树，浪费上下文）或硬睡。现在新增第 12 个工具 `browser_wait({selector?, text?, gone?, timeoutMs?})`：恰好传一个 selector/text，`gone` 反转，`timeoutMs` 默认 10000（夹到 100–15000）；页面侧只做一次同步判定（`inject/wait.js`；selector 判定**可见**而不是 DOM 存在性——`display:none`/`visibility:hidden`/零盒子不算「出现」，避免隐藏骨架提前报成功；非法选择器按「没找到」处理），轮询在面板（150ms 间隔、可取消），**超时是正常结果**（`matched:false, timedOut:true`）而不是错误码。它是**纯读**：零审批；`needs_human` / `taken_over` 下仍可用且不抢相位（`bridge.js` 的 `READ_TYPES` 加 `wait`）。`CLIENT_REV` 50→51，工具总数 11→12（`check-docs` 期望数、根/用户 README 工具表同步）。单测新增 `wait.test.mjs` 16 例 + bridge 2 例，259→277。真机夹具 `demo/wait.html`，验收记录见 `docs/cases/018`。
+>
 > **TICKET-040（客户端重载后白屏）的结论与规避（2026-11-26）**：两次白屏都发生在「插件客户端/host 重载后约 1 分钟内 + 面板正在交互（确认条）」的窗口里，但四组最小实验（客户端 entry 重载、host 半重建 + 确认条、bundle 启停、重载后静置）均**未能复现**；静态勘察确认 DSH 外壳没有整页刷新、React slot 有错误边界、渲染进程异常会显示错误页而不是白屏，因此按「不可复现 + 文档化规避」收口。**使用与验收注意**：真机验收/演示前先重启一次 DSH、一次性配好插件配置；验收过程中不要改 `cordis.patch.yml`，也不要用 `plugin_manager` 启停插件 bundle；若必须改配置，等面板重挂（回 `about:blank`）后重新 `browser_open` 再继续。万一白屏，直接重启 DSH 即可恢复（会话与配置不丢）。详见 `docs/tickets/040-blank-window-on-client-reload.md`。
 >
-> 日期：2026-11-24（1.5.1 验收于 2026-11-25，1.5.2 同日晚收口，1.5.3 与 1.5.4 于 2026-11-26）。适用对象：DSH **Desktop**，宿主实测 `0.2.2-rc.5`。上一版基线：1.4.24。
+> 日期：2026-11-24（1.5.1 验收于 2026-11-25，1.5.2 同日晚收口，1.5.3 与 1.5.4 于 2026-11-26，1.5.5 于 2026-11-27）。适用对象：DSH **Desktop**，宿主实测 `0.2.2-rc.5`。上一版基线：1.4.24。
 > 相关：用户侧文档 `dist/dsh-plugin-agent-browser/README.md`；契约 `docs/spec/003-first-touch-approval-spec.md`；决策 `docs/decisions/010-first-touch-approval.md`；夹具 `docs/cases/015-first-touch-cases.md`。
 
 ## 1. 发布物
 
 | 项 | 值 |
 |---|---|
-| 包名 / 版本 | `dsh-plugin-agent-browser` @ **1.5.4**（1.5.0 + 两轮验收期修正 + TICKET-041 JS 弹窗 + TICKET-042 写动作回执三态，见开头） |
-| 产物 | `dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.4.tgz`，322,516 B / 27 文件；sha256 `A757E17C36DEEE479686B05867F4B4E1103FA76C9B9B539DF9333F5B0EE2F405`（历史 1.5.3 = 320,316 B / `8F6C19AE…`） |
+| 包名 / 版本 | `dsh-plugin-agent-browser` @ **1.5.5**（1.5.0 + 两轮验收期修正 + TICKET-041 JS 弹窗 + TICKET-042 写动作回执三态 + TICKET-044 `browser_wait`，见开头） |
+| 产物 | `dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.5.tgz`，325,936 B / 28 文件；sha256 `F75E76AE347F2BAC0FB392DA9F6DF4B70AB145189DD31A27D99791157757C38A`（历史 1.5.4 = 322,516 B / `A757E17C…`、1.5.3 = 320,316 B / `8F6C19AE…`） |
 | 许可 / 元数据 | `license: MIT`、`private: false`、`engines.dsh: ">=0.2.2-rc.3 <0.3.0"`、peer+dev `@deepseek-ai/schemastery ^3.19.0` |
-| 新增源文件 | `plugin/approvals.js`（1.5.0 起，纯逻辑）；`inject/guards.js` rev 3（1.5.3 起含弹窗守卫） |
-| 单测 | `259 / 259` 通过（`node --test plugin/test/*.test.mjs`；`effect.test.mjs` 8 例、`guards.test.mjs` 12 例、`config.test.mjs` 12 例、`approvals.test.mjs` 18 例、`gate.test.mjs` 11 例） |
-| 文档一致性 | `node tools/check-docs.mjs` 六项全绿（配置字段 21、工具 11、YAML 13 顶层字段、decisions 10、B11、file:line 12） |
+| 新增源文件 | `plugin/approvals.js`（1.5.0 起，纯逻辑）；`inject/guards.js` rev 3（1.5.3 起含弹窗守卫）；`plugin/inject/wait.js`（1.5.5 起，等待探针） |
+| 单测 | `277 / 277` 通过（`node --test plugin/test/*.test.mjs`；`wait.test.mjs` 16 例、`effect.test.mjs` 8 例、`guards.test.mjs` 12 例、`config.test.mjs` 12 例、`approvals.test.mjs` 18 例、`gate.test.mjs` 11 例） |
+| 文档一致性 | `node tools/check-docs.mjs` 六项全绿（配置字段 21、工具 12、YAML 13 顶层字段、decisions 10、B11、file:line 12） |
 
 ## 2. 安装 / 升级 / 卸载
 
 ```powershell
-plugin_manager install_bundle target="D:\...\dist\dsh-plugin-agent-browser\dsh-plugin-agent-browser-1.5.4.tgz"
+plugin_manager install_bundle target="D:\...\dist\dsh-plugin-agent-browser\dsh-plugin-agent-browser-1.5.5.tgz"
 plugin_manager list_plugins   # 目标行：include:agent-browser-panel / enabled true / fiberPhase active
 ```
 
-- 装完**刷新一次 DSH 页面**：本次 `CLIENT_REV` 48→49→50（弹窗结果回传与二次解码修复都属于客户端 bundle），不刷新看不到。
+- 装完**刷新一次 DSH 页面**：本次 `CLIENT_REV` 48→49→50→51（弹窗结果回传、二次解码修复、`wait` 命令分发都属于客户端 bundle），不刷新看不到。
 - **`plugin/apply.js`、`bridge.js`、`tools.js` 属于宿主半**：本机实测 1.5.1 重装后新工具代码即时生效（`browser_type` 打密码框从「弹确认条等 30 秒」变成页面侧当场硬拒）；若装完行为没变，先重启 DSH 再看。同版本重装需 `remove_bundle` 再 `install_bundle`（同版本会被「already installed」挡回）。
 - 升级保留 profile 里的 `config` 行；没写 `approvals` 的 profile 走默认值（`first-touch`，即**默认开启**）。
 - 想完全回到 1.4.x 的无声行为：`approvals.mode: 'off'`，不需要降级包。

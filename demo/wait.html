@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>browser_wait 夹具</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 16px; line-height: 1.6; }
+  #late, #vanishing { padding: 8px 12px; margin: 8px 0; border-radius: 6px; background: #eef6ff; display: none; }
+  #vanishing { display: block; background: #fff4e5; }
+  #status { padding: 8px 12px; background: #f4f4f4; border-radius: 6px; }
+  button { font-size: 14px; margin: 2px 4px 2px 0; }
+  #log { font-family: ui-monospace, monospace; font-size: 12px; color: #444; margin-top: 12px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1 id="title">browser_wait 夹具</h1>
+<p>这个页面只在计时器触发后改变 DOM：用它验证「立即命中 / 等出现 / 等消失 / 超时」四种情况。</p>
+<p>页面上始终存在的元素：<span id="stable">#stable 一直在这里</span></p>
+<div id="late"><span id="late-text">#late 在 8 秒后出现（按钮 A 立即出现）</span></div>
+<div id="vanishing">#vanishing 在 12 秒后消失</div>
+<div id="status" role="status">状态：初始</div>
+<p>
+  <button id="show-now" type="button">A. 立即让 #late 出现</button>
+  <button id="flip-status" type="button">C. 改状态文本为「已保存」</button>
+  <button id="restart" type="button">D. 重置页面</button>
+</p>
+<p id="log">（操作日志）</p>
+<script>
+  // 注意：局部变量不要叫 `status`——window.status 是遗留的字符串属性，
+  // 给它赋值会把元素对象强制转成字符串，之后 status.textContent = ...
+  // 静默失效（本夹具第一版就踩了这个坑，导致「等文本」用例假失败）。
+  var late = document.getElementById('late')
+  var vanishing = document.getElementById('vanishing')
+  var statusBox = document.getElementById('status')
+  var log = document.getElementById('log')
+  function note(line) { log.textContent += (log.textContent === '（操作日志）' ? '' : '\n') + line }
+  // 计时器故意拉长（8s/12s/14s），这样 `browser_wait` 能真的等到变化，
+  // 而不是在命令往返期间就已经发生（快速计时器会让人误判「立即命中」）。
+  setTimeout(function () { late.style.display = 'block'; note('8s: #late 出现') }, 8000)
+  setTimeout(function () { vanishing.style.display = 'none'; note('12s: #vanishing 消失') }, 12000)
+  setTimeout(function () { statusBox.textContent = '状态：加载完成'; note('14s: 状态文本变为「加载完成」') }, 14000)
+  document.getElementById('show-now').addEventListener('click', function () {
+    late.style.display = 'block'; note('按钮 A: #late 立即出现')
+  })
+  document.getElementById('flip-status').addEventListener('click', function () {
+    statusBox.textContent = '状态：已保存'; note('按钮 C: 状态文本改为「已保存」（不会再自动变）')
+  })
+  document.getElementById('restart').addEventListener('click', function () { location.reload() })
+</script>
+</body>
+</html>

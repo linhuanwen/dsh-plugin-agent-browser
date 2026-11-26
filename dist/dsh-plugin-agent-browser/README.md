@@ -39,7 +39,7 @@ plugin_manager action: install_bundle target: <这个包的 tgz>
 plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 ```
 
-- 会同时清掉 profile 的 loader 条目与包目录；面板关闭、11 个工具消失。
+- 会同时清掉 profile 的 loader 条目与包目录；面板关闭、12 个工具消失。
 - 通道与静态服务的端口随插件重载释放（默认系统分配，没有固定端口要清）。
 - 工作区里已经产出的 `screenshots/`、`downloads/` **不会**被删（它们是普通文件，自己留着或清掉都行）。
 - 开发者注意：如果之前是 `link:` 安装，`node_modules` 里会留一个 junction，Windows 下用 `(Get-Item <path> -Force).Delete()` 只删链接。
@@ -197,12 +197,13 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 
 > 如果页面底部显示"这个 profile 不能保存插件配置"，说明宿主没有给它 config editor（多见于只读或内置 profile）——此时表单只读，改配置请用 YAML。
 
-## 十一个工具
+## 十二个工具
 
 | 工具 | 作用 |
 |---|---|
 | `browser_open` | 打开一个 http(s) 地址；或传 `path` 打开工作区里的 HTML（自动起只读本地服务） |
 | `browser_snapshot` | 读当前页面的无障碍树（带 `[ref=eN]`）+ 一张截图；`includeImage:false` 可省掉截图 |
+| `browser_wait` | 等某个 CSS 选择器或页面文字出现（`gone:true` 等它消失），超时返回 `timedOut`；纯读、无需确认，异步加载先等再快照（默认等 10s，最长 15s） |
 | `browser_click` | 点某个 `ref`；没有可用 ref 时传 CSS `selector`（命中测试失败会分型报告 `not_found` / `multiple` / `occluded` / `disabled`）；canvas 与跨域 iframe 才用坐标（`x`/`y`，CSS 像素）。`target=_blank` 会被改成同视图导航 |
 | `browser_scroll` | 滚动页面或某个容器（`dy` 像素 / `to:"top"|"bottom"` / `container` 选择器），返回位置与 `atBottom`；懒加载列表靠它触发 |
 | `browser_hover` | 把指针移到元素上但不按（`ref` / `selector` / `x`,`y`），返回落点与 `grew`；叠卡、悬浮菜单这类"悬停才展开"的控件要先 hover 再点 |
@@ -230,7 +231,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 
 这块浏览器带着你的登录态，Agent 会在你没看的时候往里写字，所以默认姿势是：**读动作从不打扰，写动作每个站点第一次问一次**。
 
-- **不问**（读动作）：`browser_open`、`browser_snapshot`、`browser_scroll`、`browser_hover`、`browser_zoom`、`browser_screenshot`，以及点到普通链接/按钮的 `browser_click`。
+- **不问**（读动作）：`browser_open`、`browser_snapshot`、`browser_wait`、`browser_scroll`、`browser_hover`、`browser_zoom`、`browser_screenshot`，以及点到普通链接/按钮的 `browser_click`。
 - **要问**（写动作）：`browser_type`（密码框本来就一律拒绝）、`browser_click` 命中提交类控件（`button[type=submit]`、`input[type=submit|image]`、表单里没有 `type` 的按钮）、表单内的 `browser_press` Enter、`browser_eval`、`browser_download`。
 - 面板顶部会弹一条黄色确认条：`Agent 想在 example.com 点击「提交」提交表单` + 倒计时 +「允许一次」「本会话允许本站」「拒绝」。**Enter = 拒绝**（反射性按键不该等于同意），快捷键 Alt+1 / Alt+2 / Alt+3。
 - 拒绝或超时（默认 30 秒）：动作**不会发出**，Agent 拿到 `approval_denied` / `approval_timeout`。面板没打开或窗口不可见：`approval_required`，Agent 应当先请你打开面板，而不是干等。

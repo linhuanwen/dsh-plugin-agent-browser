@@ -56,6 +56,7 @@
 | TICKET-042 写动作回执三态 `effect` + `action_unknown` | ✅ 2026-11-26 实现并真机通过（1.5.4）：`bridge.js` 新增 `WRITE_TYPES`，`#drain()` 标记 `delivered`，超时/取消/接管/关闭五条「已下发回执丢失」路径改抛 `action_unknown`（`retryable:false`，details `{effect:'unknown',delivered:true,type,reason}`）；`tools.js` 成功结果 `effect:'committed'`、未发出错误 `details.effect:'none'`、eval 页面抛错改 `action_unknown`；`errors.js` 16→17 码；新增 `plugin/test/effect.test.mjs` 8 例、`cancel.test.mjs` 改断言 → 全量 251→259；真机 `docs/cases/017-action-effect-cases.md`（eval 页面抛错、接管中断两条 unknown；`Guest.eval` 15s 上限使纯超时只能靠单测覆盖）。 |
 | TICKET-040 客户端重载后白屏 | 🟡 2026-11-26 收口（不可复现，已文档化规避）：静态勘察确认 DSH 外壳无整页刷新（asar 内 `location.reload` 0 命中）、客户端 bundle 是原地 entry 重载（HMR → `entries.reload`）、React slot 有 `SlotErrorBoundary`、渲染进程异常走错误页；四组最小实验（E1 客户端 entry 重载、E2 host 半重建 + 确认条交互、E4 bundle 启停、E3 重载后静置 5 分钟）**全部阴性**，DSH 未重启。历史两次白屏都在「重载后约 1 分钟内 + 面板交互」窗口，但未撞到；无可回读日志（host stdout 不落盘 / 无 crash / journal 不记配置编辑），根因停在假设层。规避流程：验收前重启一次 DSH、一次配好；不要边验收边改配置/启停 bundle；改完等面板重挂后重新 open；万一白屏直接重启。详见 `docs/tickets/040-blank-window-on-client-reload.md` 与 `docs/release/release-notes-1.5.md` |
 | TICKET-043 F7/F8 安全真机验收 | ✅ 2026-11-26 真机通过（1.5.4）：按「改配置 → 用户完全重启 DSH → 一次性验完」路径（不热重载、不启停 bundle），F7 `sensitiveSites: [127.0.0.1]` 同 origin 第一次「允许一次」成功、第二次仍弹条且拒绝后未写入；F8 `mode:'off'` 下 type/eval/提交点击全部直接执行、无确认条、无 `approval_*` 错误码；恢复备份后默认 first-touch 再次弹条。三次配置生效均靠重启 DSH，全程未白屏。证据见 `docs/cases/015` §5 |
+| TICKET-044 `browser_wait` 等待条件 | 🟡 2026-11-27 实现（1.5.5，阶段 B1 第一个能力）：新工具 `browser_wait({selector?,text?,gone?,timeoutMs?})`——恰好传一个 selector/text，`gone` 反转，`timeoutMs` 默认 10000（夹到 100–15000）；页面侧 `inject/wait.js` 单次同步判定（selector 非法按「没找到」），轮询放在面板（150ms 间隔、可取消），超时是正常结果（`matched:false, timedOut:true`）不是错误码；`bridge.js` 的 `READ_TYPES` 加 `wait`（不抢相位，`needs_human`/`taken_over` 下可用、零审批）；`CLIENT_REV` 51、工具总数 11→12（check-docs 期望数同步）、`test/wait.test.mjs` 16 例 + bridge 2 例 → 全量 259→**277**；真机验收已完成（`demo/wait.html`；四种情形全过，证据见 `docs/cases/018`） |
 
 ## 一句话结论
 
@@ -107,7 +108,8 @@ docs/cases/
   shots/                           取证截图（`baidu-earth-hangzhou.png` 地球/卫星视图下的杭州（V12 主案例）、`guangzhou-terrain.png` 广州地势图、`baidu-guangzhou-14z.png` 坐标点击到 14z、`baidu-earth-guangzhou.png` 同视图下的广州（历史））
 dist/
   dsh-plugin-agent-browser/         发布产物（扁平结构，纯 JS 无构建）
-    dsh-plugin-agent-browser-1.5.4.tgz 322,516 B / 27 文件，现役版本，`plugin_manager install_bundle` 直接装（sha256 `A757E17C36DEEE479686B05867F4B4E1103FA76C9B9B539DF9333F5B0EE2F405`；相对 1.5.3：TICKET-042 写动作回执三态——写工具成功结果带 `effect:'committed'`、未发出错误带 `details.effect:'none'`，新增第 17 码 `action_unknown`（已拉走但回执丢失：超时/断线/取消/接管/关闭；`retryable:false`，hint 先 snapshot 核对勿重发）、`browser_eval` 页面抛错改报 `action_unknown`；工具 schema 未变（新增 `effect` 输出字段），`CLIENT_REV` 50、通道与快照格式未变；真机证据 `docs/cases/017-action-effect-cases.md`）
+    dsh-plugin-agent-browser-1.5.5.tgz 325,936 B / 28 文件，现役版本，`plugin_manager install_bundle` 直接装（sha256 `F75E76AE347F2BAC0FB392DA9F6DF4B70AB145189DD31A27D99791157757C38A`；相对 1.5.4：TICKET-044 阶段 B1 第一个能力 `browser_wait`——第 12 个工具，纯读、零审批、`needs_human`/`taken_over` 下可用且不抢相位，`timeoutMs` 100–15000，超时是正常结果；`CLIENT_REV` 51、`inject/wait.js` 新增，工具 schema 只新增这一个工具，通道与快照格式未变）
+    （历史）dsh-plugin-agent-browser-1.5.4.tgz 322,516 B / 27 文件，被 1.5.5 取代，`plugin_manager install_bundle` 直接装（sha256 `A757E17C36DEEE479686B05867F4B4E1103FA76C9B9B539DF9333F5B0EE2F405`；相对 1.5.3：TICKET-042 写动作回执三态——写工具成功结果带 `effect:'committed'`、未发出错误带 `details.effect:'none'`，新增第 17 码 `action_unknown`（已拉走但回执丢失：超时/断线/取消/接管/关闭；`retryable:false`，hint 先 snapshot 核对勿重发）、`browser_eval` 页面抛错改报 `action_unknown`；工具 schema 未变（新增 `effect` 输出字段），`CLIENT_REV` 50、通道与快照格式未变；真机证据 `docs/cases/017-action-effect-cases.md`）
     （历史）dsh-plugin-agent-browser-1.5.3.tgz 320,316 B / 27 文件，现役版本，`plugin_manager install_bundle` 直接装（sha256 `8F6C19AE570CADB33B791DDD86CD505F7B87A73D02FC67D58AFFEA7876E5FFAF`；相对 1.5.2：TICKET-041 JS 弹窗拦截与记录——`inject/guards.js` rev 3 拦截 `alert/confirm/prompt` 并按保守答案继续（内容以 `blocked dialogs` 出现在工具结果、下一次 snapshot 也能带出）、新增 `dialogs.mode`（`record` 默认 / `off` 原生）、`CLIENT_REV` 48→50（弹窗结果回传 + `readDialogs` 二次解码修复）、config 顶层字段 11→12、工具 schema 未变；真机证据 `docs/cases/016-js-dialogs-cases.md`）
     （历史）dsh-plugin-agent-browser-1.5.2.tgz 317,228 B / 27 文件，被 1.5.3 取代（sha256 `093E706CCC19404BB2EC7710B7D816DE7F54A47F4D023950AF477E4FC3D8A787`；相对 1.4.24：TICKET-033 验证墙漏报修复 + SPEC-003 首次写动作确认（`approvals` 三字段、16 错误码、面板确认条、`CLIENT_REV` 48、新增 `approvals.js`）；1.5.1 修验收期宿主半缺陷（`apply.js` 薄门没转发 `approve`/`hasClient`/`pageOf` → `canAsk()` 恒 false、写动作不弹确认；密码框先弹条后被页面硬拒）；1.5.2 修相位优先级（`bridge.request()` 的读命令不再抢回 `agent` 相位、`approve()` 先看人工相位）与 eval 提示的 origin（改由页面侧 `inspect` 提供，不再依赖 `/page` 遥测）；工具 schema 未变、通道与快照格式未变；见 `docs/release/release-notes-1.5.md`）
     （历史）dsh-plugin-agent-browser-1.5.1.tgz 316,836 B / 27 文件，被 1.5.2 取代（sha256 `7143A2B793EF691A453DB637FDB5EC25ACEFE01E92B36AE867B1BA2607687CD5`，缺陷见上）；dsh-plugin-agent-browser-1.5.0.tgz 316,504 B / 27 文件，被 1.5.1 取代（sha256 `2994CD130E5397543A5C62FE04B61E18AC0D74D22FFE94590186AA9BDB4B6343`）；1.4.24 包 sha256 `55086470b4bb7c615ffbed19dfa998e08783b63158e66a1d269713d6b46620f5` 留作回滚
@@ -133,18 +135,19 @@ plugin/                             开发期插件源码（纯 JS，**无 packa
   downloads.js                      下载落盘（host 侧 fetch、50 MiB 上限、sha256、绝不覆盖）
   activation.js                     激活档位（auto/always/manual → 命令上的 show=once/always/never）
   policy.js                         策略层：scheme / 扩展名黑名单 / 输出预算 / 会话名单（createPolicy，工具体与 ctx.tools.guard() 共用）
-  tools.js                          工具定义（open / snapshot / click / scroll / hover / zoom / screenshot / type / press / eval / download，共 11 个；三个工具带 `presentationMeta`）
+  tools.js                          工具定义（open / snapshot / wait / click / scroll / hover / zoom / screenshot / type / press / eval / download，共 12 个；三个工具带 `presentationMeta`）
   search-fallback.js                失败换路：同站候选（`<host> <路径词>` 查询 → 客户端同站过滤；默认关）
   client.js                         client 入口：tab 类型 + 面板 body（徽章/接管/红框/确认条）+ 轮询器 + webview + 三个 `tool.call.toolview` 卡片
   inject/snapshot.js                页面内遍历器（纯字符串注入，每次调用读盘）
   inject/actions.js                 页面内动作器（定位/滚动/写入/密码拒），同一注入方式
+  inject/wait.js                    页面内等待探针（单次同步判定 selector/text/gone，轮询与预算在面板）
   inject/detect.js                  页面内验证检测器（URL/标题 + DOM + 强文案/单类别例外 + 短 meta refresh 跳转判定 + `pending` 标记 + `contentType` 门 + 页面内红框）
   test/config.test.mjs              配置面单测（10 例：默认值/局部覆盖/非法值/读取器/approvals 组与非法 mode）
   test/policy.test.mjs              gate 策略单测（3 例：show/fit 每命令重读、缺省回落 auto）
   test/approvals.test.mjs           首次写动作确认纯逻辑单测（18 例：归一化/分类/指纹/授权本/敏感站/决定解析）
   test/policy-extra.test.mjs        策略接缝单测（6 例：scheme/扩展名黑名单/输出预算/会话名单/guard 先于工具体）
   test/lifecycle.test.mjs           生命周期单测（5 例：单 effect、逆序清理、单步失败不中断、AggregateError、display policy 透传）
-  test/bridge.test.mjs              桥单测（17 例：关闭快速 reject、关闭后拒新、幂等；审批流 approve/decision/timeout/不可见/接管/page 回读；人工相位优先于审批提示、读命令不抢相位）
+  test/bridge.test.mjs              桥单测（19 例：关闭快速 reject、关闭后拒新、幂等；审批流 approve/decision/timeout/不可见/接管/page 回读；人工相位优先于审批提示、读命令不抢相位；`wait` 在 needs_human/taken_over 下可用）
   test/errors.test.mjs              错误码单测（8 例：码表/前缀/toJSON/旧前缀/面板文案映射）
   test/cancel.test.mjs              取消单测（7 例：预取消不入队、摘队列留 cancel 帧、迟到回包 ignored、三码区分、不影响其他会话、监听器不泄漏、工具层零调用）
   test/tooldefs.test.mjs            工具定义契约单测（7 例：register 硬要求、参数/输出 schema 子集、render lossless、budget 夹取）
@@ -157,12 +160,13 @@ plugin/                             开发期插件源码（纯 JS，**无 packa
   test/detect.test.mjs              验证检测单测（14 例：1688 滑块命中、帮助页不算墙、纯文本降级命中、`contentType` 门、Turnstile 文案/iframe、pending、title-only、meta refresh 不误报）
   test/shots.test.mjs               截图落盘单测（8 例：命名清洗/重名不覆盖/base64 对拍/sha256）
   test/search-fallback.test.mjs     失败换路单测（14 例：查询构造/触发矩阵/默认关/volatile/不泄漏 content/降级/上限夹取）
+  test/wait.test.mjs               等待工具单测（16 例：探针可见性（渲染/隐藏骨架/visibility/零盒子）/gone/text/非法选择器/invalid + 工具零审批/夹取/参数校验/页面报错/注册总数）
   test/guards.test.mjs             接管守护单测（12 例：安装标记/不重装、`_blank`→`_self`、嵌套节点、命名 target + form submit、agent 拦 `window.open`、human 同视图导航 + TICKET-041 弹窗 5 例：alert/confirm/prompt 记录与返回值、off 调原生、20 条/300 字上限）
-test/png.test.mjs                 PNG 编解码单测（3 例：按标记切出出厂代码，编码→解码逐像素对拍）——全量 **259 例**
+test/png.test.mjs                 PNG 编解码单测（3 例：按标记切出出厂代码，编码→解码逐像素对拍）——全量 **277 例**
 test/gate.test.mjs                审批接缝单测（11 例：type/提交点击先 inspect 再问、密码框不问、普通链接与坐标点击不问、站点授权只问一次、mode off、宿主不能问时退回 1.4 行为、下载与拒绝路径、eval 先 inspect 拿页面 origin）
   test/smoke-download.mjs           真实下载冒烟脚本（不进包；`node plugin/test/smoke-download.mjs`）
 screenshots/                         `browser_screenshot` 的落盘目录（整页拼接 PNG，重名加 `-1`/`-2` 绝不覆盖）
-demo/                               静态服务的验收页（`index.html` + `a.css` + `data.json` + `img/b.png` + `ticket-009.html` 动作面夹具 + `approval-form.html` / `approval.txt` 首次写动作确认夹具 + `dialogs.html` JS 弹窗夹具）
+demo/                               静态服务的验收页（`index.html` + `a.css` + `data.json` + `img/b.png` + `ticket-009.html` 动作面夹具 + `approval-form.html` / `approval.txt` 首次写动作确认夹具 + `dialogs.html` JS 弹窗夹具 + `wait.html` 等待条件夹具）
 tools/probe/                              探针实现（已卸载，保留作证据；`shot-*.png` 是 U6 截图）
 tools/
   pack.mjs                          把 plugin/ 复制源文件进 dist/ 再 `npm pack`，打印体积与安装命令
@@ -242,3 +246,4 @@ docs/tickets/
 
 14. **两步走**（2026-11-26 定，见 `docs/spec/004-capability-admission-spec.md`）：先做阶段 A 边界收口（`TICKET-040` 白屏根因 → `041` JS 弹窗 → `042` 写动作三态 `effect`/`action_unknown` → `043` F7/F8 安全真机验收），期间**不加新 `browser_*` 动词**；阶段 A 四件结案后再按阶段 B 三层扩能力（操作补全 → 观察增强 → 高风险）。加任何新能力前先回答准入四问并交证据四件套；写动作三态未落地前，禁止新增不可逆写动作。**期间若再白屏，暂停一切真机验收，只做代码与文档。**
     - 进度（2026-11-26）：**阶段 A 全部结案**——`041` ✅（1.5.3，`record` 模式，`off` 对照已并入 043）；`042` ✅ 已实现并真机通过（1.5.4，259 例；真机两条 unknown：eval 页面抛错、接管中断；纯超时分支由单测覆盖）；`040` 🟡 已收口（不可复现 + 文档化规避，四组实验阴性，DSH 未重启；根因停在假设层）；`043` ✅ 真机通过（F7 敏感站每次必问、F8 `mode:'off'` 完全不问；改配置→用户重启 DSH→一次性验完，未用热重载，全程未白屏；证据见 `docs/cases/015` §5）。下一步：阶段 B 按 SPEC-004 §6 三层扩能力（操作补全 → 观察增强 → 高风险），每个能力先过准入四问 + 交证据四件套；`042` 遗留的「页面 ok:false 的 type 中途失败边界」留到下一次能力准入时评估。
+- 进度（2026-11-27）：**阶段 B 第一个能力 `browser_wait` 已收口**——代码/单测（16 例，全量 277）/两份 README/check-docs 全绿；1.5.5 已装机（`325,936 B / sha F75E76AE…`）；真机四情形通过并写成 `docs/cases/018`（含三个验收期发现：可见性判定、注入源码必须是单个函数表达式、夹具 `window.status` 坑）。下一步按 SPEC-004 §6 继续阶段 B：观察增强（快照语义/`loc=`）或操作补全其余项，先过准入四问。

@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
      * The renderer caches `client.js` aggressively, and a stale half looks
      * exactly like a bug in the host half.
      */
-    const CLIENT_REV = 50
+    const CLIENT_REV = 51
     /** The panel talks to the host half over loopback; both sides carry this mark. */
     const BRIDGE_PREFIX = '/dsh-agent-browser'
     const BRIDGE_MARK = 'dsh-plugin-agent-browser/1'
@@ -535,7 +535,7 @@ window.__ModuleLoader__.load({
     let dialogsModeCache = ''
 
     /** Command types that can let a page show a JS dialog (TICKET-041). */
-    const DIALOG_TYPES = new Set(['open', 'snapshot', 'click', 'type', 'press', 'eval'])
+    const DIALOG_TYPES = new Set(['open', 'snapshot', 'wait', 'click', 'type', 'press', 'eval'])
 
     /**
      * Read the configured dialog policy.
@@ -691,6 +691,10 @@ window.__ModuleLoader__.load({
               signals: (detection.signals ?? []).map((signal) => `${signal.kind}:${signal.detail}`).slice(0, 8),
             }
           }
+        } else if (command.type === 'wait') {
+          // TICKET-044: read-only poll; the callback lets a cancel frame stop it
+          // between probes instead of after the whole budget.
+          result = await guest.wait(command.params, () => cancelledIds.has(command.id))
         } else if (command.type === 'snapshot') {
           result = await guest.snapshot(command.params)
           const detection = await detectChallenge(sessionId, guest, command.params?.detect)
@@ -1820,6 +1824,47 @@ window.__ModuleLoader__.load({
         })()`
         const out = await withTimeout(this.evaluate(source), 15_000, 'the page did not finish evaluating')
         return out
+      }
+
+      /**
+       * Poll the page until a selector/text condition holds or the budget ends.
+       *
+       * The probe runs in the page (`inject/wait.js`), the loop runs here. That
+       * split is deliberate (TICKET-044): a cancel frame can stop the wait
+       * between probes, and a page that hangs a timer cannot trap the command in
+       * one long-running promise. Read-only; it never touches the page.
+       * @param {{selector?: string, text?: string, gone?: boolean, timeoutMs?: number, source?: string, intervalMs?: number}} params
+       * @param {() => boolean} [isCancelled] - checked between probes.
+       * @returns {Promise<object>} { ok, matched, found, gone, waitedMs, ticks, timedOut?, cancelled?, url? }
+       */
+      async wait(params, isCancelled) {
+        const source = typeof params?.source === 'string' ? params.source : ''
+        if (source === '') throw new Error('wait needs its page-side probe source')
+        const timeoutMs = Number.isFinite(params?.timeoutMs) ? Math.max(100, params.timeoutMs) : 10_000
+        const intervalMs = Number.isFinite(params?.intervalMs) ? Math.max(50, params.intervalMs) : 150
+        const probeInput = JSON.stringify({
+          selector: typeof params?.selector === 'string' ? params.selector : '',
+          text: typeof params?.text === 'string' ? params.text : '',
+          gone: params?.gone === true,
+        })
+        const started = Date.now()
+        let ticks = 0
+        for (;;) {
+          const probe = await this.evaluate(`(${source})(${probeInput})`)
+          ticks += 1
+          if (probe?.invalid === true) throw new Error('wait needs a selector or text to look for')
+          const waitedMs = Date.now() - started
+          if (probe?.matched === true) {
+            return { ok: true, matched: true, found: probe.found === true, visible: probe.visible === true, gone: probe.gone === true, waitedMs, ticks, url: this.url() }
+          }
+          if (isCancelled !== undefined && isCancelled() === true) {
+            return { ok: true, cancelled: true, matched: false, found: probe?.found === true, visible: probe?.visible === true, gone: probe?.gone === true, waitedMs, ticks, url: this.url() }
+          }
+          if (waitedMs >= timeoutMs) {
+            return { ok: true, matched: false, timedOut: true, found: probe?.found === true, visible: probe?.visible === true, gone: probe?.gone === true, waitedMs, ticks, url: this.url() }
+          }
+          await new Promise((resolve) => setTimeout(resolve, intervalMs))
+        }
       }
 
       /**

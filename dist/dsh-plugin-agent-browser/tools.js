@@ -710,6 +710,135 @@ function notSent(error) {
 }
 
 /**
+ * The in-page wait probe, read on every call like the other page scripts.
+ *
+ * TICKET-044: the probe is one synchronous look (`inject/wait.js`); the polling
+ * loop lives in the panel, so a cancel frame can stop the wait between probes
+ * and the page cannot trap the command in a long-running promise.
+ * @returns {string} the source of `dshWait`.
+ */
+export function waitSource() {
+  return readFileSync(new URL('./inject/wait.js', import.meta.url), 'utf8')
+}
+
+/**
+ * `browser_wait` — wait until a selector or some text is present (or gone).
+ *
+ * Read-only: it asks the page the same question `browser_snapshot` would answer,
+ * just repeatedly until the condition holds or the budget runs out, so it never
+ * needs approval and never moves the phase. It returns before the budget when
+ * the condition is already true, which makes it safe to call defensively.
+ * TICKET-044 / SPEC-004 stage B1.
+ * @param {import('./bridge.js').Bridge} bridge - host half of the channel.
+ */
+export function browserWaitTool(bridge) {
+  const DEFAULT_TIMEOUT_MS = 10_000
+  const MAX_TIMEOUT_MS = 15_000
+  return {
+    name: 'browser_wait',
+    description:
+      'Wait (read-only, no approval) until a CSS selector or some page text appears, or until it disappears '
+      + 'with gone:true. A selector counts as appeared only when it is rendered (display:none, visibility:hidden '
+      + 'and zero-box elements do not count), so hidden skeletons do not report success early; text is matched '
+      + 'in the rendered body text. Pass exactly one of selector / text. Returns immediately when the condition '
+      + 'already holds; otherwise polls until timeoutMs (default 10000, max 15000) and reports timedOut. Use it '
+      + 'after browser_open or an action that starts async work, instead of polling with browser_eval. It never '
+      + 'changes the page and works in both the needs_human and taken_over phases.',
+    parameters: {
+      type: 'object',
+      properties: {
+        selector: { type: 'string', description: 'CSS selector to wait for (or to disappear with gone:true).' },
+        text: { type: 'string', description: 'Text to wait for in the page body (or to disappear with gone:true). Pass this instead of selector.' },
+        gone: { type: 'boolean', description: 'Wait for the selector/text to be absent rather than present. Defaults to false.' },
+        timeoutMs: { type: 'integer', description: `Milliseconds to wait before reporting timedOut. Defaults to ${DEFAULT_TIMEOUT_MS}; max ${MAX_TIMEOUT_MS}.` },
+      },
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          matched: { type: 'boolean' },
+          timedOut: { type: 'boolean' },
+          found: { type: 'boolean' },
+          visible: { type: 'boolean' },
+          gone: { type: 'boolean' },
+          waitedMs: { type: 'integer' },
+          url: { type: 'string' },
+        },
+        required: ['matched', 'waitedMs'],
+      },
+      render(_args, value) {
+        const seconds = ((Number(value?.waitedMs) || 0) / 1000).toFixed(1)
+        if (value?.matched === true) {
+          const state = value?.gone === true ? 'is gone' : 'appeared'
+          return [{
+            type: 'text',
+            text: `Condition met after ${seconds}s: ${state}. Snapshot again to see what is on the page now.`,
+          }]
+        }
+        return [{
+          type: 'text',
+          text: `Waited ${seconds}s; the condition was not met (timed out). Snapshot again to see the current state; the page may still be loading or the selector/text may be wrong.`,
+        }]
+      },
+    },
+    async execute(args, exec) {
+      const sessionId = sessionOf(exec)
+      const selector = typeof args?.selector === 'string' && args.selector.trim() !== '' ? args.selector.trim() : undefined
+      const text = typeof args?.text === 'string' && args.text !== '' ? args.text : undefined
+      if (selector !== undefined && text !== undefined) {
+        throw new Error('pass exactly one of selector or text, not both')
+      }
+      if (selector === undefined && text === undefined) {
+        throw new Error('browser_wait needs a selector or text to look for')
+      }
+      if (args?.gone !== undefined && typeof args.gone !== 'boolean') {
+        throw new Error('gone must be a boolean')
+      }
+      let timeoutMs = DEFAULT_TIMEOUT_MS
+      if (args?.timeoutMs !== undefined) {
+        const raw = Number(args.timeoutMs)
+        if (!Number.isFinite(raw) || !Number.isInteger(raw)) throw new Error('timeoutMs must be an integer number of milliseconds')
+        timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(100, raw))
+      }
+      const result = await bridge.request(
+        sessionId,
+        'wait',
+        { selector, text, gone: args?.gone === true, timeoutMs, source: waitSource() },
+        timeoutMs + 5_000,
+      )
+      if (result?.ok !== true) throw actionFailure(result, 'wait')
+      if (result?.invalid === true) throw new Error('browser_wait needs a valid selector or text to look for')
+      const matched = result?.matched === true
+      return {
+        matched,
+        timedOut: matched === false,
+        found: result?.found === true,
+        visible: result?.visible === true,
+        gone: result?.gone === true,
+        waitedMs: Math.round(Number(result?.waitedMs) || 0),
+        ...(typeof result?.url === 'string' && result.url !== '' ? { url: result.url } : {}),
+      }
+    },
+    isConcurrencySafe() {
+      return false
+    },
+    presentCall(args) {
+      const what = args?.text !== undefined ? `"${String(args.text).slice(0, 40)}"` : String(args?.selector ?? 'a selector')
+      const mode = args?.gone === true ? 'disappear' : 'appear'
+      return { card: 'generic', title: `Wait for ${what} to ${mode}`, kind: 'read', rawInput: args }
+    },
+    presentResult(_args, value) {
+      return {
+        card: 'generic',
+        title: value?.matched === true ? 'Condition met' : 'Wait timed out',
+      }
+    },
+  }
+}
+
+/**
  * `browser_click` — click a ref, a CSS selector, or a viewport coordinate.
  *
  * The coordinate form exists for the things a DOM ref cannot express: canvas
@@ -2065,6 +2194,7 @@ export function createTools(ctx, bridge, sites, policy = {}) {
       fallback,
     }),
     browserSnapshotTool(ctx, gate, { maxChars: limits.snapshotMaxChars, rules }),
+    browserWaitTool(gate),
     browserClickTool(gate),
     browserScrollTool(gate),
     browserHoverTool(gate),
@@ -2077,7 +2207,7 @@ export function createTools(ctx, bridge, sites, policy = {}) {
   ]
   // `exec.signal` is per call and the gate is shared, so the signal is carried in
   // async context instead of every tool parameter list. One wrapper here covers
-  // all eleven tools, which is also why no call site can forget it.
+  // all twelve tools, which is also why no call site can forget it.
   const wrapped = tools.map((tool) => {
     const execute = tool.execute
     if (typeof execute !== 'function') return tool

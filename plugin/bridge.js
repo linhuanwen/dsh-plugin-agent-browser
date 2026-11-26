@@ -60,7 +60,7 @@ const INPUT_TYPES = new Set(['open', 'click', 'scroll', 'hover', 'zoom', 'screen
  * `taken_over` would be erased by the very call that checks whether asking is
  * allowed (SPEC-003 C8 keeps the human's phase on top of the approval gate).
  */
-const READ_TYPES = new Set(['snapshot', 'inspect'])
+const READ_TYPES = new Set(['snapshot', 'inspect', 'wait'])
 
 /**
  * Commands whose effect cannot be proven absent once the panel pulled them.
