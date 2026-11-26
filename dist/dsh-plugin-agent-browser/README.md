@@ -39,7 +39,7 @@ plugin_manager action: install_bundle target: <这个包的 tgz>
 plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 ```
 
-- 会同时清掉 profile 的 loader 条目与包目录；面板关闭、12 个工具消失。
+- 会同时清掉 profile 的 loader 条目与包目录；面板关闭、13 个工具消失。
 - 通道与静态服务的端口随插件重载释放（默认系统分配，没有固定端口要清）。
 - 工作区里已经产出的 `screenshots/`、`downloads/` **不会**被删（它们是普通文件，自己留着或清掉都行）。
 - 开发者注意：如果之前是 `link:` 安装，`node_modules` 里会留一个 junction，Windows 下用 `(Get-Item <path> -Force).Delete()` 只删链接。
@@ -197,7 +197,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 
 > 如果页面底部显示"这个 profile 不能保存插件配置"，说明宿主没有给它 config editor（多见于只读或内置 profile）——此时表单只读，改配置请用 YAML。
 
-## 十二个工具
+## 十三个工具
 
 | 工具 | 作用 |
 |---|---|
@@ -211,6 +211,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 | `browser_screenshot` | 把页面存成 PNG 文件到工作区 `screenshots/`（返回路径、尺寸、sha256）。默认**长页拼接成整页图**（自动滚动、重叠裁缝、临时隐藏 fixed/sticky 元素），`mode:"viewport"` 只存当前屏。重名加 `-1`，不覆盖 |
 | `browser_type` | 往某个输入框写文字（`ref` 或 `loc` 定位），`submit:true` 顺带回车；**密码框一律拒绝**，交给人来输 |
 | `browser_press` | 按一个键或组合键；`Alt+Left` / `Alt+Right` / `F5` 会走面板的导航动作 |
+| `browser_upload` | 把工作区里的文件放进页面的 `<input type=file>`（`ref` / `loc` / `selector` 定位，`files` 是工作区相对路径数组）。写动作、站点首次确认；单文件 2 MiB、合计 4 MiB、最多 5 个，路径出工作区会被拒（`upload_rejected`） |
 | `browser_eval` | 在页面里求值（不够用时才用，永远不要用它绕过登录或验证）；可用 `evalEnabled: false` 整体关掉 |
 | `browser_download` | 把一个附件（PDF/Word/Excel/zip）下到工作区 `downloads/`，返回路径、字节数与 sha256；重名自动加 `-1`，不覆盖旧文件。可执行类扩展名会被拒（`download_rejected`） |
 
@@ -232,12 +233,12 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 这块浏览器带着你的登录态，Agent 会在你没看的时候往里写字，所以默认姿势是：**读动作从不打扰，写动作每个站点第一次问一次**。
 
 - **不问**（读动作）：`browser_open`、`browser_snapshot`、`browser_wait`、`browser_scroll`、`browser_hover`、`browser_zoom`、`browser_screenshot`，以及点到普通链接/按钮的 `browser_click`。
-- **要问**（写动作）：`browser_type`（密码框本来就一律拒绝）、`browser_click` 命中提交类控件（`button[type=submit]`、`input[type=submit|image]`、表单里没有 `type` 的按钮）、表单内的 `browser_press` Enter、`browser_eval`、`browser_download`。
+- **要问**（写动作）：`browser_type`（密码框本来就一律拒绝）、`browser_click` 命中提交类控件（`button[type=submit]`、`input[type=submit|image]`、表单里没有 `type` 的按钮）、表单内的 `browser_press` Enter、`browser_eval`、`browser_download`、`browser_upload`。
 - 面板顶部会弹一条黄色确认条：`Agent 想在 example.com 点击「提交」提交表单` + 倒计时 +「允许一次」「本会话允许本站」「拒绝」。**Enter = 拒绝**（反射性按键不该等于同意），快捷键 Alt+1 / Alt+2 / Alt+3。
 - 拒绝或超时（默认 30 秒）：动作**不会发出**，Agent 拿到 `approval_denied` / `approval_timeout`。面板没打开或窗口不可见：`approval_required`，Agent 应当先请你打开面板，而不是干等。
 - 粒度是「会话 + 站点」：换个站点重新问，会话结束作废；`approvals.sensitiveSites` 里的站点每次都问。你点「我来接管」时，未作答的确认自动按拒绝处理。
 - 想完全回到 1.4.x 的无声行为：`approvals.mode: off`。
-- **结果带三态 `effect`**：写动作成功时是 `committed`；在命令离开宿主前被拦下（参数、审批、策略、相位）是 `none`，重试安全；面板已经把命令拉走、回执却丢了（超时/取消/接管/插件停止）是 `unknown`——工具报 `action_unknown`（`retryable:false`），Agent 必须先 `browser_snapshot` 核对页面，**不要重发同一动作**。`submit` / `download` / `eval` 尤其按未知处理（SPEC-004 §4 B4）。
+- **结果带三态 `effect`**：写动作成功时是 `committed`；在命令离开宿主前被拦下（参数、审批、策略、相位）是 `none`，重试安全；面板已经把命令拉走、回执却丢了（超时/取消/接管/插件停止）是 `unknown`——工具报 `action_unknown`（`retryable:false`），Agent 必须先 `browser_snapshot` 核对页面，**不要重发同一动作**。`submit` / `download` / `eval` / `upload` 尤其按未知处理（SPEC-004 §4 B4）。
 
 ## JS 弹窗（`dialogs`，默认拦截并记录）
 

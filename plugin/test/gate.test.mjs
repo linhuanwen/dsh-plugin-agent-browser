@@ -219,4 +219,59 @@ test('an unresolvable loc skips the prompt and lets the action report its own er
   assert.equal(bridge.approvals.length, 0, 'no prompt for an address that can never resolve')
 })
 
+test('inspect keeps acceptsFiles, so upload can vet the target before reading bytes', async () => {
+  const bridge = fakeBridge({
+    request: async (sessionId, type, params) => {
+      bridge.calls.push({ sessionId, type, params })
+      return {
+        ok: true,
+        info: { tag: 'input', role: 'button', name: '头像' },
+        isSubmit: false,
+        acceptsFiles: true,
+        acceptsMultiple: true,
+        url: PAGE,
+      }
+    },
+  })
+  const gate = gated(bridge)
+  const seen = await gate.inspect('s1', { loc: 'css:#avatar' })
+  assert.equal(seen.known, true)
+  assert.equal(seen.acceptsFiles, true, 'the host side must not drop the page-side file-input flag')
+  assert.equal(seen.acceptsMultiple, true, 'the multi-file flag decides whether a list needs a prompt')
+})
+
+test('an upload asks through requestApproval with its own class, and only once', async () => {
+  const bridge = fakeBridge()
+  const gate = gated(bridge)
+  // The tool asks itself (it reads the files only after the address checks), so
+  // the approval path is `requestApproval`, not `request`.
+  await gate.requestApproval('s1', {
+    actionClass: 'upload',
+    url: PAGE,
+    target: { files: [{ name: '报告.pdf', size: 1234 }], bytes: 1234 },
+  })
+  assert.equal(bridge.approvals.length, 1)
+  assert.equal(bridge.approvals[0].actionClass, 'upload')
+  assert.equal(bridge.approvals[0].origin, 'http://127.0.0.1:7789')
+  assert.match(bridge.approvals[0].summary, /上传/)
+  assert.match(bridge.approvals[0].summary, /报告\.pdf/)
+  // `request` must not prompt a second time for the same command: the tool has
+  // already asked and the user should not see the same dialog twice.
+  await gate.request('s1', 'upload', { loc: 'css:#avatar', files: [] }, 30_000)
+  assert.equal(bridge.approvals.length, 1, 'upload confirms itself once, not twice')
+  assert.equal(bridge.calls.at(-1).type, 'upload')
+})
+
+test('an upload can be refused by the user, and then never reaches the page', async () => {
+  const denied = new Error('approval_denied: the user refused this write action')
+  denied.code = 'approval_denied'
+  const bridge = fakeBridge({ approve: async () => { throw denied } })
+  const gate = gated(bridge)
+  await assert.rejects(
+    gate.requestApproval('s1', { actionClass: 'upload', url: PAGE, target: { files: [] } }),
+    /approval_denied/,
+  )
+  assert.equal(bridge.calls.length, 0, 'nothing is sent to the page when the prompt is denied')
+})
+
 void assert

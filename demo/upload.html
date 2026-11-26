@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>browser_upload 夹具</title>
+<style>
+  body { font: 14px/1.6 system-ui, sans-serif; margin: 24px; max-width: 720px; }
+  h1 { font-size: 18px; }
+  section { border: 1px solid #ddd; border-radius: 8px; padding: 12px 16px; margin: 12px 0; }
+  #log { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px; color: #333; }
+  .ok { color: #067d17; }
+  .warn { color: #b42318; }
+</style>
+</head>
+<body>
+  <h1>browser_upload 夹具（TICKET-047）</h1>
+  <p>这个页面有一个 <code>&lt;input type="file"&gt;</code>，用来验证「宿主读工作区文件 → 页面合成 File → 赋给 input.files → 触发 change」这条路。</p>
+
+  <section>
+    <label>单文件：<input type="file" id="single"></label>
+    <button type="button" id="collect">把它列出来</button>
+  </section>
+
+  <section>
+    <label>多文件：<input type="file" id="multi" multiple></label>
+  </section>
+
+  <section>
+    <h2 style="font-size:14px;margin:0 0 6px">页面观测</h2>
+    <div id="status">还没有选择文件。</div>
+  </section>
+
+  <h2 style="font-size:14px">事件日志</h2>
+  <div id="log">（等待中）</div>
+
+  <script>
+    // 坑：window.status 是遗留字符串属性，var status = getElementById(...) 会被它吞掉
+    var statusBox = document.getElementById('status');
+    var log = document.getElementById('log');
+    function note(text) {
+      log.textContent = (log.textContent === '（等待中）' ? '' : log.textContent + '\n') + new Date().toLocaleTimeString() + ' ' + text;
+    }
+    function describe(input) {
+      var files = input.files;
+      if (files === null || files.length === 0) return '空（files.length = 0）';
+      var parts = [];
+      for (var i = 0; i < files.length; i += 1) {
+        var file = files[i];
+        parts.push(file.name + ' · ' + file.size + ' B · ' + (file.type || '无 type'));
+      }
+      return files.length + ' 个：' + parts.join('；');
+    }
+    function readFirst(input) {
+      if (input.files === null || input.files.length === 0) return;
+      var reader = new FileReader();
+      reader.onload = function () {
+        var text = String(reader.result || '').slice(0, 80);
+        note('首个文件内容前 80 字符：' + JSON.stringify(text));
+        statusBox.textContent += ' | 内容前 80 字符：' + JSON.stringify(text);
+      };
+      reader.readAsText(input.files[0]);
+    }
+    function watch(input, label) {
+      input.addEventListener('change', function () {
+        note(label + ' change：' + describe(input));
+        statusBox.textContent = label + ' files = ' + describe(input);
+        readFirst(input);
+      });
+    }
+    watch(document.getElementById('single'), '单文件');
+    watch(document.getElementById('multi'), '多文件');
+    document.getElementById('collect').addEventListener('click', function () {
+      statusBox.textContent = '单文件 files = ' + describe(document.getElementById('single'));
+    });
+    note('页面就绪');
+  </script>
+</body>
+</html>

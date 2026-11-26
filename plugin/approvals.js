@@ -33,7 +33,7 @@ const MIN_APPROVAL_TIMEOUT_MS = 2_000
 const MAX_APPROVAL_TIMEOUT_MS = 120_000
 
 /** The write classes a `first-touch` gate asks about. */
-export const ACTION_CLASSES = Object.freeze(['type', 'submit', 'download', 'eval'])
+export const ACTION_CLASSES = Object.freeze(['type', 'submit', 'download', 'eval', 'upload'])
 
 /** Keys that submit a form when the focused control is inside one. */
 export const SUBMIT_KEYS = Object.freeze(['Enter', 'Return', 'NumpadEnter'])
@@ -213,6 +213,18 @@ export function summarize(actionClass, origin, target = null) {
   if (actionClass === 'submit') return `在 ${site} 点击${button}提交表单`
   if (actionClass === 'download') return `从 ${site} 下载文件`
   if (actionClass === 'eval') return `在 ${site} 执行页面脚本`
+  if (actionClass === 'upload') {
+    // File names are the part the human recognises; sizes keep the prompt
+    // honest about how much data leaves the machine. Never the path.
+    const files = target !== null && typeof target === 'object' && Array.isArray(target.files) ? target.files : []
+    const names = files
+      .map((file) => (file !== null && typeof file === 'object' && typeof file.name === 'string' ? file.name : ''))
+      .filter((value) => value !== '')
+      .slice(0, 3)
+    const count = files.length
+    const listed = names.length === 0 ? `${count} 个文件` : `${names.join('、')}${count > names.length ? ` 等 ${count} 个文件` : ''}`
+    return `向 ${site} 上传 ${listed}`
+  }
   return `在 ${site} 做一次写操作`
 }
 

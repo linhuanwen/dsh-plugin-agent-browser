@@ -340,6 +340,6 @@ test('presentCall / presentResult were kept for the clients that do use them', a
   const source = await readFile(TOOLS, 'utf8')
   const calls = source.match(/^\s*presentCall\(/gm) ?? []
   const results = source.match(/^\s*presentResult\(/gm) ?? []
-  assert.equal(calls.length, 12, `expected 12 presentCall definitions, found ${calls.length}`)
-  assert.equal(results.length, 12, `expected 12 presentResult definitions, found ${results.length}`)
+  assert.equal(calls.length, 13, `expected 13 presentCall definitions, found ${calls.length}`)
+  assert.equal(results.length, 13, `expected 13 presentResult definitions, found ${results.length}`)
 })

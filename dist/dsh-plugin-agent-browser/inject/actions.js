@@ -194,6 +194,25 @@ function dshAction(op, params) {
     return { element: element, doc: doc, frame: frame }
   }
 
+  /** Whether an element is a `<input type="file">` the browser can hand files to. */
+  function isFileInput(node) {
+    return node !== null && node !== undefined && node.tagName === 'INPUT' && String(node.type || '').toLowerCase() === 'file'
+  }
+
+  /**
+   * Decode a base64 payload into bytes without touching Node APIs.
+   *
+   * The host reads the file and ships base64 (a bridge payload must be JSON);
+   * the page turns it back into a `File`. `atob` exists in every renderer, so
+   * the only job here is the byte copy.
+   */
+  function base64ToBytes(text) {
+    var binary = atob(String(text || ''))
+    var bytes = new Uint8Array(binary.length)
+    for (var i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+    return bytes
+  }
+
   /** A short, human-readable description of what the ref points at. */
   function describe(element, doc) {
     var tag = element.tagName.toLowerCase()
@@ -495,6 +514,8 @@ function dshAction(op, params) {
       ok: true,
       info: focused && focused !== document.body ? describe(focused, document) : null,
       isSubmit: isSubmitControl(focused),
+      acceptsFiles: isFileInput(focused),
+      acceptsMultiple: isFileInput(focused) && focused.multiple === true,
       url: String(location.href || ''),
     })
   }
@@ -539,6 +560,55 @@ function dshAction(op, params) {
       ok: true,
       info: describe(element, doc),
       isSubmit: isSubmitControl(element),
+      acceptsFiles: isFileInput(element),
+      acceptsMultiple: isFileInput(element) && element.multiple === true,
+      url: String(location.href || ''),
+    })
+  }
+
+  // `upload` hands bytes the host already read from the workspace to a file
+  // input. There is no native picker involved: a `File` is assembled in the
+  // page and assigned through a `DataTransfer`, which is exactly what the
+  // browser's own chooser ends up doing. File inputs are frequently hidden
+  // (`display:none` behind a styled button), so this runs before any
+  // scroll/visibility/hit-test step — the element does not have to be visible.
+  if (op === 'upload') {
+    if (!isFileInput(element)) return fail('not_file_input', { info: describe(element, doc) })
+    var incoming = Array.isArray(input.files) ? input.files : []
+    if (incoming.length === 0) return fail('no_files', {})
+    if (element.multiple !== true && incoming.length > 1) {
+      return fail('multiple_not_allowed', { count: incoming.length, multiple: false })
+    }
+    var transfer = null
+    var uploaded = []
+    try {
+      transfer = new DataTransfer()
+      for (var index = 0; index < incoming.length; index += 1) {
+        var item = incoming[index] !== null && typeof incoming[index] === 'object' ? incoming[index] : {}
+        var name = typeof item.name === 'string' && item.name !== '' ? item.name : 'file'
+        var type = typeof item.type === 'string' ? item.type : ''
+        var blob = new File([base64ToBytes(item.b64)], name, { type: type })
+        transfer.items.add(blob)
+        uploaded.push({ name: blob.name, size: blob.size, type: blob.type })
+      }
+    } catch (error) {
+      return fail('upload_failed', { message: String((error && error.message) || error) })
+    }
+    if (uploaded.length === 0) return fail('no_files', {})
+    try {
+      element.files = transfer.files
+    } catch (error) {
+      return fail('upload_failed', { message: String((error && error.message) || error) })
+    }
+    // Sites listen for `change` (and some for `input`) to read the selected
+    // files; firing both matches what a real picker does.
+    element.dispatchEvent(new Event('input', { bubbles: true }))
+    element.dispatchEvent(new Event('change', { bubbles: true }))
+    return JSON.stringify({
+      ok: true,
+      info: describe(element, doc),
+      files: uploaded,
+      multiple: element.multiple === true,
       url: String(location.href || ''),
     })
   }

@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
      * The renderer caches `client.js` aggressively, and a stale half looks
      * exactly like a bug in the host half.
      */
-    const CLIENT_REV = 53
+    const CLIENT_REV = 54
     /** The panel talks to the host half over loopback; both sides carry this mark. */
     const BRIDGE_PREFIX = '/dsh-agent-browser'
     const BRIDGE_MARK = 'dsh-plugin-agent-browser/1'
@@ -723,6 +723,11 @@ window.__ModuleLoader__.load({
           result = await guest.type(command.params)
         } else if (command.type === 'press') {
           result = await guest.press(command.params)
+        } else if (command.type === 'upload') {
+          // TICKET-047: the host already read the workspace files and shipped
+          // them as base64; the page assembles File objects and fires the same
+          // input/change a native picker would.
+          result = await guest.act('upload', command.params)
         } else if (command.type === 'eval') {
           result = await guest.eval(command.params)
         } else {
@@ -1534,6 +1539,7 @@ window.__ModuleLoader__.load({
           dy: params?.dy,
           to: params?.to,
           container: params?.container,
+          files: params?.files,
         }
         return this.evaluate(`(${source}\n)(${JSON.stringify(op)}, ${JSON.stringify(args)})`)
       }

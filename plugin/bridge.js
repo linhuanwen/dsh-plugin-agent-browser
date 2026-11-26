@@ -74,7 +74,7 @@ const READ_TYPES = new Set(['snapshot', 'inspect', 'wait'])
  * deliberately absent: a navigation that did not report back is re-observable
  * and is not a write against the site.
  */
-const WRITE_TYPES = new Set(['click', 'type', 'press', 'eval'])
+const WRITE_TYPES = new Set(['click', 'type', 'press', 'eval', 'upload'])
 
 /** A session that has not acted for this long reads as `idle` instead of `agent`. */
 const IDLE_MS = 45_000

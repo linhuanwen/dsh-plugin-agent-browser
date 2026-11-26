@@ -5,11 +5,11 @@
  * what the panel says. All browser state lives in the panel (it owns the
  * `<webview>`), so nothing in this file caches a page.
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { basename, join } from 'node:path'
+import { basename, extname, isAbsolute, join, resolve as resolvePath, sep } from 'node:path'
 import { activationPolicy, DEFAULT_ACTIVATION } from './activation.js'
 import {
   clickClass,
@@ -665,6 +665,23 @@ function actionFailure(result, mode = 'click') {
       return new Error(
         `"${String(result?.loc ?? '')}" is not a loc. Copy the whole loc="css:…" value from the latest browser_snapshot, `
         + 'e.g. css:#save, and pass it as the loc parameter.',
+      )
+    case 'not_file_input':
+      return new Error(
+        'that element is not an <input type="file">, so there is no file picker to fill. '
+        + 'Snapshot again and point at the file input itself (a styled button usually hides it).',
+      )
+    case 'no_files':
+      return new Error('no files reached the page; pass at least one path in `files`.')
+    case 'multiple_not_allowed':
+      return new Error(
+        'that file input does not accept multiple files, so pass exactly one path in `files` '
+        + '(or upload them one at a time).',
+      )
+    case 'upload_failed':
+      return new Error(
+        `the page could not accept the files: ${String(result?.message ?? 'the browser refused the handover')}. `
+        + 'Nothing was submitted; snapshot again and retry, or ask the user to choose the file in the panel.',
       )
     default:
       return new Error(`the page refused the action: ${String(result?.error ?? 'unknown error')}`)
@@ -1333,6 +1350,323 @@ export function browserPressTool(bridge) {
     },
     presentResult() {
       return { card: 'generic', title: 'Key pressed' }
+    },
+  }
+}
+
+const UPLOAD_MAX_FILES = 5
+const UPLOAD_MAX_FILE_BYTES = 2 * 1024 * 1024
+const UPLOAD_MAX_TOTAL_BYTES = 4 * 1024 * 1024
+/** Extension → MIME. Anything unknown is `application/octet-stream`. */
+const UPLOAD_TYPES = Object.freeze({
+  '.txt': 'text/plain',
+  '.md': 'text/markdown',
+  '.log': 'text/plain',
+  '.csv': 'text/csv',
+  '.json': 'application/json',
+  '.html': 'text/html',
+  '.htm': 'text/html',
+  '.css': 'text/css',
+  '.js': 'text/javascript',
+  '.xml': 'application/xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.pdf': 'application/pdf',
+  '.zip': 'application/zip',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.mp4': 'video/mp4',
+})
+
+/** `upload_rejected` — the refusal happened before anything reached the page. */
+function uploadRejected(reason, message, details = {}) {
+  return new AgentBrowserError(
+    'upload_rejected',
+    `upload refused before anything reached the page: ${message} Nothing was sent to the page.`,
+    { details: { reason, ...details } },
+  )
+}
+
+/**
+ * Read one workspace file for upload.
+ *
+ * The bridge carries JSON, so bytes travel as base64; the page turns them back
+ * into a `File`. Every refusal is a `upload_rejected` with a `reason`: the model
+ * can fix the path instead of guessing whether something happened on the page.
+ * @param {string} realRoot - real path of the session workspace.
+ * @param {string} spec - path the model passed (relative to the workspace, or absolute).
+ * @returns {{ name: string, bytes: Uint8Array }} file name and contents.
+ */
+function readUploadFile(realRoot, spec) {
+  const target = isAbsolute(spec) ? spec : resolvePath(realRoot, spec)
+  let real = ''
+  try {
+    real = realpathSync(target)
+  } catch {
+    throw uploadRejected('not_found', `no file called ${JSON.stringify(short(spec))} under the workspace.`, { file: short(spec) })
+  }
+  // `realpath` resolves symlinks and `..`, so the prefix check below is the one
+  // that actually decides "inside the workspace": a link pointing out is refused.
+  const prefix = (realRoot.endsWith(sep) ? realRoot : realRoot + sep).toLowerCase()
+  if (real.toLowerCase().startsWith(prefix) === false) {
+    throw uploadRejected(
+      'outside_workspace',
+      `that path is outside the session workspace, and browser_upload only reads files under it.`,
+      { file: short(spec) },
+    )
+  }
+  let stat = null
+  try {
+    stat = statSync(real)
+  } catch {
+    throw uploadRejected('not_found', `the workspace file ${JSON.stringify(short(spec))} could not be read.`, { file: short(spec) })
+  }
+  if (stat.isFile() !== true) {
+    throw uploadRejected('not_a_file', `${JSON.stringify(short(spec))} is not a regular file.`, { file: short(spec) })
+  }
+  if (stat.size > UPLOAD_MAX_FILE_BYTES) {
+    throw uploadRejected(
+      'too_large',
+      `${JSON.stringify(short(spec))} is ${stat.size} bytes; one file may be at most ${UPLOAD_MAX_FILE_BYTES} bytes.`,
+      { file: short(spec), bytes: stat.size, limit: UPLOAD_MAX_FILE_BYTES },
+    )
+  }
+  let bytes = null
+  try {
+    bytes = readFileSync(real)
+  } catch {
+    throw uploadRejected('not_readable', `the workspace file ${JSON.stringify(short(spec))} could not be read.`, { file: short(spec) })
+  }
+  return { name: basename(real), bytes: bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes) }
+}
+
+/**
+ * Base64 without Node's `Buffer`.
+ *
+ * Tool bodies do not always run in a realm that exposes `Buffer` (see
+ * `sha256Hex`), and the bytes still have to cross the bridge as text.
+ * @param {Uint8Array} bytes - bytes to encode.
+ * @returns {string} base64 payload, no data-url prefix.
+ */
+export function encodeBase64(bytes) {
+  const table = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
+  let out = ''
+  for (let i = 0; i < view.length; i += 3) {
+    const a = view[i]
+    const b = i + 1 < view.length ? view[i + 1] : 0
+    const c = i + 2 < view.length ? view[i + 2] : 0
+    out += table[a >> 2]
+    out += table[((a & 0x03) << 4) | (b >> 4)]
+    out += i + 1 < view.length ? table[((b & 0x0f) << 2) | (c >> 6)] : '='
+    out += i + 2 < view.length ? table[c & 0x3f] : '='
+  }
+  return out
+}
+
+/** The MIME type a browser would infer from a filename. */
+function uploadTypeOf(name) {
+  return UPLOAD_TYPES[extname(String(name ?? '')).toLowerCase()] ?? 'application/octet-stream'
+}
+
+/**
+ * `browser_upload` — put workspace files into a page's `<input type="file">`.
+ *
+ * TICKET-047 / SPEC-004 stage B1. This is the first *irreversible* write the
+ * plugin exposes: once the bytes are in the page, a form submit can send them
+ * anywhere, so it is gated exactly like the other writes (site-level first-touch
+ * approval, class `upload`) and its failures are `upload_rejected` with a
+ * machine-readable `reason` until the moment the command is handed over.
+ * There is no native picker: the host reads the file, ships base64, and the page
+ * assembles a real `File` through `DataTransfer` — the same handover the
+ * browser's own chooser performs. That is what makes hidden/styled file inputs
+ * work, and what refuses sites that open a picker through JS.
+ * @param {import('cordis').Context} ctx - plugin context, for `workingDirectory`.
+ * @param {{ request: Function, inspect: Function, requestApproval: Function }} gate - approval seam.
+ */
+export function browserUploadTool(ctx, gate) {
+  return {
+    name: 'browser_upload',
+    description:
+      'Upload workspace files into a file input on the page (write action: the first use per site asks the user '
+      + 'in the panel). Pass exactly one of ref / loc / selector for the target — it must be an <input type="file">. '
+      + '`files` lists paths relative to the session workspace (absolute paths inside it also work): at most '
+      + '5 files, 2 MiB each, 4 MiB total. The page receives real File objects with names, sizes and MIME types, '
+      + 'and gets the same input/change events a native picker fires. It does not open a native file chooser, so '
+      + 'hidden inputs behind styled buttons work; sites that open a chooser from JS (showOpenFilePicker) are '
+      + 'refused. Refusals carry a reason and nothing is sent.',
+    parameters: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string', description: 'A ref from the latest browser_snapshot for the file input, e.g. e7.' },
+        loc: { type: 'string', description: 'A stable locator copied from a snapshot line, e.g. css:#avatar. Fails as stale_loc when the page changed.' },
+        selector: { type: 'string', description: 'A CSS selector for the file input, used when no ref fits.' },
+        strict: { type: 'boolean', description: 'With selector: false accepts the first of several matches instead of failing as multiple. Defaults to true.' },
+        files: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Workspace paths, e.g. ["tmp/report.pdf"]. At most 5 files, 2 MiB each, 4 MiB total.',
+        },
+      },
+      required: ['files'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          ...ACTION_OUTPUT.properties,
+          files: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                name: { type: 'string' },
+                size: { type: 'integer' },
+                type: { type: 'string' },
+              },
+            },
+          },
+          multiple: { type: 'boolean' },
+          url: { type: 'string' },
+        },
+        required: ['files'],
+      },
+      render(_args, value) {
+        const files = Array.isArray(value?.files) ? value.files : []
+        const listed = files
+          .map((file) => `${String(file?.name ?? 'file')} (${Number(file?.size ?? 0)} B)`)
+          .slice(0, 5)
+          .join(', ')
+        return [{
+          type: 'text',
+          text: `Uploaded ${files.length} file${files.length === 1 ? '' : 's'} into the page: ${listed}. `
+            + 'The page saw a change event; snapshot again to see what it shows now.',
+        }]
+      },
+    },
+    async execute(args, exec) {
+      const sessionId = sessionOf(exec)
+      const files = args?.files
+      if (Array.isArray(files) === false || files.length === 0) {
+        throw new Error('files must be a non-empty array of workspace file paths')
+      }
+      if (files.length > UPLOAD_MAX_FILES) {
+        throw uploadRejected(
+          'too_many_files',
+          `browser_upload takes at most ${UPLOAD_MAX_FILES} files per call.`,
+          { count: files.length, limit: UPLOAD_MAX_FILES },
+        )
+      }
+      for (const item of files) {
+        if (typeof item !== 'string' || item.trim() === '') throw new Error('each entry of files must be a non-empty path string')
+      }
+      const hasLoc = typeof args?.loc === 'string' && args.loc !== ''
+      const hasRef = typeof args?.ref === 'string' && args.ref !== ''
+      const hasSelector = typeof args?.selector === 'string' && args.selector !== ''
+      if ([hasLoc, hasRef, hasSelector].filter(Boolean).length !== 1) {
+        throw new Error('pass exactly one of ref, loc or selector: which file input to fill')
+      }
+      const address = hasLoc
+        ? { loc: args.loc }
+        : hasRef
+          ? { ref: requireRef(args.ref) }
+          : { selector: args.selector, strict: args?.strict }
+      if (typeof gate?.inspect !== 'function') {
+        throw new Error('this build cannot inspect a file input before uploading')
+      }
+      // Look at the address before reading a single byte: a stale locator or a
+      // non-file target should fail instantly, not after the approval prompt.
+      const seen = await gate.inspect(sessionId, address)
+      if (seen.addressError !== '') {
+        throw actionFailure({
+          error: seen.addressError,
+          loc: args?.loc,
+          ref: args?.ref,
+          selector: args?.selector,
+        })
+      }
+      if (seen.known === true && seen.acceptsFiles !== true) {
+        throw uploadRejected(
+          'not_file_input',
+          'that element is not an <input type="file">, so there is no picker to fill. '
+            + 'Snapshot again and point at the file input itself.',
+          { info: seen.target ?? null },
+        )
+      }
+      // A single-file input cannot take a list: refuse before the prompt, the
+      // same way a stale locator does. The page still checks again as a backstop.
+      if (files.length > 1 && seen.known === true && seen.acceptsMultiple !== true) {
+        throw uploadRejected(
+          'multiple_not_allowed',
+          `that file input takes a single file, but ${files.length} were given. `
+            + 'Pass one file, or point at an input that allows multiple files.',
+          { count: files.length },
+        )
+      }
+      const root = await workspaceOf(ctx, exec)
+      let realRoot = ''
+      try {
+        realRoot = realpathSync(root)
+      } catch {
+        throw uploadRejected('workspace_unavailable', 'the session workspace is not readable right now.', {})
+      }
+      const payload = []
+      let total = 0
+      for (const spec of files) {
+        const file = readUploadFile(realRoot, spec.trim())
+        total += file.bytes.length
+        if (total > UPLOAD_MAX_TOTAL_BYTES) {
+          throw uploadRejected(
+            'too_large',
+            `the files together exceed ${UPLOAD_MAX_TOTAL_BYTES} bytes.`,
+            { bytes: total, limit: UPLOAD_MAX_TOTAL_BYTES },
+          )
+        }
+        payload.push({
+          name: file.name,
+          type: uploadTypeOf(file.name),
+          size: file.bytes.length,
+          b64: encodeBase64(file.bytes),
+        })
+      }
+      // The first irreversible write per site: same site-level first-touch gate
+      // as every other write, with its own class so the prompt can say "upload"
+      // instead of reusing a click's wording.
+      await gate.requestApproval(sessionId, {
+        actionClass: 'upload',
+        origin: originOf(seen.url),
+        url: seen.url,
+        target: { files: payload.map(({ name, size }) => ({ name, size })), bytes: total },
+      })
+      const result = await gate.request(sessionId, 'upload', { ...address, files: payload, source: actionSource() }, 30_000)
+      if (result?.ok !== true) throw actionFailure(result, 'upload')
+      return committed({
+        files: Array.isArray(result.files)
+          ? result.files.map((file) => ({
+            name: String(file?.name ?? 'file'),
+            size: Number(file?.size) || 0,
+            type: String(file?.type ?? ''),
+          }))
+          : [],
+        multiple: result.multiple === true,
+        ...(typeof result.url === 'string' && result.url !== '' ? { url: result.url } : {}),
+      })
+    },
+    isConcurrencySafe() {
+      return false
+    },
+    presentCall(args) {
+      const count = Array.isArray(args?.files) ? args.files.length : 0
+      return { card: 'generic', title: `Upload ${count} file${count === 1 ? '' : 's'}`, kind: 'edit', rawInput: args }
+    },
+    presentResult(_args, value) {
+      const count = Array.isArray(value?.files) ? value.files.length : 0
+      return { card: 'generic', title: `Uploaded ${count} file${count === 1 ? '' : 's'}` }
     },
   }
 }
@@ -2063,6 +2397,8 @@ export function createGate(bridge, policy = {}) {
         return {
           known: false,
           isSubmit: false,
+          acceptsFiles: false,
+          acceptsMultiple: false,
           target: null,
           url: '',
           addressError: typeof seen?.error === 'string' ? seen.error : '',
@@ -2072,6 +2408,8 @@ export function createGate(bridge, policy = {}) {
       return {
         known: true,
         isSubmit: seen.isSubmit === true,
+        acceptsFiles: seen.acceptsFiles === true,
+        acceptsMultiple: seen.acceptsMultiple === true,
         target,
         url: typeof seen.url === 'string' ? seen.url : '',
         addressError: '',
@@ -2139,6 +2477,10 @@ export function createGate(bridge, policy = {}) {
     // here also keeps the pre-016 shape of a bare test bridge: one command per
     // tool call, no classification round trip.
     if (settingsOf().mode === 'off' || canAsk() === false) return
+    // `upload` confirms itself: the tool inspects the file input first and asks
+    // before it reads any bytes, then sends the files. Asking here as well would
+    // show the same prompt twice for one command.
+    if (type === 'upload') return
     if (type === 'click') {
       // A coordinate click names no element; it is treated as a read (C2), and
       // the user can see the pointer land in the panel.
@@ -2208,6 +2550,10 @@ export function createGate(bridge, policy = {}) {
       return send(sessionId, type, params, timeoutMs)
     },
     takeDigest: (sessionId) => bridge.takeDigest(sessionId),
+    // `browser_upload` has to know what it is pointing at *before* it reads a
+    // single byte (a stale locator or a non-file target must fail without a
+    // prompt), so it gets the classification round trip directly.
+    inspect: (sessionId, params) => inspect(sessionId, params),
     // `browser_download` never calls the bridge (the host fetches the file
     // itself), so it gets the permission check directly instead of via `request`.
     requestApproval: (sessionId, request) => confirmWrite(sessionId, request),
@@ -2282,12 +2628,13 @@ export function createTools(ctx, bridge, sites, policy = {}) {
     browserScreenshotTool(ctx, gate),
     browserTypeTool(gate),
     browserPressTool(gate),
+    browserUploadTool(ctx, gate),
     browserEvalTool(gate, { maxChars: limits.evalMaxChars, rules }),
     browserDownloadTool(ctx, gate, { dir: downloads.dir, maxBytes: downloads.maxBytes, rules }),
   ]
   // `exec.signal` is per call and the gate is shared, so the signal is carried in
   // async context instead of every tool parameter list. One wrapper here covers
-  // all twelve tools, which is also why no call site can forget it.
+  // all thirteen tools, which is also why no call site can forget it.
   const wrapped = tools.map((tool) => {
     const execute = tool.execute
     if (typeof execute !== 'function') return tool
@@ -2299,7 +2646,7 @@ export function createTools(ctx, bridge, sites, policy = {}) {
   // Every write tool gets `effect` on both paths (SPEC-004 B4, TICKET-042):
   // success results stamp `committed` themselves; anything thrown before the
   // command left the host is `none`; `action_unknown` already carries `unknown`.
-  const writes = new Set(['browser_click', 'browser_type', 'browser_press', 'browser_eval', 'browser_download'])
+  const writes = new Set(['browser_click', 'browser_type', 'browser_press', 'browser_upload', 'browser_eval', 'browser_download'])
   return wrapped.map((tool) => {
     if (writes.has(tool.name) === false) return tool
     const execute = tool.execute

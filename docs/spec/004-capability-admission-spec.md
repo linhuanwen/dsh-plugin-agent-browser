@@ -74,7 +74,7 @@
 
 1. **单测**：新增纯逻辑要有独立 `.test.mjs`；碰 bridge 协议要有 bridge 流测试；页面注入逻辑要能像 `detect.test.mjs` 那样用 stub DOM 跑。
 2. **真机 case**：至少一条在真实 DSH 面板上的验收记录，写进 `docs/cases/`（编号续 016 起），并注明宿主版本与插件版本。
-3. **错误码与 hint**：新失败模式要么复用既有码（1.5.4 起 17 个），要么新增码并同时更新 `plugin/errors.js`、用户 README 故障排查表、SPEC-003 的码表表述（check-docs 会校验部分）。
+3. **错误码与 hint**：新失败模式要么复用既有码（1.5.8 起 19 个：1.5.4 的 `action_unknown`、`stale_cursor`、`upload_rejected`），要么新增码并同时更新 `plugin/errors.js`、用户 README 故障排查表、SPEC-003 的码表表述（check-docs 会校验部分）。
 4. **文档三处同步**：用户 README（工具表 / 配置表 / 已知限制）、`docs/README.md` 索引、`PROGRESS.md` 的目录树与「下一步」；新增配置字段还要同步 `plugin/config.js`、`plugin/index.js`、`dist/.../README.md`（check-docs 的三处校验）。
 
 ### B4 失败语义：写动作必须能回答「未执行 / 已执行 / 未知」

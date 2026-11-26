@@ -26,28 +26,30 @@
 >
 > **TICKET-040（客户端重载后白屏）的结论与规避（2026-11-26）**：两次白屏都发生在「插件客户端/host 重载后约 1 分钟内 + 面板正在交互（确认条）」的窗口里，但四组最小实验（客户端 entry 重载、host 半重建 + 确认条、bundle 启停、重载后静置）均**未能复现**；静态勘察确认 DSH 外壳没有整页刷新、React slot 有错误边界、渲染进程异常会显示错误页而不是白屏，因此按「不可复现 + 文档化规避」收口。**使用与验收注意**：真机验收/演示前先重启一次 DSH、一次性配好插件配置；验收过程中不要改 `cordis.patch.yml`，也不要用 `plugin_manager` 启停插件 bundle；若必须改配置，等面板重挂（回 `about:blank`）后重新 `browser_open` 再继续。万一白屏，直接重启 DSH 即可恢复（会话与配置不丢）。详见 `docs/tickets/040-blank-window-on-client-reload.md`。
 >
-> 日期：2026-11-24（1.5.1 验收于 2026-11-25，1.5.2 同日晚收口，1.5.3 与 1.5.4 于 2026-11-26，1.5.5、1.5.6 与 1.5.7 于 2026-11-27）。适用对象：DSH **Desktop**，宿主实测 `0.2.2-rc.5`。上一版基线：1.4.24。
+> **1.5.8 是阶段 B 的第四个能力（TICKET-047，`browser_upload`）**：agent 第一次能往页面里上传文件。宿主先读工作区文件（`realpathSync` 后必须落在工作区根目录内；单文件 2 MiB、合计 4 MiB、最多 5 个），base64 走长轮询交给面板，页面侧用 `DataTransfer` + `File` 合成文件、赋给 `<input type=file>.files` 并派发 `input`/`change`——不走 CDP、不打开宿主原生文件选择器（决策 005）。新增第 13 个工具 `browser_upload({ref?,loc?,selector?,strict?,files})`，新增不可逆写 `actionClass:'upload'`（第一次在站点上传要确认，文案只含站点与文件名、不含工作区路径），成功结果 `effect:'committed'`，失败统一 `upload_rejected`（第 19 个错误码，`retryable:false`，带 `reason`；路径越界/缺失/超限/目标不是 file input 都在读字节与弹条之前拒绝，`effect:'none'`）。`CLIENT_REV` 53→54。真机验收期修掉三个只有装上才看得见的问题（`inspect` 丢 `acceptsFiles`、上传命令漏传 `source`、注定失败的列表先弹确认条），单测 296→**309**；真机证据见 `docs/cases/021`。
+>
+> 日期：2026-11-24（1.5.1 验收于 2026-11-25，1.5.2 同日晚收口，1.5.3 与 1.5.4 于 2026-11-26，1.5.5、1.5.6、1.5.7 与 1.5.8 于 2026-11-27）。适用对象：DSH **Desktop**，宿主实测 `0.2.2-rc.5`。上一版基线：1.4.24。
 > 相关：用户侧文档 `dist/dsh-plugin-agent-browser/README.md`；契约 `docs/spec/003-first-touch-approval-spec.md`；决策 `docs/decisions/010-first-touch-approval.md`；夹具 `docs/cases/015-first-touch-cases.md`。
 
 ## 1. 发布物
 
 | 项 | 值 |
 |---|---|
-| 包名 / 版本 | `dsh-plugin-agent-browser` @ **1.5.7**（1.5.0 + 两轮验收期修正 + TICKET-041 JS 弹窗 + TICKET-042 写动作回执三态 + TICKET-044 `browser_wait` + TICKET-045 快照 `loc=` + TICKET-046 快照 `cursor`，见开头） |（1.5.0 + 两轮验收期修正 + TICKET-041 JS 弹窗 + TICKET-042 写动作回执三态 + TICKET-044 `browser_wait` + TICKET-045 快照 `loc=`，见开头） |
-| 产物 | `dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.7.tgz`，330,413 B / 28 文件；sha256 `1EF93A55DADBF4783BD32BDCE78DE4EBC8ED935BC2554CE31964210C70613D3E`（历史 1.5.6 = 328,742 B / `1D2933C7…`、1.5.5 = 325,936 B / `F75E76AE…`、1.5.4 = 322,516 B / `A757E17C…`） |
+| 包名 / 版本 | `dsh-plugin-agent-browser` @ **1.5.8**（1.5.0 + 两轮验收期修正 + TICKET-041 JS 弹窗 + TICKET-042 写动作回执三态 + TICKET-044 `browser_wait` + TICKET-045 快照 `loc=` + TICKET-046 快照 `cursor` + TICKET-047 `browser_upload`，见开头） |
+| 产物 | `dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.8.tgz`，336,112 B / 28 文件；sha256 `9ED041CB3CEA104A46A83D1E19BF7CF94C5521915E928892563F5CB58558DD91`（历史 1.5.7 = 330,413 B / `1EF93A55…`、1.5.6 = 328,742 B / `1D2933C7…`、1.5.5 = 325,936 B / `F75E76AE…`、1.5.4 = 322,516 B / `A757E17C…`） |
 | 许可 / 元数据 | `license: MIT`、`private: false`、`engines.dsh: ">=0.2.2-rc.3 <0.3.0"`、peer+dev `@deepseek-ai/schemastery ^3.19.0` |
-| 新增源文件 | `plugin/approvals.js`（1.5.0 起，纯逻辑）；`inject/guards.js` rev 3（1.5.3 起含弹窗守卫）；`plugin/inject/wait.js`（1.5.5 起，等待探针）；`plugin/inject/snapshot.js` 的 `cssPathOf` + `plugin/inject/actions.js` 的 `resolveLoc`（1.5.6 起，快照 `loc=` 生成与嗅探）；`plugin/inject/snapshot.js` 的 `cursor` 分页与 `stamp` 指纹（1.5.7 起，快照续读） |
-| 单测 | `289 / 289` 通过（`node --test plugin/test/*.test.mjs`；`snapshot-loc.test.mjs` 3 例、`wait.test.mjs` 16 例、`effect.test.mjs` 8 例、`guards.test.mjs` 12 例、`config.test.mjs` 12 例、`approvals.test.mjs` 18 例、`gate.test.mjs` 12 例） |
-| 文档一致性 | `node tools/check-docs.mjs` 六项全绿（配置字段 21、工具 12、YAML 13 顶层字段、decisions 10、B11、file:line 12） |
+| 新增源文件 | `plugin/approvals.js`（1.5.0 起，纯逻辑）；`inject/guards.js` rev 3（1.5.3 起含弹窗守卫）；`plugin/inject/wait.js`（1.5.5 起，等待探针）；`plugin/inject/snapshot.js` 的 `cssPathOf` + `plugin/inject/actions.js` 的 `resolveLoc`（1.5.6 起，快照 `loc=` 生成与嗅探）；`plugin/inject/snapshot.js` 的 `cursor` 分页与 `stamp` 指纹（1.5.7 起，快照续读）；`inject/actions.js` 的 `isFileInput`/`base64ToBytes` 与 `upload` 分支、`plugin/tools.js` 的 `browserUploadTool`/`readUploadFile`（1.5.8 起，文件上传） |
+| 单测 | `309 / 309` 通过（`node --test plugin/test/*.test.mjs`；`upload.test.mjs` 10 例、`snapshot-cursor.test.mjs` 7 例、`snapshot-loc.test.mjs` 3 例、`wait.test.mjs` 16 例、`effect.test.mjs` 8 例、`guards.test.mjs` 12 例、`config.test.mjs` 12 例、`approvals.test.mjs` 18 例、`gate.test.mjs` 17 例） |
+| 文档一致性 | `node tools/check-docs.mjs` 六项全绿（配置字段 21、工具 13、YAML 13 顶层字段、decisions 10、B11、file:line 12） |
 
 ## 2. 安装 / 升级 / 卸载
 
 ```powershell
-plugin_manager install_bundle target="D:\...\dist\dsh-plugin-agent-browser\dsh-plugin-agent-browser-1.5.7.tgz"
+plugin_manager install_bundle target="D:\...\dist\dsh-plugin-agent-browser\dsh-plugin-agent-browser-1.5.8.tgz"
 plugin_manager list_plugins   # 目标行：include:agent-browser-panel / enabled true / fiberPhase active
 ```
 
-- 装完**刷新一次 DSH 页面**：本次 `CLIENT_REV` 48→49→50→51（弹窗结果回传、二次解码修复、`wait` 命令分发都属于客户端 bundle），不刷新看不到。
+- 装完**刷新一次 DSH 页面**：本次 `CLIENT_REV` 48→49→50→51→52→53→54（弹窗结果回传、二次解码修复、`wait` 命令分发都属于客户端 bundle），不刷新看不到。
 - **`plugin/apply.js`、`bridge.js`、`tools.js` 属于宿主半**：本机实测 1.5.1 重装后新工具代码即时生效（`browser_type` 打密码框从「弹确认条等 30 秒」变成页面侧当场硬拒）；若装完行为没变，先重启 DSH 再看。同版本重装需 `remove_bundle` 再 `install_bundle`（同版本会被「already installed」挡回）。
 - 升级保留 profile 里的 `config` 行；没写 `approvals` 的 profile 走默认值（`first-touch`，即**默认开启**）。
 - 想完全回到 1.4.x 的无声行为：`approvals.mode: 'off'`，不需要降级包。
@@ -57,9 +59,9 @@ plugin_manager list_plugins   # 目标行：include:agent-browser-panel / enable
 
 | 变化 | 1.4.24 | 1.5.0 | 影响 |
 |---|---|---|---|
-| 写动作 | 直接执行 | 默认**站点 × 会话第一次**问一次（输入 / 提交类点击/Enter / 下载 / eval） | Agent 的自主动作会多一次等待；`approvals.mode='off'` 可关 |
+| 写动作 | 直接执行 | 默认**站点 × 会话第一次**问一次（输入 / 提交类点击/Enter / 下载 / eval / 上传文件） | Agent 的自主动作会多一次等待；`approvals.mode='off'` 可关 |
 | 面板 | 只有地址栏 + 四态徽章 | 顶部多一条确认条（允许一次 / 本会话允许本站 / 拒绝，30s 倒计时，Enter=拒绝） | 面板高度多约 88px，窄面板按钮换行仍三键可见 |
-| 错误码 | 13 个 | **16 个**：新增 `approval_required`（面板不在/不可见，未下发）、`approval_timeout`（超时）、`approval_denied`（拒绝/接管） | 旧日志里的 13 码语义不变；新增三个都在 message 里带可读文案 |
+| 错误码 | 13 个 | **16 个**：新增 `approval_required`（面板不在/不可见，未下发）、`approval_timeout`（超时）、`approval_denied`（拒绝/接管）；1.5.4 起 17（`action_unknown`），1.5.7 起 18（`stale_cursor`），1.5.8 起 19（`upload_rejected`） | 旧日志里的 13 码语义不变；新增三个都在 message 里带可读文案 |
 | 验证墙 | 漏报 Cloudflare Turnstile 演示页 | 补「正在进行安全验证 / 验证您是人类 / 请稍候」等文案、`challenge-platform` iframe、打开后 2 秒内二次复检；meta refresh 秒跳页与纯静态验证页不再误报 | 判定函数 14 例单测；真站仍只回归过 nopecha 一例 |
 | 接管 | 清空队列 | 接管时把**待确认**的写动作自动判为拒绝 | 不会出现「你接管了，30 秒后动作又冒出来」 |
 | client 侧 | — | `POST /page` 上报地址、`POST /decision` 回传决定、`/pending` 响应多 `approvals` 帧 | 纯新增；旧面板（不刷新页面）不会有确认条，但也不会崩：`/decision` 不会被调用 |
@@ -67,7 +69,7 @@ plugin_manager list_plugins   # 目标行：include:agent-browser-panel / enable
 ## 4. 写动作确认怎么工作（用户视角）
 
 - **读动作从不打扰**：`open`/`snapshot`/`scroll`/`hover`/`zoom`/`screenshot`、普通链接导航。
-- **四类写动作**：输入文字、会提交表单的点击或表单内 Enter、下载、执行页面脚本。密码框仍然是**直接硬拒**，不弹确认（密码不进文案、不进日志）。
+- **五类写动作**：输入文字、会提交表单的点击或表单内 Enter、下载、执行页面脚本、上传工作区文件（`browser_upload`，文案只含站点与文件名）。密码框仍然是**直接硬拒**，不弹确认（密码不进文案、不进日志）。
 - 第一次在某站点写：面板顶部出现「{站点} 想让 agent {做什么}」，三个选择：
   - **允许一次**：只放行这一次（批准与执行是同一个请求，动作恰好发生 0 或 1 次）；
   - **本会话允许本站**：本会话内同站点不再问（切换站点重置、会话结束作废）；

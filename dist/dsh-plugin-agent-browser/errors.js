@@ -22,7 +22,7 @@
  * as `'local'` and keeps the code inside the message, where the model reads it.
  */
 
-/** @typedef {'panel_not_open'|'panel_taken_over'|'needs_human'|'bridge_timeout'|'bridge_closed'|'cancelled'|'unauthorized'|'scheme_rejected'|'eval_disabled'|'session_not_allowed'|'navigation_failed'|'download_rejected'|'budget_exceeded'|'approval_required'|'approval_timeout'|'approval_denied'|'action_unknown'|'stale_cursor'} AgentBrowserErrorCode */
+/** @typedef {'panel_not_open'|'panel_taken_over'|'needs_human'|'bridge_timeout'|'bridge_closed'|'cancelled'|'unauthorized'|'scheme_rejected'|'eval_disabled'|'session_not_allowed'|'navigation_failed'|'download_rejected'|'budget_exceeded'|'approval_required'|'approval_timeout'|'approval_denied'|'action_unknown'|'stale_cursor'|'upload_rejected'} AgentBrowserErrorCode */
 
 /**
  * The contract a caller can branch on: every code, whether trying again can
@@ -102,6 +102,10 @@ export const ERROR_CODES = {
   stale_cursor: {
     retryable: true,
     hint: 'the page changed since that cursor was issued; take a fresh browser_snapshot (without cursor) and continue from the cursor it returns.',
+  },
+  upload_rejected: {
+    retryable: false,
+    hint: 'the file was refused before anything was sent to the page (path outside the workspace, missing, too large, or the target is not a file input); see reason. Fix the argument and retry.',
   },
 }
 

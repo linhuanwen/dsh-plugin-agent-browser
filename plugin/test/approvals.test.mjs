@@ -34,7 +34,7 @@ test('the shipped stance is first-touch with a 30 second window', () => {
   assert.equal(DEFAULT_APPROVAL_MODE, 'first-touch')
   assert.equal(DEFAULT_APPROVAL_TIMEOUT_MS, 30_000)
   assert.deepEqual(APPROVAL_MODES, ['first-touch', 'off'])
-  assert.deepEqual(ACTION_CLASSES, ['type', 'submit', 'download', 'eval'])
+  assert.deepEqual(ACTION_CLASSES, ['type', 'submit', 'download', 'eval', 'upload'])
   assert.deepEqual(SUBMIT_KEYS, ['Enter', 'Return', 'NumpadEnter'])
   assert.deepEqual(normalizeApprovals(undefined), {
     mode: 'first-touch',
