@@ -22,7 +22,7 @@ import { StaticSites } from './static.js'
 import { createTools, guardsSource, snapshotSource } from './tools.js'
 
 /** Bumped whenever the host half changes, so a reload can be told apart from a cache. */
-export const HOST_REV = 36
+export const HOST_REV = 37
 
 /**
  * Fields the settings page may edit, and whether saving one reloads the plugin.
@@ -44,6 +44,8 @@ export const CONFIG_FIELDS = Object.freeze({
   sessions: 'restart',
   searchFallback: 'restart',
   static: 'restart',
+  approvals: 'restart',
+  dialogs: 'restart',
 })
 
 /**
@@ -108,6 +110,13 @@ export function snapshotConfig(config, settings) {
     sessions: { allowlist: [...(settings.sessions?.allowlist ?? [])] },
     searchFallback: { ...settings.searchFallback },
     static: { ...settings.static },
+    approvals: {
+      // `mode` stays a reader (volatile); the timeout and site list are plain data.
+      mode: readField(config?.approvals?.mode, settings.approvals?.mode),
+      timeoutMs: settings.approvals?.timeoutMs,
+      sensitiveSites: [...(settings.approvals?.sensitiveSites ?? [])],
+    },
+    dialogs: { mode: readField(config?.dialogs?.mode, settings.dialogs?.mode) },
   }
 }
 

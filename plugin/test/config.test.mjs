@@ -27,6 +27,8 @@ test('an empty row resolves to the 1.1.x behaviour', () => {
     searchFallback: { enabled: false, maxResults: 5 },
     // SPEC-003: a row without the group asks on the first write per site.
     approvals: { mode: 'first-touch', timeoutMs: 30_000, sensitiveSites: [] },
+    // TICKET-041: JS dialogs are intercepted and recorded by the guards.
+    dialogs: { mode: 'record' },
   })
   assert.deepEqual(settings.bridge, DEFAULTS.bridge)
 })
@@ -51,6 +53,13 @@ test('a partial group keeps the defaults for untouched keys', () => {
   assert.deepEqual(settings.sessions, { allowlist: [] })
   assert.deepEqual(settings.searchFallback, { enabled: false, maxResults: 5 })
   assert.deepEqual(settings.approvals, { mode: 'first-touch', timeoutMs: 30_000, sensitiveSites: [] })
+  assert.deepEqual(settings.dialogs, { mode: 'record' })
+})
+
+test('TICKET-041 group: the dialog policy can be switched to native', () => {
+  const settings = normalizeConfig({ dialogs: { mode: 'off' } })
+  assert.deepEqual(settings.dialogs, { mode: 'off' })
+  assert.throws(() => normalizeConfig({ dialogs: { mode: 'auto' } }), /dialogs\.mode/)
 })
 
 test('SPEC-003 group: the approval stance can be switched off and pinned per site', () => {

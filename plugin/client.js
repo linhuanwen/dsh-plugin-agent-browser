@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
      * The renderer caches `client.js` aggressively, and a stale half looks
      * exactly like a bug in the host half.
      */
-    const CLIENT_REV = 48
+    const CLIENT_REV = 50
     /** The panel talks to the host half over loopback; both sides carry this mark. */
     const BRIDGE_PREFIX = '/dsh-agent-browser'
     const BRIDGE_MARK = 'dsh-plugin-agent-browser/1'
@@ -531,6 +531,32 @@ window.__ModuleLoader__.load({
      */
     let guardsSourceCache = ''
 
+    /** `dialogs.mode` from the host config, fetched once (`record` / `off`). @type {string} */
+    let dialogsModeCache = ''
+
+    /** Command types that can let a page show a JS dialog (TICKET-041). */
+    const DIALOG_TYPES = new Set(['open', 'snapshot', 'click', 'type', 'press', 'eval'])
+
+    /**
+     * Read the configured dialog policy.
+     *
+     * The guards are fetched as source like every other injected file; the mode
+     * comes from the host so a user can turn native dialogs back on without a
+     * panel rebuild. Unreadable config means `record`: the safe default.
+     * @returns {Promise<'record' | 'off'>} what the guards should do.
+     */
+    async function dialogsMode() {
+      if (dialogsModeCache !== '') return dialogsModeCache === 'off' ? 'off' : 'record'
+      try {
+        const response = await callHost('/config')
+        const mode = String(response?.values?.dialogs?.mode ?? '')
+        dialogsModeCache = mode === 'off' ? 'off' : 'record'
+      } catch (error) {
+        dialogsModeCache = 'record'
+      }
+      return dialogsModeCache === 'off' ? 'off' : 'record'
+    }
+
     /** Record a control phase for one session and repaint. */
     function setPhaseLocal(sessionId, phase, since, reason = '') {
       const previous = phases.get(sessionId)
@@ -697,6 +723,15 @@ window.__ModuleLoader__.load({
           result = await guest.eval(command.params)
         } else {
           throw new Error(`unknown command type "${command.type}"`)
+        }
+        // TICKET-041: the page may have called alert/confirm/prompt while it
+        // handled this command; the guards answered conservatively and recorded
+        // it. Attach what happened so the tool card can show it.
+        if (DIALOG_TYPES.has(command.type) === true) {
+          const dialogs = await guest.readDialogs()
+          if (dialogs.length > 0) {
+            result = result !== null && typeof result === 'object' ? { ...result, dialogs } : { dialogs }
+          }
         }
         if (cancelledIds.delete(command.id)) {
           dropped()
@@ -1002,11 +1037,36 @@ window.__ModuleLoader__.load({
           }
           if (guardsSourceCache === '') return
           const driver = this.driver === 'human' ? 'human' : 'agent'
-          await this.evaluate(`(${guardsSourceCache})(${JSON.stringify(driver)})`)
+          const dialogs = await dialogsMode()
+          await this.evaluate(`(${guardsSourceCache})(${JSON.stringify(driver)}, ${JSON.stringify({ dialogs })})`)
         } catch (error) {
           // A page without listeners is the old behaviour, not a broken panel:
           // report it and retry on the next navigation.
           report('guards inject failed', { error: String(error?.message ?? error) })
+        }
+      }
+
+      /**
+       * Read and clear the JS dialogs the guards recorded (TICKET-041).
+       *
+       * Each read drains the list so the agent sees a dialog once; the guards
+       * keep the newest 20, and five are enough for a tool card.
+       * @returns {Promise<string[]>} `kind: message` lines, newest last.
+       */
+      async readDialogs() {
+        if (this.element === null || this.detached) return []
+        try {
+          // Return the array itself, not a JSON string: evaluate() already
+          // JSON-decodes string results, so stringifying here would be decoded
+          // twice and JSON.parse would then fail on the second pass.
+          const raw = await this.evaluate('(() => { const list = window.__dshDialogs ?? []; '
+            + 'window.__dshDialogs = []; return list.slice(-5) })()')
+          const list = Array.isArray(raw) ? raw : []
+          return list
+            .filter((entry) => entry !== null && typeof entry === 'object')
+            .map((entry) => `${String(entry.kind ?? 'dialog')}: ${String(entry.message ?? '')}`)
+        } catch (error) {
+          return []
         }
       }
 

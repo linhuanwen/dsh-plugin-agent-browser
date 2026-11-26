@@ -14,28 +14,30 @@
 > 3. eval 提示的站点名取自面板 `/page` 遥测，本机宿主上该上报未落地，提示写成「当前页面」。修法：eval 审批前先让页面侧 `inspect` 提供 `location.href`，origin 不依赖遥测（`/page` 保留为遥测）。
 > 同批补齐：`bridge.test.mjs` 新增 3 例（needs_human/taken_over 优先、读命令不抢相位）；`docs/cases/015` §4 记录全量真机验收。单测 241→245。
 >
-> 日期：2026-11-24（1.5.1 验收于 2026-11-25，1.5.2 同日晚收口）。适用对象：DSH **Desktop**，宿主实测 `0.2.2-rc.5`。上一版基线：1.4.24。
+> **1.5.3 是阶段 A 的第一件能力补口（TICKET-041，JS 弹窗）**：页面里的 `alert/confirm/prompt` 过去完全没处理——渲染进程会被原生弹窗冻结，所有工具一起卡到超时。现在注入守卫（`inject/guards.js` rev 3）拦截并记录它们：`alert` 返回 `undefined`、`confirm` 返回 `false`、`prompt` 返回 `null`（保守答案，不替人点确定），内容以 `blocked dialogs` 段落出现在触发它的工具结果里；下一次 `snapshot` 也会带出迟到的弹窗。新增 `dialogs.mode`（`record` 默认 / `off` 恢复原生，会冻结页面直到人点掉）。冒烟期抓到一个只会在真机出现的 bug：`Guest.readDialogs()` 把数组 `JSON.stringify` 后交给会先 JSON 解码一次的 `evaluate`，二次解析失败被静默吞掉——改成直接返回数组（`CLIENT_REV` 49→50）。真机证据在 `docs/cases/016`；`off` 模式真机对照待 TICKET-040（白屏根因）结案后补。单测 245→251。
+>
+> 日期：2026-11-24（1.5.1 验收于 2026-11-25，1.5.2 同日晚收口，1.5.3 于 2026-11-26）。适用对象：DSH **Desktop**，宿主实测 `0.2.2-rc.5`。上一版基线：1.4.24。
 > 相关：用户侧文档 `dist/dsh-plugin-agent-browser/README.md`；契约 `docs/spec/003-first-touch-approval-spec.md`；决策 `docs/decisions/010-first-touch-approval.md`；夹具 `docs/cases/015-first-touch-cases.md`。
 
 ## 1. 发布物
 
 | 项 | 值 |
 |---|---|
-| 包名 / 版本 | `dsh-plugin-agent-browser` @ **1.5.2**（1.5.0 + 两轮验收期修正，见开头） |
-| 产物 | `dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.2.tgz`，317,228 B / 27 文件；sha256 `093E706CCC19404BB2EC7710B7D816DE7F54A47F4D023950AF477E4FC3D8A787` |
+| 包名 / 版本 | `dsh-plugin-agent-browser` @ **1.5.3**（1.5.0 + 两轮验收期修正 + TICKET-041 JS 弹窗，见开头） |
+| 产物 | `dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.3.tgz`，320,316 B / 27 文件；sha256 `8F6C19AE570CADB33B791DDD86CD505F7B87A73D02FC67D58AFFEA7876E5FFAF` |
 | 许可 / 元数据 | `license: MIT`、`private: false`、`engines.dsh: ">=0.2.2-rc.3 <0.3.0"`、peer+dev `@deepseek-ai/schemastery ^3.19.0` |
-| 新增源文件 | `plugin/approvals.js`（纯逻辑，已进 `tools/pack.mjs` 的 COPY 与 `package.json` 的 `files`） |
-| 单测 | `245 / 245` 通过（`node --test plugin/test/*.test.mjs`；`gate.test.mjs` 11 例、`bridge.test.mjs` 新增 3 例审批相位、`approvals.test.mjs` 18 例） |
-| 文档一致性 | `node tools/check-docs.mjs` 六项全绿（配置字段 20、工具 11、YAML 12 顶层字段、decisions 10、B11、file:line 12） |
+| 新增源文件 | `plugin/approvals.js`（1.5.0 起，纯逻辑）；`inject/guards.js` rev 3（1.5.3 起含弹窗守卫） |
+| 单测 | `251 / 251` 通过（`node --test plugin/test/*.test.mjs`；`guards.test.mjs` 12 例、`config.test.mjs` 12 例、`approvals.test.mjs` 18 例、`gate.test.mjs` 11 例） |
+| 文档一致性 | `node tools/check-docs.mjs` 六项全绿（配置字段 21、工具 11、YAML 13 顶层字段、decisions 10、B11、file:line 12） |
 
 ## 2. 安装 / 升级 / 卸载
 
 ```powershell
-plugin_manager install_bundle target="D:\...\dist\dsh-plugin-agent-browser\dsh-plugin-agent-browser-1.5.2.tgz"
+plugin_manager install_bundle target="D:\...\dist\dsh-plugin-agent-browser\dsh-plugin-agent-browser-1.5.3.tgz"
 plugin_manager list_plugins   # 目标行：include:agent-browser-panel / enabled true / fiberPhase active
 ```
 
-- 装完**刷新一次 DSH 页面**：本次 `CLIENT_REV` 47→48（确认条属于客户端 bundle），不刷新看不到。
+- 装完**刷新一次 DSH 页面**：本次 `CLIENT_REV` 48→49→50（弹窗结果回传与二次解码修复都属于客户端 bundle），不刷新看不到。
 - **`plugin/apply.js`、`bridge.js`、`tools.js` 属于宿主半**：本机实测 1.5.1 重装后新工具代码即时生效（`browser_type` 打密码框从「弹确认条等 30 秒」变成页面侧当场硬拒）；若装完行为没变，先重启 DSH 再看。同版本重装需 `remove_bundle` 再 `install_bundle`（同版本会被「already installed」挡回）。
 - 升级保留 profile 里的 `config` 行；没写 `approvals` 的 profile 走默认值（`first-touch`，即**默认开启**）。
 - 想完全回到 1.4.x 的无声行为：`approvals.mode: 'off'`，不需要降级包。

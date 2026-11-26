@@ -82,6 +82,8 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
       mode: first-touch
       timeoutMs: 30000
       sensitiveSites: []
+    dialogs:
+      mode: record
 ```
 
 ### 完整字段表
@@ -108,6 +110,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 | `approvals.mode` | `first-touch` \| `off` | `first-touch` | 即时 | 写动作确认：`first-touch` = 读动作从不打扰、每个站点第一次写动作（输入 / 提交 / 下载 / 执行脚本）在面板里问一次；`off` = 与 1.4.x 完全一致、不问。见下文「写动作确认」 |
 | `approvals.timeoutMs` | 整数 | `30000` | 改后重载 | 面板确认条等你作答的上限（2s–120s）；超时按拒绝处理，动作不会发出 |
 | `approvals.sensitiveSites` | 字符串数组 | `[]` | 改后重载 | 每次都问的站点（主机名或 URL）；即使本会话已允许该站点也照问 |
+| `dialogs.mode` | `record` \| `off` | `record` | 改后重载 | 页面调用 `alert` / `confirm` / `prompt` 时怎么办。`record` = 拦截并保守作答（`confirm` 答 false、`prompt` 答 null），把弹窗内容列在工具结果里，页面不会卡死；`off` = 原生弹窗（会冻结页面直到人去点）。见下文「JS 弹窗」 |
 
 要点：
 
@@ -234,6 +237,15 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 - 粒度是「会话 + 站点」：换个站点重新问，会话结束作废；`approvals.sensitiveSites` 里的站点每次都问。你点「我来接管」时，未作答的确认自动按拒绝处理。
 - 想完全回到 1.4.x 的无声行为：`approvals.mode: off`。
 
+## JS 弹窗（`dialogs`，默认拦截并记录）
+
+页面里的 `alert` / `confirm` / `prompt` 会冻结渲染进程，直到有人点掉系统弹窗；Agent 在没人看的侧栏里遇到它们，所有工具就会一起挂到超时。默认行为是**拦截并记录**（TICKET-041）：
+
+- `alert` → 直接返回，页面继续跑；`confirm` → 按「否」处理；`prompt` → 按「取消」处理。这三种都是保守答案，页面不会因为 Agent 擅自同意而继续。
+- 弹窗内容会出现在随后那次操作的结果里（`blocked dialogs` 一栏），Agent 因此知道"页面问过什么、我答了什么"，而不是把它当成无事发生。
+- 这些弹窗**不会**被自动升级成写动作审批：真正的写动作（输入/提交/下载/执行脚本）仍走上面的确认条；弹窗只是被记录。
+- 想恢复原生行为（自己点弹窗）：`dialogs.mode: off`。此时页面会被弹窗冻结，直到你在面板里点掉——不建议开着它让 Agent 跑。
+
 ## 页面自动适配面板宽度
 
 默认 `fitWidth: true`：导航完成后（以及侧栏宽度变化时）面板会按页面的 `scrollWidth / innerWidth` 把缩放调到"整行排版塞得进侧栏"的值，只缩不放、下限 25%。这样 1200px 宽的桌面站在窄侧栏里不会只剩一列，截图也就能拍到完整的横向布局。
@@ -252,6 +264,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 | 工具报 `approval_required` | 写动作需要你确认，但面板没开或窗口不可见 | 点开右侧栏「浏览器」面板，让确认条出现后重试 |
 | 工具报 `approval_timeout` | 确认条 30 秒内没作答 | 重试，并在确认条上点「允许一次」或「本会话允许本站」 |
 | 工具报 `approval_denied` | 你点了拒绝，或点了「我来接管」 | 想让它做就重试并允许；不想就让它换个做法（`approvals.mode: off` 可整体关闭） |
+| 工具结果里出现 `blocked dialogs` | 页面调用了 `alert` / `confirm` / `prompt` | 正常现象：已按保守答案处理并记录，页面没有卡死。想看真实弹窗内容就把 `dialogs.mode` 设为 `off`，但那会冻结页面直到你手动点掉 |
 | 点击"没反应" / 截图超时 | DSH 窗口在后台或最小化，Chromium 不绘制也不收合成输入 | 把窗口切到前台再试（这是 Electron 行为，不是插件 bug） |
 | 截图报 `the browser panel is hidden right now…` | 面板页签不可见 | 切到面板页签再截 |
 | 打开页面报 `navigation_failed: nav_…: …ERR_…` | 网络/DNS/证书/端口被拦/页面自身错误（`nav_dns` / `nav_refused` / `nav_reset` / `nav_cert` / `nav_blocked` / `nav_timeout`…） | 失败时面板已自动回到上一页；提示 "could not go back" 才说明停在了浏览器错误页，直接 `browser_open` 一个可达地址即可。换 `web_fetch` 试一次也可以 |

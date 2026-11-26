@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>JS 弹窗夹具</title>
+  <style>
+    body { font: 15px/1.6 system-ui, sans-serif; margin: 24px; max-width: 720px; }
+    button { font-size: 15px; padding: 6px 14px; margin: 4px 8px 4px 0; }
+    #log { margin-top: 12px; padding: 10px; background: #f6f7f9; border: 1px solid #e4e6eb; border-radius: 6px; white-space: pre-wrap; }
+    .note { color: #666; }
+  </style>
+</head>
+<body>
+  <h1>JS 弹窗夹具</h1>
+  <p class="note">
+    TICKET-041 夹具：这几个按钮会调用会阻塞渲染进程的 JS 弹窗。默认
+    <code>dialogs.mode: record</code> 下，它们会被守卫拦截、按保守答案处理，
+    并出现在工具结果的 <code>blocked dialogs</code> 一栏；页面本身不会卡住。
+  </p>
+
+  <h2>alert</h2>
+  <button id="alert" type="button">弹出 alert</button>
+
+  <h2>confirm</h2>
+  <button id="confirm" type="button">弹出 confirm（记录返回了什么）</button>
+
+  <h2>prompt</h2>
+  <button id="prompt" type="button">弹出 prompt（记录返回了什么）</button>
+
+  <h2>提交表单时的 confirm</h2>
+  <form id="form">
+    <label>名字 <input id="name" name="name" type="text" placeholder="随便填" autocomplete="off"></label>
+    <button type="submit">提交（提交前 confirm）</button>
+  </form>
+
+  <h2>动作结束后才弹出的 alert</h2>
+  <p class="note">点这个按钮不会立刻弹窗，300ms 后才弹；用来验证「迟到的弹窗会出现在下一次操作的结果里」。</p>
+  <button id="later" type="button">延迟 300ms 弹出 alert</button>
+
+  <div id="log">状态：还没有动作。</div>
+  <div id="probe" style="margin-top: 12px; color: #555; font-size: 13px;">守卫探针：等待注入…</div>
+
+  <script>
+    const probe = document.getElementById('probe')
+    setInterval(() => {
+      const mode = window.__dshDialogsMode ?? '(unset)'
+      const rev = window.__dshGuardRev ?? '(unset)'
+      const count = Array.isArray(window.__dshDialogs) ? window.__dshDialogs.length : 'none'
+      const driver = window.__dshDriver ?? '(unset)'
+      probe.textContent = `守卫探针：rev=${rev} mode=${mode} driver=${driver} recorded=${count}（每 500ms 刷新）`
+    }, 500)
+
+    const log = document.getElementById('log')
+    const lines = []
+    function say(line) {
+      const mode = window.__dshDialogsMode ?? '(unset)'
+      const count = Array.isArray(window.__dshDialogs) ? window.__dshDialogs.length : 'none'
+      const rev = window.__dshGuardRev ?? '(unset)'
+      lines.push(`${line}  [mode=${mode} guardRev=${rev} recorded=${count}]`)
+      log.textContent = lines.join('\n')
+    }
+
+    document.getElementById('alert').addEventListener('click', () => {
+      window.alert('这是一条 alert：页面想告诉你一件事。')
+      say('alert 返回 undefined，页面继续执行。')
+    })
+
+    document.getElementById('confirm').addEventListener('click', () => {
+      const answer = window.confirm('确实要执行这个操作吗？')
+      say(`confirm 返回了 ${String(answer)}。`)
+    })
+
+    document.getElementById('prompt').addEventListener('click', () => {
+      const answer = window.prompt('请输入一个名字：', '默认值')
+      say(`prompt 返回了 ${answer === null ? 'null' : JSON.stringify(answer)}。`)
+    })
+
+    document.getElementById('later').addEventListener('click', () => {
+      say('稍后（300ms 后）页面会自己弹一个 alert。')
+      setTimeout(() => {
+        window.alert('这是一个迟到的 alert：点击已经返回之后才弹。')
+      }, 300)
+    })
+
+    document.getElementById('form').addEventListener('submit', (event) => {
+      event.preventDefault()
+      const name = document.getElementById('name').value
+      const answer = window.confirm(`提交「${name || '空'}」？`)
+      say(`表单提交被确认弹窗拦下：confirm 返回 ${String(answer)}；本次没有真的提交。`)
+    })
+  </script>
+</body>
+</html>

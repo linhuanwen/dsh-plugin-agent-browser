@@ -17,6 +17,7 @@
 | [001-agent-browser-plugin-spec.md](spec/001-agent-browser-plugin-spec.md) | 工具契约、状态机、快照格式、安全边界、A1–A13 验收项 |
 | [002-official-alignment-spec.md](spec/002-official-alignment-spec.md) | B1–B11 / M1–M5 / U1–U7 与版本线 1.1.0–1.4.3 的对齐 |
 | [003-first-touch-approval-spec.md](spec/003-first-touch-approval-spec.md) | 站点级首次写动作确认：C1–C12 可验收契约、判定表、桥协议、面板规格、验收与回滚（实现见 TICKET-037–039） |
+| [004-capability-admission-spec.md](spec/004-capability-admission-spec.md) | 能力准入契约与两步走：准入四问、证据四件套、写动作三态语义、阶段 A 边界收口（040–043）与阶段 B 三层扩展 |
 
 ## decisions/ —— 为什么要这样选
 
@@ -33,6 +34,7 @@
 | [013-hardening-cases.md](cases/013-hardening-cases.md) | H1–H8 加固案例（鉴权、守卫、配置面、错误契约） |
 | [014-practical-cases.md](cases/014-practical-cases.md) | S1–S6 实用案例（取表、下载、隔离、故障处置） |
 | [015-first-touch-cases.md](cases/015-first-touch-cases.md) | F1–F12 首次写动作确认夹具（读动作零打扰、首次确认、拒绝/超时/不可见、站点豁免、敏感站、off 回退、提交分类、接管作废） |
+| [016-js-dialogs-cases.md](cases/016-js-dialogs-cases.md) | JS 弹窗夹具：alert/confirm/prompt 保守拦截与记录、迟到的弹窗进入下一次结果、页面不冻结（record 模式；off 对照待 TICKET-040） |
 | [cases/shots/](cases/shots/) | 案例截图原图 |
 | [cases/outputs/](cases/outputs/) | 案例执行产物：R4/R8/S1–S6 的记录、素材与报告 |
 
@@ -42,9 +44,9 @@
 | --- | --- |
 | [2026-11-24-browser-automation-competitive-report.md](research/2026-11-24-browser-automation-competitive-report.md) | 5 个同类项目（BrowserSkill / browserpaw / browser-mcp / browser-automation / dsh-browser-cdp）的横评，与我们护城河和短板的对照，P0–P2 建议与两周清单 |
 
-## tickets/ —— 39 张工单
+## tickets/ —— 43 张工单
 
-按时间编号，每张记录一个失败模式、根因与验收证据（`034-screenshot-large-capture-hang.md` 是截图大载荷修复，`037`–`039` 是「首次写动作确认」的实现拆分：host 判定/门 → 面板确认条 → 配置与夹具）。
+按时间编号，每张记录一个失败模式、根因与验收证据（`034-screenshot-large-capture-hang.md` 是截图大载荷修复，`037`–`039` 是「首次写动作确认」的实现拆分：host 判定/门 → 面板确认条 → 配置与夹具，`040`–`043` 是「阶段 A 边界收口」：白屏根因 → JS 弹窗 → 写动作三态 → F7/F8 真机验收）。
 
 ## release/ —— 上线与发布
 

@@ -9,10 +9,10 @@
 `dsh-plugin-agent-browser` · DSH 桌面端插件
 
 <p>
-  <img alt="version 1.5.2" src="https://img.shields.io/badge/version-1.5.2-2563eb?style=flat-square" />
+  <img alt="version 1.5.3" src="https://img.shields.io/badge/version-1.5.3-2563eb?style=flat-square" />
   <img alt="DSH 0.2.2 - 0.3.0" src="https://img.shields.io/badge/DSH-0.2.2%20~%200.3.0-1d4ed8?style=flat-square" />
   <img alt="11 tools" src="https://img.shields.io/badge/tools-11-0f766e?style=flat-square" />
-  <img alt="245 tests passed" src="https://img.shields.io/badge/tests-245%20passed-16a34a?style=flat-square" />
+  <img alt="251 tests passed" src="https://img.shields.io/badge/tests-251%20passed-16a34a?style=flat-square" />
   <img alt="platform Windows and macOS" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-475569?style=flat-square" />
   <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-0284c7?style=flat-square" />
 </p>
@@ -78,7 +78,7 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 | **失败不毁现场** | 导航失败自动退回上一页，错误里带 `nav_dns` / `nav_cert` / `nav_blocked` 等具体原因；错误页上不会返回空树假成功 |
 | **过程看得见** | Web 端为截图 / 打开 / 下载各出一张工具卡片，模型调了什么、页面长什么样，一眼可查 |
 | **设置就在 DSH 里** | 装好后「设置」左侧多一页 **浏览器面板**：行为、预算、下载、搜索兜底、会话白名单、本地文件服务六组表单，改完保存即可，不用手改 YAML |
-| **工程化底座** | 动态端口 + 每进程令牌、16 个稳定错误码、取消、策略接缝、245 个单测 |
+| **工程化底座** | 动态端口 + 每进程令牌、16 个稳定错误码、取消、策略接缝、251 个单测 |
 
 ## 快速开始
 
@@ -97,7 +97,7 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 
 ```text
 plugin_manager action: install_bundle
-                target: dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.2.tgz
+                target: dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.3.tgz
 ```
 
 ### 3. 打开面板
@@ -231,10 +231,13 @@ client 半 · 侧栏 tab / 四态徽章 / 三张工具卡片 / <webview>
 | `approvals.mode` | `first-touch` | 写动作（输入、提交、下载、脚本）在同站点第一次出现时问一次；`off` 回到 1.4.x 的直接执行 |
 | `approvals.timeoutMs` | `30000` | 确认条等待时长，超时按「拒绝」处理，不执行 |
 | `approvals.sensitiveSites` | `[]` | 这些站点每次都问，即使选过「本会话允许本站」 |
+| `dialogs.mode` | `record` | 页面 `alert/confirm/prompt` 默认被拦截并记录（`confirm` 答否、`prompt` 答取消），页面不冻结；`off` 恢复原生弹窗（会冻结到人点掉） |
 
 ## 写动作确认（`approvals`，默认开启）
 
 读动作从不打扰：`open`、`snapshot`、`scroll`、`hover`、`screenshot`、普通链接近导航都直接执行。四类写动作会在一处**站点 × 会话**粒度上问一次：输入文字（type）、会提交表单的点击/Enter（submit）、下载（download）、页面脚本（eval）。确认条长在面板顶部，三个按钮「允许一次 / 本会话允许本站 / 拒绝」，Enter 等于拒绝；面板不可见时立即失败而不是干等 30 秒；你点「我来接管」的那一瞬，待确认的写动作自动作废。
+
+页面里的 JS 弹窗（`alert` / `confirm` / `prompt`）默认由注入守卫拦截并记录，不会冻结页面、也不会擅自点「确定」；内容会出现在随后那次操作的结果里（`blocked dialogs`），可用 `dialogs.mode` 切回原生行为（[`docs/tickets/041`](docs/tickets/041-js-dialogs.md)）。
 
 ## 已知限制
 
@@ -249,6 +252,7 @@ client 半 · 侧栏 tab / 四态徽章 / 三张工具卡片 / <webview>
 - **`target=_blank` 的附件是黑洞**：点了既不导航也不落盘，附件一律用 `browser_download({ url })`。
 - **取消只保证"不再等、不再下发新命令"**，已经发到页面里的动作不会撤销。
 - **整页拼接有上限**：默认 10000 CSS 像素、最多 16000 设备像素行，超了会停下并在结果里标 `truncated`。
+- **JS 弹窗只覆盖页面脚本期**：守卫在 `dom-ready` 后注入，内联脚本在解析期弹的窗、以及 `beforeunload` 的「页面留人」仍未处理（前者需 preload 探针，后者需宿主 `will-prevent-unload`）；普通 `alert/confirm/prompt` 已拦截并记录。
 
 更多已知问题与处置见[用户手册 · 故障排查](dist/dsh-plugin-agent-browser/README.md#故障排查)。
 
@@ -272,10 +276,10 @@ screenshots/    运行截图 —— 案例证据与复跑留档
 | [为什么不复用官方浏览器工具](docs/design/browser-use-contract.md) | 48 行互斥锁、MCP provider、三条路线对比 |
 | [技术规格](docs/spec/001-agent-browser-plugin-spec.md) | 工具契约、状态机、快照格式、安全边界 |
 | [官方对齐规格](docs/spec/002-official-alignment-spec.md) | B1–B11 / M1–M5 / U1–U7 与版本线 1.1.0–1.4.3 |
-| [决策记录](docs/decisions/README.md) | 9 篇：通道选型、为什么不用 CDP、动态端口与令牌…… |
-| [取证与验收](docs/cases) | 探针结果、快照引擎、接管、打包、spec 审计、四套案例集 |
-| [ticket 列表](docs/tickets) | 34 张，含失败模式与验收证据 |
-| [发布说明](docs/release/release-notes-1.4.md) | 1.4.3 产物、行为变化、未验证项、回滚 |
+| [决策记录](docs/decisions/README.md) | 10 篇：通道选型、为什么不用 CDP、动态端口与令牌、首次写动作确认…… |
+| [取证与验收](docs/cases) | 探针结果、快照引擎、接管、打包、spec 审计、五套案例集（含首写确认 F1–F12） |
+| [ticket 列表](docs/tickets) | 43 张，含失败模式与验收证据 |
+| [发布说明](docs/release/release-notes-1.5.md) | 1.5.x 产物、行为变化、未验证项、回滚 |
 | [工作区日志](PROGRESS.md) | 开发期进度、踩坑、下一步 |
 
 ## 开发
@@ -283,7 +287,7 @@ screenshots/    运行截图 —— 案例证据与复跑留档
 仓库是纯 JS，**没有构建步骤**；插件源码在 `plugin/`，发布产物在 `dist/`。
 
 ```bash
-# 单测（245 例）
+# 单测（251 例）
 node --test --test-timeout=60000 plugin/test/*.test.mjs
 
 # 打包 tgz

@@ -344,6 +344,7 @@ export function browserSnapshotTool(ctx, bridge, options = {}) {
           needs_human: { type: 'boolean' },
           hint: { type: 'string' },
           signals: { type: 'array', items: { type: 'string' } },
+          dialogs: { type: 'array', items: { type: 'string' } },
           digest: { type: 'string' },
           image: {
             type: 'object',
@@ -368,7 +369,8 @@ export function browserSnapshotTool(ctx, bridge, options = {}) {
         const warned = value?.needs_human === true
           ? `\n\nneeds_human: true — ${value?.hint ?? 'this page is asking for a human.'}`
           : ''
-        const blocks = [{ type: 'text', text: `${header}\n${value?.text ?? ''}${footer}${warned}${digestLine(String(value?.digest ?? ''))}` }]
+        const dialogs = dialogNote(value)
+        const blocks = [{ type: 'text', text: `${header}\n${value?.text ?? ''}${footer}${warned}${dialogs}${digestLine(String(value?.digest ?? ''))}` }]
         if (value?.image) blocks.push({ type: 'image', attachment: value.image })
         return blocks
       },
@@ -402,6 +404,9 @@ export function browserSnapshotTool(ctx, bridge, options = {}) {
         value.signals = Array.isArray(result.detection.signals)
           ? result.detection.signals.map((signal) => `${signal.kind}:${signal.detail}`).slice(0, 8)
           : []
+      }
+      if (Array.isArray(result?.dialogs) && result.dialogs.length > 0) {
+        value.dialogs = result.dialogs.map(String).slice(0, 5)
       }
       if (typeof result?.image === 'string' && result.image !== '') {
         const image = await saveScreenshot(ctx, result.image)
@@ -639,7 +644,30 @@ const ACTION_OUTPUT = {
     tag: { type: 'string' },
     role: { type: 'string' },
     name: { type: 'string' },
+    dialogs: { type: 'array', items: { type: 'string' } },
   },
+}
+
+/**
+ * Attach the JS dialogs a page showed while the command ran (TICKET-041).
+ *
+ * The panel's guards answer `alert`/`confirm`/`prompt` conservatively instead of
+ * freezing the renderer; the tool card lists what was blocked so the agent can
+ * tell "the page asked and I answered no" apart from "nothing happened".
+ * @param {Record<string, unknown>} value - tool value being assembled.
+ * @param {{ dialogs?: string[] }} result - raw panel result.
+ * @returns {Record<string, unknown>} `value`, plus `dialogs` when there were any.
+ */
+function withDialogs(value, result) {
+  if (Array.isArray(result?.dialogs) === false || result.dialogs.length === 0) return value
+  return { ...value, dialogs: result.dialogs.map((line) => String(line)).slice(0, 5) }
+}
+
+/** Render footer listing dialogs the guards blocked, or '' when there were none. */
+function dialogNote(value) {
+  const list = Array.isArray(value?.dialogs) ? value.dialogs : []
+  if (list.length === 0) return ''
+  return `\n\nblocked dialogs (answered conservatively; the page kept running):\n${list.map((line) => `- ${line}`).join('\n')}`
 }
 
 /**
@@ -705,7 +733,7 @@ export function browserClickTool(bridge) {
         if (typeof value?.looksDisabled === 'string' && value.looksDisabled !== '') {
           lines.push(`Heads up: its class list says "${value.looksDisabled}", which usually means the page is styling it as disabled — the click was dispatched, but the page may have ignored it. Check what changed before trusting this click.`)
         }
-        return [{ type: 'text', text: lines.join('\n') }]
+        return [{ type: 'text', text: `${lines.join('\n')}${dialogNote(value)}` }]
       },
     },
     async execute(args, exec) {
@@ -730,7 +758,7 @@ export function browserClickTool(bridge) {
         20_000,
       )
       if (result?.ok !== true) throw actionFailure(result)
-      return {
+      return withDialogs({
         ...(result.info ?? {}),
         x: result.x ?? 0,
         y: result.y ?? 0,
@@ -742,7 +770,7 @@ export function browserClickTool(bridge) {
         ...(typeof result.looksDisabled === 'string' && result.looksDisabled !== ''
           ? { looksDisabled: result.looksDisabled }
           : {}),
-      }
+      }, result)
     },
     isConcurrencySafe() {
       return false
@@ -982,7 +1010,7 @@ export function browserTypeTool(bridge) {
       render(_args, value) {
         const target = value?.role ? `${value.role} "${value.name ?? ''}"` : 'the field'
         const tail = value?.submitted === true ? ' and pressed Enter' : ''
-        return [{ type: 'text', text: `Typed ${value?.length ?? 0} characters into ${target}${tail}.` }]
+        return [{ type: 'text', text: `Typed ${value?.length ?? 0} characters into ${target}${tail}.${dialogNote(value)}` }]
       },
     },
     async execute(args, exec) {
@@ -996,7 +1024,7 @@ export function browserTypeTool(bridge) {
         20_000,
       )
       if (result?.ok !== true) throw actionFailure({ ...result, ref })
-      return { ...(result.info ?? {}), length: result.length ?? 0, submitted: result.submitted === true }
+      return withDialogs({ ...(result.info ?? {}), length: result.length ?? 0, submitted: result.submitted === true }, result)
     },
     isConcurrencySafe() {
       return false
@@ -1044,10 +1072,10 @@ export function browserPressTool(bridge) {
       },
       render(_args, value) {
         if (typeof value?.handled === 'string' && value.handled !== '') {
-          return [{ type: 'text', text: `Pressed ${value.key} — the panel performed "${value.handled}": ${value.from} → ${value.to}` }]
+          return [{ type: 'text', text: `Pressed ${value.key} — the panel performed "${value.handled}": ${value.from} → ${value.to}${dialogNote(value)}` }]
         }
         const mods = Array.isArray(value?.modifiers) && value.modifiers.length > 0 ? `${value.modifiers.join('+')}+` : ''
-        return [{ type: 'text', text: `Pressed ${mods}${value?.keyCode ?? value?.key ?? ''}.` }]
+        return [{ type: 'text', text: `Pressed ${mods}${value?.keyCode ?? value?.key ?? ''}.${dialogNote(value)}` }]
       },
     },
     async execute(args, exec) {
@@ -1065,7 +1093,7 @@ export function browserPressTool(bridge) {
         value.from = String(result.from ?? '')
         value.to = String(result.to ?? '')
       }
-      return value
+      return withDialogs(value, result)
     },
     isConcurrencySafe() {
       return false
@@ -1129,7 +1157,7 @@ export function browserEvalTool(bridge, options = {}) {
         if (value?.truncated === true) notes.push('result cut at the character budget')
         if (value?.pending === true) notes.push('the script returned a promise that was not awaited')
         const tail = notes.length > 0 ? `\n(${notes.join('; ')})` : ''
-        return [{ type: 'text', text: `${value?.result ?? ''}${tail}` }]
+        return [{ type: 'text', text: `${value?.result ?? ''}${tail}${dialogNote(value)}` }]
       },
     },
     async execute(args, exec) {
@@ -1144,11 +1172,11 @@ export function browserEvalTool(bridge, options = {}) {
         30_000,
       )
       if (result?.ok !== true) throw new Error(`the script threw: ${String(result?.error ?? 'unknown error')}`)
-      return {
+      return withDialogs({
         result: String(result.serialized ?? ''),
         truncated: result.truncated === true,
         pending: result.pending === true,
-      }
+      }, result)
     },
     isConcurrencySafe() {
       return false

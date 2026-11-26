@@ -23,12 +23,23 @@
  * `human`: the same click navigates this view instead — a person clicking a
  * link expects the page to change, not to be blocked.
  *
+ * JS dialogs (TICKET-041) are handled here too, because they share the only
+ * prerequisite the guards already have: this file runs on every document the
+ * panel loads. `alert`/`confirm`/`prompt` block the guest's renderer until a
+ * person clicks the OS dialog, which would hang every tool call; the wrapper
+ * records the dialog and answers conservatively (`confirm` → false, `prompt` →
+ * null) so the page keeps running and the agent can see what the page wanted.
+ * `dialogs: 'off'` calls the original function instead (native behaviour).
+ *
  * @param {'agent' | 'human'} driver - who is driving right now
+ * @param {{ dialogs?: 'record' | 'off' }} [options] - dialog policy
  * @returns {{ rev: number, driver: string }} what was installed
  */
-function dshGuards(driver) {
-  var REV = 2
+function dshGuards(driver, options) {
+  var REV = 3
   var NAV_TARGETS = { _self: true, _top: true, _parent: true }
+  var input = options || {}
+  if (input.dialogs === 'off' || input.dialogs === 'record') window.__dshDialogsMode = input.dialogs
 
   window.__dshGuardRev = REV
   if (driver === 'human' || driver === 'agent') window.__dshDriver = driver
@@ -43,6 +54,65 @@ function dshGuards(driver) {
       window.__dshBlocked.push(url)
     } catch (error) {
       // Recording is a courtesy; refusing the popup is the contract.
+    }
+  }
+
+  /**
+   * Record one dialog and keep the last few, newest last.
+   *
+   * The message is capped because a page can put anything in it; the host only
+   * needs enough to tell the agent what the page wanted.
+   */
+  function rememberDialog(kind, message) {
+    try {
+      if (Array.isArray(window.__dshDialogs) === false) window.__dshDialogs = []
+      window.__dshDialogs.push({
+        kind: kind,
+        message: String(message === undefined || message === null ? '' : message).slice(0, 300),
+        at: Date.now(),
+      })
+      if (window.__dshDialogs.length > 20) window.__dshDialogs.splice(0, window.__dshDialogs.length - 20)
+    } catch (error) {
+      // A page that froze the array keeps its own behaviour.
+    }
+  }
+
+  function dialogsOff() {
+    return window.__dshDialogsMode === 'off'
+  }
+
+  /**
+   * Replace the three blocking dialog functions with record-and-answer stubs.
+   *
+   * `alert` returns undefined, `confirm` returns false, `prompt` returns null:
+   * the conservative answers, so a page that asked "are you sure?" does not
+   * proceed on a guess. The originals are kept for `dialogs: 'off'`.
+   */
+  function installDialogs() {
+    if (window.__dshDialogsInstalled === true) return
+    try {
+      var nativeAlert = window.alert
+      var nativeConfirm = window.confirm
+      var nativePrompt = window.prompt
+      window.__dshDialogsInstalled = true
+      window.__dshDialogs = Array.isArray(window.__dshDialogs) ? window.__dshDialogs : []
+      window.alert = function (message) {
+        if (dialogsOff() && typeof nativeAlert === 'function') return nativeAlert.call(window, message)
+        rememberDialog('alert', message)
+        return undefined
+      }
+      window.confirm = function (message) {
+        if (dialogsOff() && typeof nativeConfirm === 'function') return nativeConfirm.call(window, message)
+        rememberDialog('confirm', message)
+        return false
+      }
+      window.prompt = function (message, defaultValue) {
+        if (dialogsOff() && typeof nativePrompt === 'function') return nativePrompt.call(window, message, defaultValue)
+        rememberDialog('prompt', message)
+        return null
+      }
+    } catch (error) {
+      // No dialog surface to patch: the page keeps the native dialogs.
     }
   }
 
@@ -85,6 +155,7 @@ function dshGuards(driver) {
     } catch (error) {
       // No capture phase: agent clicks still rewrite the target eagerly.
     }
+    installDialogs()
     // 1688's search button calls `form.submit()` directly, which fires no
     // `submit` event. Patching the method is the only way to catch that path.
     try {

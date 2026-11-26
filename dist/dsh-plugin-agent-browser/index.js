@@ -145,6 +145,16 @@ export const Config = z.object({
   })
     .default({})
     .description('Site-level first-write confirmation for actions that change the page (SPEC-003, TICKET-037/038).'),
+
+  dialogs: z.object({
+    // Restart-scoped: the guards read the mode when they are injected on each
+    // document, so the panel picks a change up on the next navigation.
+    mode: z.string()
+      .default(DEFAULTS.dialogs.mode)
+      .description('What to do with a page\'s blocking JS dialogs: record (the default — answer conservatively, list them in the tool result) or off (native dialogs, which freeze the page until a person clicks).'),
+  })
+    .default({})
+    .description('How the injected guards handle alert/confirm/prompt (TICKET-041).'),
 })
 
 /**

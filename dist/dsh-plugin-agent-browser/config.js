@@ -55,6 +55,13 @@ export const DEFAULTS = Object.freeze({
     // Extra sites that prompt on every write, on top of the per-session site grant.
     sensitiveSites: Object.freeze([]),
   }),
+  dialogs: Object.freeze({
+    // What the injected guards do with the page's blocking JS dialogs
+    // (TICKET-041): 'record' answers them conservatively and lists them in the
+    // tool result; 'off' restores the native dialogs (which freeze the guest
+    // renderer until a person clicks).
+    mode: 'record',
+  }),
   searchFallback: Object.freeze({
     // Off by default: on this host a search is billed per call, so a failed open
     // must never silently spend the operator's money (TICKET-027).
@@ -186,6 +193,9 @@ export function normalizeConfig(config = {}) {
       mode: oneOf(readField(row.approvals?.mode, DEFAULTS.approvals.mode), DEFAULTS.approvals.mode, ['first-touch', 'off'], 'approvals.mode'),
       timeoutMs: natural(row.approvals?.timeoutMs, DEFAULTS.approvals.timeoutMs, 'approvals.timeoutMs'),
       sensitiveSites: texts(row.approvals?.sensitiveSites, [...DEFAULTS.approvals.sensitiveSites], 'approvals.sensitiveSites'),
+    },
+    dialogs: {
+      mode: oneOf(readField(row.dialogs?.mode, DEFAULTS.dialogs.mode), DEFAULTS.dialogs.mode, ['record', 'off'], 'dialogs.mode'),
     },
   }
 }

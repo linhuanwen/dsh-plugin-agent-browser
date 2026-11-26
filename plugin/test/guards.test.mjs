@@ -51,13 +51,13 @@ function dom(init = {}) {
 }
 
 /** Install the guards with the stubs in place; returns the result object. */
-function install(stub, driver) {
+function install(stub, driver, options) {
   const previousDocument = globalThis.document
   const previousWindow = globalThis.window
   globalThis.document = stub.doc
   globalThis.window = stub.win
   try {
-    return dshGuards(driver)
+    return dshGuards(driver, options)
   } finally {
     globalThis.document = previousDocument
     globalThis.window = previousWindow
@@ -91,8 +91,8 @@ function withGlobals(stub, fn) {
 test('install: one set of listeners, revision stamped, driver recorded', () => {
   const stub = dom()
   const result = install(stub, 'human')
-  assert.deepEqual(result, { rev: 2, driver: 'human' })
-  assert.equal(stub.win.__dshGuardRev, 2)
+  assert.deepEqual(result, { rev: 3, driver: 'human' })
+  assert.equal(stub.win.__dshGuardRev, 3)
   assert.equal(stub.win.__dshGuardInstalled, true)
   assert.equal(stub.listeners.get('click').length, 1)
   assert.equal(stub.listeners.get('submit').length, 1)
@@ -153,3 +153,62 @@ test('human window.open: same-view navigation instead of a popup', () => {
   assert.deepEqual(stub.assigned, ['https://detail.1688.com/offer/3.html'])
   assert.deepEqual(stub.win.__dshBlocked ?? [], [])
 })
+
+test('dialogs: alert is recorded and answers undefined (the page keeps running)', () => {
+  const stub = dom()
+  install(stub, 'agent')
+  const returned = withGlobals(stub, () => stub.win.alert('saved'))
+  assert.equal(returned, undefined)
+  assert.equal(stub.win.__dshDialogs.length, 1)
+  assert.equal(stub.win.__dshDialogs[0].kind, 'alert')
+  assert.equal(stub.win.__dshDialogs[0].message, 'saved')
+})
+
+test('dialogs: confirm answers false and is recorded', () => {
+  const stub = dom()
+  install(stub, 'agent')
+  const returned = withGlobals(stub, () => stub.win.confirm('delete this?'))
+  assert.equal(returned, false)
+  assert.equal(stub.win.__dshDialogs[0].kind, 'confirm')
+  assert.equal(stub.win.__dshDialogs[0].message, 'delete this?')
+})
+
+test('dialogs: prompt answers null and is recorded', () => {
+  const stub = dom()
+  install(stub, 'agent')
+  const returned = withGlobals(stub, () => stub.win.prompt('name?', 'default'))
+  assert.equal(returned, null)
+  assert.equal(stub.win.__dshDialogs[0].kind, 'prompt')
+  assert.equal(stub.win.__dshDialogs[0].message, 'name?')
+})
+
+test('dialogs: off calls the native functions instead of recording', () => {
+  const stub = dom()
+  stub.win.alert = (message) => `native:${message}`
+  stub.win.confirm = () => true
+  stub.win.prompt = (message, defaultValue) => `${message}/${defaultValue}`
+  install(stub, 'agent', { dialogs: 'off' })
+  const results = withGlobals(stub, () => [
+    stub.win.alert('a'),
+    stub.win.confirm('b'),
+    stub.win.prompt('c', 'd'),
+  ])
+  assert.deepEqual(results, ['native:a', true, 'c/d'])
+  assert.deepEqual(stub.win.__dshDialogs, [])
+})
+
+test('dialogs: the record keeps only the last 20 entries and caps the message', () => {
+  const stub = dom()
+  install(stub, 'agent')
+  withGlobals(stub, () => {
+    for (let i = 0; i < 25; i += 1) stub.win.alert(`m${i}`)
+  })
+  assert.equal(stub.win.__dshDialogs.length, 20)
+  assert.equal(stub.win.__dshDialogs[0].message, 'm5')
+  const long = withGlobals(stub, () => {
+    stub.win.alert('x'.repeat(400))
+    return stub.win.__dshDialogs[stub.win.__dshDialogs.length - 1].message
+  })
+  assert.equal(long.length, 300)
+})
+
