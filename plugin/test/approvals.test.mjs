@@ -34,7 +34,7 @@ test('the shipped stance is first-touch with a 30 second window', () => {
   assert.equal(DEFAULT_APPROVAL_MODE, 'first-touch')
   assert.equal(DEFAULT_APPROVAL_TIMEOUT_MS, 30_000)
   assert.deepEqual(APPROVAL_MODES, ['first-touch', 'off'])
-  assert.deepEqual(ACTION_CLASSES, ['type', 'submit', 'download', 'eval', 'upload'])
+  assert.deepEqual(ACTION_CLASSES, ['type', 'submit', 'download', 'eval', 'upload', 'drag'])
   assert.deepEqual(SUBMIT_KEYS, ['Enter', 'Return', 'NumpadEnter'])
   assert.deepEqual(normalizeApprovals(undefined), {
     mode: 'first-touch',
@@ -107,6 +107,9 @@ test('every tool with a write maps to its class; the rest are reads', () => {
   assert.equal(actionClassFor('click', {}, { isSubmit: false }), null)
   assert.equal(actionClassFor('press', { key: 'Enter' }, { isSubmit: true }), 'submit')
   assert.equal(actionClassFor('press', { key: 'Tab' }, { isSubmit: true }), null)
+  // A drag cannot be classified by inspection (it may reorder, commit a slider
+  // or drop something irreversible), so it is always a write.
+  assert.equal(actionClassFor('drag'), 'drag')
   for (const read of ['open', 'snapshot', 'scroll', 'hover', 'zoom', 'screenshot']) {
     assert.equal(actionClassFor(read), null, read)
   }
@@ -127,6 +130,8 @@ test('the prompt text is one readable sentence per class', () => {
   assert.equal(summarize('submit', 'https://example.com'), '在 example.com 点击提交表单')
   assert.equal(summarize('download', 'https://example.com'), '从 example.com 下载文件')
   assert.equal(summarize('eval', 'https://example.com'), '在 example.com 执行页面脚本')
+  assert.equal(summarize('drag', 'https://example.com', { name: '音量滑块' }), '在 example.com 拖拽「音量滑块」')
+  assert.equal(summarize('drag', 'https://example.com'), '在 example.com 拖拽')
 })
 
 test('a grant is per session and per origin, and can be dropped', () => {

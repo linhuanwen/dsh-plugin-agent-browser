@@ -50,7 +50,7 @@ export const MAX_BODY_BYTES = 32 * 1024 * 1024
 export const PHASES = ['idle', 'agent', 'taken_over', 'needs_human']
 
 /** Tools that change or navigate the page; refused while a human has the wheel. */
-const INPUT_TYPES = new Set(['open', 'click', 'scroll', 'hover', 'zoom', 'screenshot', 'type', 'press', 'eval'])
+const INPUT_TYPES = new Set(['open', 'click', 'drag', 'scroll', 'hover', 'zoom', 'screenshot', 'type', 'press', 'eval'])
 
 /**
  * Tools that only look; they must never take the wheel back from the human.
@@ -73,13 +73,13 @@ const READ_TYPES = new Set(['snapshot', 'inspect', 'wait', 'tabs'])
  * `#drain()` means the panel took the command: it is now sitting in the
  * renderer's queue, possibly already executing, and a lost result (timeout,
  * cancel, takeover, shutdown) no longer justifies "nothing was sent". These are
- * the commands that back `browser_click` / `browser_type` / `browser_press` /
- * `browser_eval`; the tool layer turns the resulting `action_unknown` error into
+ * the commands that back `browser_click` / `browser_drag` / `browser_type` /
+ * `browser_press` / `browser_eval`; the tool layer turns the resulting `action_unknown` error into
  * `effect: 'unknown'` (SPEC-004 B4, TICKET-042). `open`/`snapshot`/`scroll` are
  * deliberately absent: a navigation that did not report back is re-observable
  * and is not a write against the site.
  */
-const WRITE_TYPES = new Set(['click', 'type', 'press', 'eval', 'upload'])
+const WRITE_TYPES = new Set(['click', 'drag', 'type', 'press', 'eval', 'upload'])
 
 /** A session that has not acted for this long reads as `idle` instead of `agent`. */
 const IDLE_MS = 45_000

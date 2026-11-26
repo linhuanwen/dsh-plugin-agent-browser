@@ -197,7 +197,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 
 > 如果页面底部显示"这个 profile 不能保存插件配置"，说明宿主没有给它 config editor（多见于只读或内置 profile）——此时表单只读，改配置请用 YAML。
 
-## 十四个工具
+## 十五个工具
 
 | 工具 | 作用 |
 |---|---|
@@ -206,6 +206,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 | `browser_snapshot` | 读当前页面的无障碍树（带 `[ref=eN]`；能算出稳定路径时紧跟 `[loc="css:…"]`）+ 一张截图；`includeImage:false` 可省掉截图；被字符预算截断时返回 `cursor`，带 `cursor` 再调用可续读下一段（页面变了会返回 `stale_cursor`）；页面自己打印的 console/未捕获错误也会附在末尾（最多 10 条，每次快照清空），页面自己发出的 fetch/XHR 失败同样附在末尾（最多 10 条，带状态/耗时/错误与请求总数） |
 | `browser_wait` | 等某个 CSS 选择器或页面文字出现（`gone:true` 等它消失），超时返回 `timedOut`；纯读、无需确认，异步加载先等再快照（默认等 10s，最长 15s） |
 | `browser_click` | 点某个 `ref`；ref 过期时传快照里的 `loc="css:…"`（跨快照有效），没有可用地址时传 CSS `selector`（命中测试失败会分型报告 `not_found` / `multiple` / `occluded` / `disabled`）；canvas 与跨域 iframe 才用坐标（`x`/`y`，CSS 像素）。`target=_blank` 会被改成同视图导航 |
+| `browser_drag` | 拖拽：`from` 按住一个元素，移动指针，在 `to` 松开（`from` / `to` 各传一个 `ref` / `loc` / `selector`；`to` 也可以传视口坐标 `toX`+`toY`，或相对源中心的 `dx`/`dy`）。`steps` 是中间移动步数（2–30，默认 8）。适合滑块、可排序列表、看板卡片、canvas 手柄；页面侧派发 pointer/mouse 事件序列，**原生 HTML5 drag-and-drop（`draggable="true"` 的 dragstart/drop）不覆盖**。失败分型复用 `not_found` / `multiple` / `occluded` / `disabled` / `out_of_view` |
 | `browser_scroll` | 滚动页面或某个容器（`dy` 像素 / `to:"top"|"bottom"` / `container` 选择器），或按 `ref` / `loc` / `selector` 把某个元素滚进视口（返回元素 `rect`、`visible` / `fullyVisible`）；返回位置与 `atBottom`，懒加载列表靠它触发 |
 | `browser_hover` | 把指针移到元素上但不按（`ref` / `loc` / `selector` / `x`,`y`），返回落点与 `grew`；叠卡、悬浮菜单这类"悬停才展开"的控件要先 hover 再点 |
 | `browser_zoom` | 缩放页面（25%–300%）：`factor` 绝对值 / `delta` 步进 / `reset:true` 回 100%。缩小会给页面更宽的排版视口，桌面站才塞得进窄侧栏；面板顶部的 `− 100% ＋` 是同一个开关 |
@@ -225,7 +226,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 - `你已接管（mm:ss）`——你在面板里自己动手
 - `空闲`——没人动
 
-点 **「我来接管」** 之后，Agent 的 `open/click/type/press/eval` 全部会被拒绝（`browser_snapshot` 仍然可用，它要能看见你做了什么）。点 **「交还 Agent」** 时，面板会先截一张图，把「你不在时发生了什么」压缩成一行摘要交给 Agent，它下一次快照就能读到。
+点 **「我来接管」** 之后，Agent 的 `open/click/drag/type/press/eval` 全部会被拒绝（`browser_snapshot` 仍然可用，它要能看见你做了什么）。点 **「交还 Agent」** 时，面板会先截一张图，把「你不在时发生了什么」压缩成一行摘要交给 Agent，它下一次快照就能读到。
 
 遇到 Cloudflare / reCAPTCHA 这类人机验证，插件**只检测、不绕过**：页面内会画一圈红框提示你，徽章转成「等待你处理」，你手动点完再交还。Agent 的调用会拿到 `needs_human`，它应当把控制权交给你而不是硬试。
 
@@ -234,7 +235,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 这块浏览器带着你的登录态，Agent 会在你没看的时候往里写字，所以默认姿势是：**读动作从不打扰，写动作每个站点第一次问一次**。
 
 - **不问**（读动作）：`browser_open`、`browser_snapshot`、`browser_wait`、`browser_scroll`、`browser_hover`、`browser_zoom`、`browser_screenshot`、`browser_tabs({action:"list"})`，以及点到普通链接/按钮的 `browser_click`。
-- **要问**（写动作）：`browser_type`（密码框本来就一律拒绝）、`browser_click` 命中提交类控件（`button[type=submit]`、`input[type=submit|image]`、表单里没有 `type` 的按钮）、表单内的 `browser_press` Enter、`browser_eval`、`browser_download`、`browser_upload`。
+- **要问**（写动作）：`browser_type`（密码框本来就一律拒绝）、`browser_click` 命中提交类控件（`button[type=submit]`、`input[type=submit|image]`、表单里没有 `type` 的按钮）、`browser_drag`（拖拽可能是排序/提交滑块，无法预判，一律按写动作）、表单内的 `browser_press` Enter、`browser_eval`、`browser_download`、`browser_upload`。
 - 面板顶部会弹一条黄色确认条：`Agent 想在 example.com 点击「提交」提交表单` + 倒计时 +「允许一次」「本会话允许本站」「拒绝」。**Enter = 拒绝**（反射性按键不该等于同意），快捷键 Alt+1 / Alt+2 / Alt+3。
 - 拒绝或超时（默认 30 秒）：动作**不会发出**，Agent 拿到 `approval_denied` / `approval_timeout`。面板没打开或窗口不可见：`approval_required`，Agent 应当先请你打开面板，而不是干等。
 - 粒度是「会话 + 站点」：换个站点重新问，会话结束作废；`approvals.sensitiveSites` 里的站点每次都问。你点「我来接管」时，未作答的确认自动按拒绝处理。

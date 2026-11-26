@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>页面拖拽夹具</title>
+<style>
+  body { font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; margin: 24px; color: #1f2937; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.note { color: #6b7280; margin: 0 0 18px; }
+  #stage { position: relative; height: 320px; border: 1px dashed #cbd5e1; border-radius: 10px; background: #f8fafc; }
+  #handle { position: absolute; left: 40px; top: 120px; width: 84px; height: 84px; border-radius: 12px;
+            background: #2563eb; color: #fff; display: flex; align-items: center; justify-content: center;
+            cursor: grab; user-select: none; touch-action: none; box-shadow: 0 2px 6px rgba(15, 23, 42, .2); }
+  #handle.dragging { cursor: grabbing; background: #1d4ed8; }
+  #lane { position: absolute; right: 40px; top: 96px; width: 200px; height: 132px; border-radius: 12px;
+          border: 2px solid #94a3b8; background: #eef2ff; display: flex; align-items: center; justify-content: center;
+          color: #475569; }
+  #lane.hot { border-color: #2563eb; background: #dbeafe; color: #1d4ed8; }
+  #status { margin-top: 18px; padding: 10px 12px; border-radius: 8px; background: #f1f5f9; }
+  #status strong { color: #111827; }
+</style>
+</head>
+<body>
+  <h1>页面拖拽夹具</h1>
+  <p class="note">把蓝色方块拖进虚线轨道：页面只监听 pointerdown / pointermove / pointerup。适合验证 <code>browser_drag</code> 的 loc→loc、dx/dy、toX/toY 三种落点。</p>
+  <div id="stage">
+    <div id="handle" role="button" aria-label="拖拽把手">拖我</div>
+    <div id="lane" aria-label="放置轨道">放到这里</div>
+  </div>
+  <div id="status">状态：<strong id="state">等待拖拽</strong>　次数：<strong id="count">0</strong></div>
+
+<script>
+  var stage = document.getElementById('stage')
+  var handle = document.getElementById('handle')
+  var lane = document.getElementById('lane')
+  var state = document.getElementById('state')
+  var countBox = document.getElementById('count')
+  var home = { left: 40, top: 120 }
+  var dragging = false
+  var start = null
+  var drops = 0
+
+  function reset() {
+    handle.style.left = home.left + 'px'
+    handle.style.top = home.top + 'px'
+    handle.classList.remove('dragging')
+    lane.classList.remove('hot')
+    dragging = false
+    start = null
+  }
+
+  function overLane(node) {
+    while (node) {
+      if (node === lane) return true
+      node = node.parentElement
+    }
+    return false
+  }
+
+  handle.addEventListener('pointerdown', function (event) {
+    dragging = true
+    handle.classList.add('dragging')
+    var box = handle.getBoundingClientRect()
+    start = { x: event.clientX - box.left, y: event.clientY - box.top }
+    state.textContent = '拖动中'
+    try { handle.setPointerCapture(event.pointerId) } catch (error) {}
+  })
+
+  window.addEventListener('pointermove', function (event) {
+    if (!dragging) return
+    var box = stage.getBoundingClientRect()
+    var left = Math.round(event.clientX - box.left - start.x)
+    var top = Math.round(event.clientY - box.top - start.y)
+    handle.style.left = left + 'px'
+    handle.style.top = top + 'px'
+    lane.classList.toggle('hot', overLane(document.elementFromPoint(event.clientX, event.clientY)))
+  })
+
+  window.addEventListener('pointerup', function (event) {
+    if (!dragging) return
+    var under = document.elementFromPoint(event.clientX, event.clientY)
+    if (overLane(under)) {
+      drops += 1
+      countBox.textContent = String(drops)
+      state.textContent = '已放进轨道 (' + event.clientX + ', ' + event.clientY + ')'
+    } else {
+      state.textContent = '松手在轨道外 (' + event.clientX + ', ' + event.clientY + ')'
+    }
+    reset()
+  })
+</script>
+</body>
+</html>

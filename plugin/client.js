@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
      * The renderer caches `client.js` aggressively, and a stale half looks
      * exactly like a bug in the host half.
      */
-    const CLIENT_REV = 57
+    const CLIENT_REV = 58
     /** The panel talks to the host half over loopback; both sides carry this mark. */
     const BRIDGE_PREFIX = '/dsh-agent-browser'
     const BRIDGE_MARK = 'dsh-plugin-agent-browser/1'
@@ -544,7 +544,7 @@ window.__ModuleLoader__.load({
     let dialogsModeCache = ''
 
     /** Command types that can let a page show a JS dialog (TICKET-041). */
-    const DIALOG_TYPES = new Set(['open', 'snapshot', 'wait', 'click', 'type', 'press', 'eval'])
+    const DIALOG_TYPES = new Set(['open', 'snapshot', 'wait', 'click', 'drag', 'type', 'press', 'eval'])
 
     /**
      * Read the configured dialog policy.
@@ -781,6 +781,11 @@ window.__ModuleLoader__.load({
           }
         } else if (command.type === 'click') {
           result = await guest.click(command.params)
+        } else if (command.type === 'drag') {
+          // TICKET-052: the page-side helper resolves both ends and dispatches
+          // the pointer/mouse sequence; no native input is involved, so the
+          // panel does not have to fake a held mouse button.
+          result = await guest.drag(command.params)
         } else if (command.type === 'inspect') {
           // Classification for the permission gate: read-only, no input events.
           result = await guest.act('inspect', command.params)
@@ -1732,6 +1737,13 @@ window.__ModuleLoader__.load({
           to: params?.to,
           container: params?.container,
           files: params?.files,
+          toRef: params?.toRef,
+          toLoc: params?.toLoc,
+          toSelector: params?.toSelector,
+          toX: params?.toX,
+          toY: params?.toY,
+          dx: params?.dx,
+          steps: params?.steps,
         }
         return this.evaluate(`(${source}\n)(${JSON.stringify(op)}, ${JSON.stringify(args)})`)
       }
@@ -1783,6 +1795,34 @@ window.__ModuleLoader__.load({
             ? { looksDisabled: action.looksDisabled }
             : {}),
           ...(typeof navigated === 'boolean' ? { navigated } : {}),
+        }
+      }
+
+      /**
+       * Drag from one element to another (or to a point / by an offset).
+       *
+       * The page-side helper (`inject/actions.js`, op `drag`) resolves both
+       * ends, hit-tests the source, and dispatches a pointer/mouse sequence
+       * with a frame between steps — the press-move-release a human makes.
+       * Synthetic events keep this deterministic and testable; the price is
+       * that the browser's native HTML5 drag-and-drop shuttle cannot be
+       * started this way (a documented boundary).
+       */
+      async drag(params) {
+        const action = await this.act('drag', params)
+        if (action === null || typeof action !== 'object') throw new Error('the page returned no answer')
+        if (action.ok !== true) return action
+        const from = action.from ?? { x: 0, y: 0 }
+        const to = action.to ?? from
+        report('drag', { from: `${from.x},${from.y}`, to: `${to.x},${to.y}`, steps: action.steps ?? 0 })
+        return {
+          ok: true,
+          from,
+          to,
+          info: action.info,
+          target: action.target ?? null,
+          matched: action.matched,
+          steps: action.steps,
         }
       }
 

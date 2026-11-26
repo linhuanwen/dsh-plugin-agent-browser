@@ -16,8 +16,9 @@
  */
 
 /**
- * @param {'click'|'type'|'inspect'|'scroll'} op - what to do in the page.
- * @param {object} params - `{ ref, selector, strict, text, clear, dy, to, container }`.
+ * @param {'click'|'drag'|'type'|'inspect'|'scroll'} op - what to do in the page.
+ * @param {object} params - `{ ref, selector, strict, text, clear, dy, to, container }`,
+ *   plus `{ toRef, toLoc, toSelector, toX, toY, dx, dy, steps }` for `drag`.
  * @returns {string} JSON: `{ ok: true, …}` or `{ ok: false, error, …}`.
  */
 function dshAction(op, params) {
@@ -850,6 +851,211 @@ function dshAction(op, params) {
     }
 
     return settleThen(hoverPayload)
+  }
+
+  if (op === 'drag') {
+    /**
+     * Where a box sits in the top-level viewport.
+     *
+     * A box measured inside an iframe is frame-relative, but the pointer the
+     * page sees is the panel's: the frame's own offset has to be added back.
+     */
+    function viewportPointOf(node, box, ownFrame) {
+      var point = {
+        x: Math.round(box.left + box.width / 2),
+        y: Math.round(box.top + box.height / 2),
+        width: Math.round(box.width),
+        height: Math.round(box.height),
+      }
+      if (!ownFrame) return point
+      var hostNode = document.querySelector('[data-dsh-frame="' + ownFrame + '"]')
+      if (hostNode) {
+        var hostBox = hostNode.getBoundingClientRect()
+        point.x += Math.round(hostBox.left)
+        point.y += Math.round(hostBox.top)
+      }
+      return point
+    }
+
+    /**
+     * Dispatch one pointer/mouse pair to whatever sits under (x, y).
+     *
+     * Drag libraries listen to either family (React DnD, dnd-kit and Sortable
+     * use pointer events; older widgets use mouse events), so both are sent —
+     * the same way a real input device produces both. Coordinates are viewport
+     * CSS pixels, exactly what `clientX` carries for a human.
+     */
+    function dragEvent(type, x, y, buttons, forced) {
+      var node = forced || null
+      if (!node) {
+        try {
+          node = document.elementFromPoint(x, y)
+        } catch (error) {
+          node = null
+        }
+      }
+      if (!node) node = element
+      var mouseType = type.replace(/^pointer/, 'mouse')
+      var base = {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+        view: window,
+        clientX: x,
+        clientY: y,
+        screenX: x,
+        screenY: y,
+        button: 0,
+        buttons: buttons,
+      }
+      try {
+        if (typeof window.PointerEvent === 'function') {
+          node.dispatchEvent(new window.PointerEvent(type, {
+            ...base,
+            pointerId: 1,
+            pointerType: 'mouse',
+            isPrimary: true,
+            width: 1,
+            height: 1,
+            pressure: buttons === 1 ? 0.5 : 0,
+          }))
+        }
+      } catch (error) {
+        // A page that replaced PointerEvent simply gets the mouse events.
+      }
+      try {
+        if (typeof window.MouseEvent === 'function') {
+          node.dispatchEvent(new window.MouseEvent(mouseType, base))
+        }
+      } catch (error) {
+        // Same rule as above.
+      }
+      return node
+    }
+
+    /**
+     * The press-move-release sequence itself.
+     *
+     * Every move waits a frame so a framework that re-renders between events
+     * (sortable lists do) sees the previous step before the next one arrives;
+     * events are addressed to the element under the pointer, not the source.
+     */
+    async function dragSequence(from, to, steps) {
+      var startNode = null
+      try {
+        startNode = document.elementFromPoint(from.x, from.y)
+      } catch (error) {
+        startNode = null
+      }
+      var start = startNode || element
+      dragEvent('pointerover', from.x, from.y, 0, start)
+      dragEvent('pointerdown', from.x, from.y, 1, start)
+      var last = start
+      for (var step = 1; step <= steps; step += 1) {
+        await frameWait()
+        var ratio = step / steps
+        var x = Math.round(from.x + (to.x - from.x) * ratio)
+        var y = Math.round(from.y + (to.y - from.y) * ratio)
+        last = dragEvent('pointermove', x, y, 1)
+      }
+      await frameWait()
+      dragEvent('pointerup', to.x, to.y, 0, last)
+      await frameWait()
+      return steps
+    }
+
+    async function dragPayload() {
+      var box = element.getBoundingClientRect()
+      var from = {
+        x: Math.round(box.left + box.width / 2),
+        y: Math.round(box.top + box.height / 2),
+        width: Math.round(box.width),
+        height: Math.round(box.height),
+      }
+      var now = describe(element, doc)
+      if (box.width === 0 || box.height === 0) return fail('out_of_view', who({ info: now, rect: from }))
+      if (isDisabled(element)) return fail('disabled', who({ info: now }))
+      // The press has to land on the source, so the same hit test a click uses
+      // applies; a covered handle cannot be dragged by a human either.
+      if (!frame) {
+        var picked = pickPoint(element, box)
+        if (picked.ok !== true) {
+          return fail(picked.error || 'occluded', who({ info: now, behind: picked.behind, point: from }))
+        }
+        from = picked.point
+      }
+      if (from.x < 0 || from.y < 0 || from.x > window.innerWidth || from.y > window.innerHeight) {
+        return fail('out_of_view', who({ info: now, rect: from }))
+      }
+
+      var to = null
+      var targetInfo = null
+      var targetWho = {}
+      if (typeof input.toLoc === 'string' && input.toLoc !== '') {
+        var anchored = resolveLoc(input.toLoc)
+        if (anchored.error) return fail(anchored.error, { target: true, loc: String(input.toLoc || '') })
+        var anchoredBox = anchored.element.getBoundingClientRect()
+        targetInfo = describe(anchored.element, anchored.doc)
+        targetWho = { toLoc: String(input.toLoc) }
+        if (anchoredBox.width === 0 || anchoredBox.height === 0) {
+          return fail('out_of_view', { target: true, info: targetInfo, ...targetWho })
+        }
+        to = viewportPointOf(anchored.element, anchoredBox, anchored.frame)
+      } else if (typeof input.toSelector === 'string' && input.toSelector !== '') {
+        var chosen = pickSelector(input.toSelector, input.strict)
+        if (chosen.error) {
+          return fail(chosen.error, { target: true, matched: chosen.matched, selector: chosen.selector })
+        }
+        var chosenBox = chosen.element.getBoundingClientRect()
+        targetInfo = describe(chosen.element, document)
+        targetWho = { toSelector: String(input.toSelector) }
+        if (chosenBox.width === 0 || chosenBox.height === 0) {
+          return fail('out_of_view', { target: true, info: targetInfo, ...targetWho })
+        }
+        to = viewportPointOf(chosen.element, chosenBox, '')
+      } else if (typeof input.toRef === 'string' && input.toRef !== '') {
+        var found = resolve(input.toRef)
+        if (found.error) return fail(found.error, { target: true, ref: String(input.toRef || '') })
+        var foundBox = found.element.getBoundingClientRect()
+        targetInfo = describe(found.element, found.doc)
+        targetWho = { toRef: String(input.toRef) }
+        if (foundBox.width === 0 || foundBox.height === 0) {
+          return fail('out_of_view', { target: true, info: targetInfo, ...targetWho })
+        }
+        to = viewportPointOf(found.element, foundBox, found.frame)
+      } else if (Number.isFinite(input.toX) && Number.isFinite(input.toY)) {
+        to = { x: Math.round(input.toX), y: Math.round(input.toY) }
+      } else if (Number.isFinite(input.dx) || Number.isFinite(input.dy)) {
+        // A relative drop is what a slider needs: the handle's own centre is
+        // where the press lands, so "move 80px right" is expressible without
+        // knowing the viewport coordinates from a snapshot.
+        to = {
+          x: Math.round(from.x + (Number.isFinite(input.dx) ? input.dx : 0)),
+          y: Math.round(from.y + (Number.isFinite(input.dy) ? input.dy : 0)),
+        }
+      } else {
+        return fail('no_target', who({ info: now }))
+      }
+      if (to.x < 0 || to.y < 0 || to.x > window.innerWidth || to.y > window.innerHeight) {
+        return fail('out_of_view', { target: true, point: to, ...targetWho })
+      }
+
+      var steps = Number.isFinite(input.steps) ? Math.round(input.steps) : 8
+      steps = Math.min(30, Math.max(2, steps))
+      var dispatched = await dragSequence(from, to, steps)
+      return JSON.stringify({
+        ok: true,
+        info: now,
+        from: from,
+        to: to,
+        target: targetInfo === null ? null : { info: targetInfo, point: to },
+        matched: matched,
+        steps: steps,
+        dispatched: dispatched,
+      })
+    }
+
+    return settleThen(dragPayload)
   }
 
   if (op === 'click') {

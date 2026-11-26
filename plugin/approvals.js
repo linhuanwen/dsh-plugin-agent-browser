@@ -33,7 +33,7 @@ const MIN_APPROVAL_TIMEOUT_MS = 2_000
 const MAX_APPROVAL_TIMEOUT_MS = 120_000
 
 /** The write classes a `first-touch` gate asks about. */
-export const ACTION_CLASSES = Object.freeze(['type', 'submit', 'download', 'eval', 'upload'])
+export const ACTION_CLASSES = Object.freeze(['type', 'submit', 'download', 'eval', 'upload', 'drag'])
 
 /** Keys that submit a form when the focused control is inside one. */
 export const SUBMIT_KEYS = Object.freeze(['Enter', 'Return', 'NumpadEnter'])
@@ -174,6 +174,10 @@ export function actionClassFor(tool, params = {}, target = null) {
   if (tool === 'type') return 'type'
   if (tool === 'eval') return 'eval'
   if (tool === 'download') return 'download'
+  // A drag always counts as a write: whether it reorders a list, commits a
+  // kanban card or only moves a slider, the page decides for itself, and
+  // inspection cannot tell the difference from a harmless read.
+  if (tool === 'drag') return 'drag'
   if (tool === 'click') return clickClass(target)
   if (tool === 'press') return pressClass(params?.key, target)
   return null
@@ -225,6 +229,7 @@ export function summarize(actionClass, origin, target = null) {
     const listed = names.length === 0 ? `${count} 个文件` : `${names.join('、')}${count > names.length ? ` 等 ${count} 个文件` : ''}`
     return `向 ${site} 上传 ${listed}`
   }
+  if (actionClass === 'drag') return `在 ${site} 拖拽${button}`
   return `在 ${site} 做一次写操作`
 }
 

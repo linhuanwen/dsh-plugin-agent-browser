@@ -768,6 +768,13 @@ function actionFailure(result, mode = 'click') {
     case 'bad_ref':
       return new Error(`"${ref}" is not a ref. Use a ref from the latest browser_snapshot, e.g. e12 or f1e3.`)
     case 'out_of_view':
+      if (mode === 'drag') {
+        return new Error(
+          `the ${result?.target === true ? 'drop target' : 'source'} is outside the viewport even after scrolling to it, `
+          + 'so the drag cannot be completed safely. The page may be moving the element (a sticky bar or lazy loading); '
+          + 'take a new browser_snapshot and retry. Nothing was dragged.',
+        )
+      }
       if (typeof result?.selector === 'string' && result.selector !== '') {
         return new Error(
           `selector ${JSON.stringify(result.selector)} is outside the viewport even after scrolling to it, `
@@ -798,7 +805,7 @@ function actionFailure(result, mode = 'click') {
         )
       }
       return new Error(
-        `${mode === 'hover' ? 'nothing to hover' : 'nothing to click'}: ${result?.selector ? `selector ${JSON.stringify(result.selector)}` : 'the target'} `
+        `${mode === 'hover' ? 'nothing to hover' : mode === 'drag' ? 'nothing to drag from' : 'nothing to click'}: ${result?.selector ? `selector ${JSON.stringify(result.selector)}` : 'the target'} `
         + `matched ${String(result?.matched ?? 0)} node(s) and none of them was visible. Take a new browser_snapshot `
         + 'and use a ref, or a selector you can see in the page source.',
       )
@@ -822,6 +829,12 @@ function actionFailure(result, mode = 'click') {
           + 'Move the covering element away (or expose the target), then retry — nothing was hovered.',
         )
       }
+      if (mode === 'drag') {
+        return new Error(
+          `${what} is covered by ${cover}, so the press would land on that instead. `
+          + 'Dismiss the overlay (or drag the covering element), then retry. Nothing was dragged.',
+        )
+      }
       return new Error(
         `${what} is covered by ${cover}, `
         + 'so a click would land on that instead. Dismiss the overlay (or click the covering element), then retry. '
@@ -831,7 +844,7 @@ function actionFailure(result, mode = 'click') {
     case 'disabled':
       return new Error(
         `that control is disabled${typeof result?.info?.name === 'string' && result.info.name !== '' ? ` ("${result.info.name}")` : ''}, `
-        + 'so clicking it would do nothing. Look for another control, or wait until the page enables it.',
+        + `so ${mode === 'drag' ? 'dragging it would do nothing' : 'clicking it would do nothing'}. Look for another control, or wait until the page enables it.`,
       )
     case 'bad_selector':
       return new Error(
@@ -1240,6 +1253,180 @@ export function browserClickTool(bridge) {
     },
     presentResult() {
       return { card: 'generic', title: 'Clicked' }
+    },
+  }
+}
+
+/**
+ * `browser_drag` — press one element, move the pointer, release on another.
+ *
+ * Sliders, sortable lists, kanban cards and canvas handles only respond to a
+ * real press-move-release. The page-side helper resolves both ends, hit-tests
+ * the source and dispatches a pointer/mouse sequence with a frame between
+ * steps, so framework drag libraries see the same events a human produces.
+ * @param {import('./bridge.js').Bridge} bridge - host half of the channel.
+ */
+export function browserDragTool(bridge) {
+  return {
+    name: 'browser_drag',
+    description:
+      'Drag something in the browser panel: press the `from` element, move the pointer, and release it over `to`. Use it '
+      + 'for sliders, sortable lists, kanban cards and canvas handles that only respond to a real press-move-release. '
+      + '`from` and `to` each name exactly one address — a ref from the latest browser_snapshot, a stable `loc` locator '
+      + 'from a snapshot line, or a CSS `selector`; `to` may instead be a viewport point (`toX`/`toY`) or an offset from '
+      + 'the source centre (`dx`/`dy`). `steps` sets how many moves are interpolated between press and release (2–30, '
+      + 'default 8). The page-side sequence is synthetic: framework drag libraries (React DnD, dnd-kit, SortableJS, '
+      + 'sliders, canvas handlers) are driven, the browser\'s native HTML5 drag-and-drop shuttle (draggable="true" with '
+      + 'dragstart/drop) is not. Snapshot again afterwards.',
+    parameters: {
+      type: 'object',
+      properties: {
+        from: {
+          type: 'object',
+          description: 'The element to press: exactly one of ref, loc or selector.',
+          properties: {
+            ref: { type: 'string', description: 'A ref from the latest browser_snapshot, e.g. e5.' },
+            loc: { type: 'string', description: 'A stable locator from a snapshot line, e.g. css:#slider.' },
+            selector: { type: 'string', description: 'A CSS selector for an element with no usable ref.' },
+          },
+          additionalProperties: false,
+        },
+        to: {
+          type: 'object',
+          description: 'Where to release: exactly one of ref/loc/selector, or toX+toY, or dx+dy (offset from the source centre).',
+          properties: {
+            ref: { type: 'string', description: 'A ref for the drop target.' },
+            loc: { type: 'string', description: 'A stable locator for the drop target.' },
+            selector: { type: 'string', description: 'A CSS selector for the drop target.' },
+            toX: { type: 'integer', description: 'Viewport x in CSS pixels for the release point; requires toY.' },
+            toY: { type: 'integer', description: 'Viewport y in CSS pixels for the release point; requires toX.' },
+            dx: { type: 'integer', description: 'Horizontal offset from the source centre, e.g. 80 for "move 80px right".' },
+            dy: { type: 'integer', description: 'Vertical offset from the source centre.' },
+          },
+          additionalProperties: false,
+        },
+        steps: {
+          type: 'integer',
+          description: 'How many pointer moves are interpolated between press and release (2–30, default 8). More steps help pages that sample movement.',
+        },
+      },
+      required: ['from', 'to'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          ...ACTION_OUTPUT.properties,
+          from: {
+            type: 'object',
+            properties: { x: { type: 'integer' }, y: { type: 'integer' } },
+            required: ['x', 'y'],
+          },
+          to: {
+            type: 'object',
+            properties: { x: { type: 'integer' }, y: { type: 'integer' } },
+            required: ['x', 'y'],
+          },
+          target: {
+            type: 'object',
+            properties: { name: { type: 'string' }, role: { type: 'string' }, tag: { type: 'string' } },
+          },
+          steps: { type: 'integer' },
+        },
+        required: ['from', 'to'],
+      },
+      render(_args, value) {
+        const name = typeof value?.name === 'string' && value.name !== '' ? ` "${value.name}"` : ''
+        const target = value?.role ? `${value.role}${name}` : 'the page'
+        const from = `(${value?.from?.x ?? 0}, ${value?.from?.y ?? 0})`
+        const to = `(${value?.to?.x ?? 0}, ${value?.to?.y ?? 0})`
+        const lines = [`Dragged ${target} from ${from} to ${to}.`]
+        const dropped = value?.target
+        const droppedName = dropped !== null && typeof dropped === 'object' && typeof dropped.name === 'string' && dropped.name !== ''
+          ? ` "${dropped.name}"`
+          : ''
+        if (dropped !== null && typeof dropped === 'object' && typeof dropped.role === 'string') {
+          lines.push(`Released over ${dropped.role}${droppedName}.`)
+        }
+        lines.push('A drag is a write: check what the page shows now with browser_snapshot before guessing that it took effect.')
+        return [{ type: 'text', text: `${lines.join('\n')}${dialogNote(value)}` }]
+      },
+    },
+    async execute(args, exec) {
+      const sessionId = sessionOf(exec)
+      /** Read one address object, refusing anything ambiguous. */
+      const addressOf = (value, label) => {
+        const raw = value !== null && typeof value === 'object' ? value : {}
+        const ref = typeof raw.ref === 'string' && raw.ref.trim() !== '' ? raw.ref.trim() : ''
+        const loc = typeof raw.loc === 'string' && raw.loc.trim() !== '' ? raw.loc.trim() : ''
+        const selector = typeof raw.selector === 'string' && raw.selector.trim() !== '' ? raw.selector.trim() : ''
+        if ([ref, loc, selector].filter((one) => one !== '').length > 1) {
+          throw new Error(`${label} takes exactly one of ref, loc or selector, not several: a locator is already a CSS path.`)
+        }
+        const toX = Number.isInteger(raw.toX) ? raw.toX : undefined
+        const toY = Number.isInteger(raw.toY) ? raw.toY : undefined
+        const dx = Number.isInteger(raw.dx) ? raw.dx : undefined
+        const dy = Number.isInteger(raw.dy) ? raw.dy : undefined
+        return { ref, loc, selector, toX, toY, dx, dy }
+      }
+      const from = addressOf(args?.from, 'from')
+      const to = addressOf(args?.to, 'to')
+      if (from.ref === '' && from.loc === '' && from.selector === '') {
+        throw new Error('from needs a ref, loc or selector: the press has to land on an element.')
+      }
+      const hasPoint = to.toX !== undefined || to.toY !== undefined
+      const hasDelta = to.dx !== undefined || to.dy !== undefined
+      if (hasPoint === true && (to.toX === undefined || to.toY === undefined)) {
+        throw new Error('to needs both toX and toY for a viewport point.')
+      }
+      const toCount = [to.ref, to.loc, to.selector].filter((one) => one !== '').length
+        + (hasPoint === true ? 1 : 0)
+        + (hasDelta === true ? 1 : 0)
+      if (toCount === 0) {
+        throw new Error('to needs a drop target: a ref/loc/selector, or toX+toY, or dx/dy.')
+      }
+      if (toCount > 1) {
+        throw new Error('to takes exactly one drop target: a ref/loc/selector, or toX+toY, or dx/dy.')
+      }
+      const steps = Number.isInteger(args?.steps) ? args.steps : undefined
+      const result = await bridge.request(
+        sessionId,
+        'drag',
+        {
+          ...(from.ref !== '' ? { ref: from.ref } : {}),
+          ...(from.loc !== '' ? { loc: from.loc } : {}),
+          ...(from.selector !== '' ? { selector: from.selector } : {}),
+          ...(to.ref !== '' ? { toRef: to.ref } : {}),
+          ...(to.loc !== '' ? { toLoc: to.loc } : {}),
+          ...(to.selector !== '' ? { toSelector: to.selector } : {}),
+          ...(hasPoint === true ? { toX: to.toX, toY: to.toY } : {}),
+          ...(hasDelta === true ? { dx: to.dx, dy: to.dy } : {}),
+          ...(steps === undefined ? {} : { steps }),
+          source: actionSource(),
+        },
+        20_000,
+      )
+      if (result?.ok !== true) throw actionFailure(result, 'drag')
+      return committed(withDialogs({
+        ...(result.info ?? {}),
+        from: result.from ?? { x: 0, y: 0 },
+        to: result.to ?? { x: 0, y: 0 },
+        ...(result.target !== null && typeof result.target === 'object'
+          ? { target: result.target.info ?? result.target }
+          : {}),
+        ...(Number.isInteger(result.steps) ? { steps: result.steps } : {}),
+      }, result))
+    },
+    isConcurrencySafe() {
+      return false
+    },
+    presentCall(args) {
+      const press = args?.from?.loc ?? args?.from?.selector ?? args?.from?.ref ?? 'element'
+      return { card: 'generic', title: `Drag ${press}`, kind: 'edit', rawInput: args }
+    },
+    presentResult() {
+      return { card: 'generic', title: 'Dragged' }
     },
   }
 }
@@ -2800,6 +2987,28 @@ export function createGate(bridge, policy = {}) {
       })
       return
     }
+    if (type === 'drag') {
+      // A drag is a write the page cannot classify for us: inspection sees one
+      // ordinary element, whether the page will reorder a list, commit a kanban
+      // card or only move a slider is decided later, in script. So the class is
+      // always `drag` and the first touch per site asks.
+      const where = typeof params?.loc === 'string' && params.loc !== ''
+        ? { loc: params.loc }
+        : typeof params?.ref === 'string' && params.ref !== ''
+          ? { ref: params.ref }
+          : { selector: params?.selector, strict: params?.strict }
+      const seen = await inspect(sessionId, where)
+      // Unresolvable source: the real action fails with the same precise error,
+      // so asking first would only delay a guaranteed failure.
+      if (seen.addressError !== '') return
+      await confirmWrite(sessionId, {
+        actionClass: 'drag',
+        origin: originOf(seen.url),
+        url: seen.url,
+        target: seen.target,
+      })
+      return
+    }
     if (type === 'type') {
       // A password box is hard-refused by the page itself (SPEC-003 C2), so
       // asking the user about it would promise something that can never happen.
@@ -2918,6 +3127,7 @@ export function createTools(ctx, bridge, sites, policy = {}) {
     browserTabsTool(gate),
     browserWaitTool(gate),
     browserClickTool(gate),
+    browserDragTool(gate),
     browserScrollTool(gate),
     browserHoverTool(gate),
     browserZoomTool(gate),
@@ -2930,7 +3140,7 @@ export function createTools(ctx, bridge, sites, policy = {}) {
   ]
   // `exec.signal` is per call and the gate is shared, so the signal is carried in
   // async context instead of every tool parameter list. One wrapper here covers
-  // all fourteen tools, which is also why no call site can forget it.
+  // all fifteen tools, which is also why no call site can forget it.
   const wrapped = tools.map((tool) => {
     const execute = tool.execute
     if (typeof execute !== 'function') return tool
@@ -2942,7 +3152,7 @@ export function createTools(ctx, bridge, sites, policy = {}) {
   // Every write tool gets `effect` on both paths (SPEC-004 B4, TICKET-042):
   // success results stamp `committed` themselves; anything thrown before the
   // command left the host is `none`; `action_unknown` already carries `unknown`.
-  const writes = new Set(['browser_click', 'browser_type', 'browser_press', 'browser_upload', 'browser_eval', 'browser_download'])
+  const writes = new Set(['browser_click', 'browser_drag', 'browser_type', 'browser_press', 'browser_upload', 'browser_eval', 'browser_download'])
   return wrapped.map((tool) => {
     if (writes.has(tool.name) === false) return tool
     const execute = tool.execute

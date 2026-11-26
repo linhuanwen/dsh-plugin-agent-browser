@@ -37,7 +37,7 @@
 ## 3. 术语
 
 - **读动作**：不产生页面副作用、不需要确认的动作。现有：`browser_open`（导航）、`browser_snapshot`、`browser_scroll`、`browser_hover`、`browser_zoom`、`browser_screenshot`、`browser_press` 中的非提交键。
-- **写动作**：会改变页面状态或对外产生副作用的动作。现有四类 `actionClass`：`type` / `submit` / `download` / `eval`（SPEC-003 §4 C2）。
+- **写动作**：会改变页面状态或对外产生副作用的动作。`actionClass` 由 SPEC-003 §4 C2 定义（1.5.14 起六类：`type` / `submit` / `download` / `eval` / `upload` / `drag`）。
 - **不可逆动作**：写动作中「发出后无法撤回」的子集，例如提交表单、下载落盘、`eval` 造成的服务端副作用。写 ≠ 不可逆：**键入可撤销，提交不可撤销**。
 - **准入四问**：①读还是写 ②可逆吗 ③失败能否确定「未执行」 ④人机墙/接管时能否被正确拦住（见 §4 B1）。
 - **证据四件套**：单测、至少一条真机 case、错误码与 hint、文档三处同步（见 §4 B3）。

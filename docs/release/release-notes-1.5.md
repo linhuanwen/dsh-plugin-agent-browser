@@ -36,28 +36,30 @@
 
 > **1.5.13 是阶段 B 的第八个能力（TICKET-051，页面 network 失败尾巴）**：点了按钮页面没反应的另一个大头是页面自己的请求失败——`fetch('/api/list')` 拿到 401/500、XHR 404、请求根本没发出去（`TypeError: Failed to fetch`），前端 catch 后 DOM 没有变化、console 里也常常不打印。现在 `browser_snapshot` 末尾会附上两次快照之间**页面自己发出**的 `fetch`/`XMLHttpRequest` 失败（最近 10 条，形如 `- [fetch] GET /api/list → 500, 12ms`、`- [fetch] GET http://… → failed — TypeError: Failed to fetch`），抬头 `page network (M failed of N request(s)):` 写清失败条数与请求总数（成功请求只进分母），**每次快照清空**。实现上不新增工具、不新增错误码：guards 注入 rev 4→5 包装 `fetch` 与 `XMLHttpRequest`（仍调用原实现，页面的 Promise/XHR 语义不变；`no-cors` 的 opaque 响应读不到状态，不算失败只计数），环形缓冲 40 条、只记失败、同源 URL 缩成 `path+query` 并截 200 字；面板 `readNetwork()` 读出即清空（`CLIENT_REV` 56→57）。不记录响应体/请求头/cookie/WebSocket/dom-ready 之前的请求。单测 guards 16→22 例 + 新增 `network.test.mjs` 4 例，335→**345**；真机证据见 `docs/cases/025`。
 >
-> 日期：2026-11-24（1.5.1 验收于 2026-11-25，1.5.2 同日晚收口，1.5.3 与 1.5.4 于 2026-11-26，1.5.5–1.5.10 于 2026-11-27，1.5.11 为内部构建、1.5.12 于 2026-11-27 收口，1.5.13 同日晚收口）。适用对象：DSH **Desktop**，宿主实测 `0.2.2-rc.5`。上一版基线：1.4.24。
+> **1.5.14 是阶段 B 的第九个能力（TICKET-052，`browser_drag`）**：很多页面只能用手势驱动——滑块调音量、看板卡片排序、拖选表格区域、canvas 上的把手。此前 agent 只能 `browser_click`（按下即抬，拖不动）或 eval 合成事件（写动作、还要审批）。现在新增第 15 个工具 `browser_drag({from, to, steps?})`：`from` 是页面元素地址（`ref`/`loc`/`selector` 之一），`to` 可以是另一个元素地址、视口坐标（`toX`/`toY`）或相对位移（`dx`/`dy`，相对源元素中心），`steps` 2–30 默认 8。拖拽在页面侧合成 `PointerEvent` + `MouseEvent` 序列（`pointerover` → `pointerdown` → 每步 `pointermove`(buttons=1) → `pointerup`，步间等一帧），落点由每步 `elementFromPoint` 决定，因此 React DnD / dnd-kit / SortableJS / slider 这类监听 pointer 事件的页面能真的收到手势；**原生 HTML5 drag-and-drop（`draggable="true"` 的 dragstart/drop）与 OS 文件拖拽不在 v1 覆盖范围**。拖拽是写动作：新增第六类 `actionClass: 'drag'`（无法从 inspect 判断是否提交/改状态，因此一律首次触站必问，文案只含站点与源元素可读名、不含坐标），`bridge.js` 的 `INPUT_TYPES`/`WRITE_TYPES` 同步收编（人工相位拒绝、超时/接管按 `action_unknown` 处理）。失败在派发前就定「没执行」：源/落点不存在或失效复用 `not_found`/`multiple`/`stale_loc`/`bad_ref`、被挡 `occluded`、越界 `out_of_view`、源禁用 `disabled`；无新增错误码（仍 21）。`CLIENT_REV` 57→58，工具 14→15。单测 `actions.test.mjs` 45 例（含 8 例页面侧拖拽）+ 新增 `drag.test.mjs` 7 例，345→**360**；真机证据见 `docs/cases/026`。
+>
+> 日期：2026-11-24（1.5.1 验收于 2026-11-25，1.5.2 同日晚收口，1.5.3 与 1.5.4 于 2026-11-26，1.5.5–1.5.10 于 2026-11-27，1.5.11 为内部构建、1.5.12 于 2026-11-27 收口，1.5.13 同日晚收口，1.5.14 紧接其后收口）。适用对象：DSH **Desktop**，宿主实测 `0.2.2-rc.5`。上一版基线：1.4.24。
 > 相关：用户侧文档 `dist/dsh-plugin-agent-browser/README.md`；契约 `docs/spec/003-first-touch-approval-spec.md`；决策 `docs/decisions/010-first-touch-approval.md`；夹具 `docs/cases/015-first-touch-cases.md`。
 
 ## 1. 发布物
 
 | 项 | 值 |
 |---|---|
-| 包名 / 版本 | `dsh-plugin-agent-browser` @ **1.5.13**（1.5.0 + 两轮验收期修正 + TICKET-041 JS 弹窗 + TICKET-042 写动作回执三态 + TICKET-044 `browser_wait` + TICKET-045 快照 `loc=` + TICKET-046 快照 `cursor` + TICKET-047 `browser_upload` + TICKET-048 `browser_scroll` 寻址滚动 + TICKET-049 页面 console 尾巴 + TICKET-050 面板标签页（tabs） + TICKET-051 页面 network 失败尾巴，见开头；1.5.11 为内部构建、未发布） |
-| 产物 | `dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.13.tgz`，348,861 B / 28 文件；sha256 `1ADC4DFF24A33080372FD6078CC708724F4B235200CC53B89AFBCC270C1AB12B`（历史 1.5.12 = 346,051 B / `4BAD7FA1…`、1.5.10 = 339,454 B / `0E1E4FFE…`、1.5.9 = 337,820 B / `707FC466…`、1.5.8 = 336,112 B / `9ED041CB…`、1.5.7 = 330,413 B / `1EF93A55…`、1.5.6 = 328,742 B / `1D2933C7…`、1.5.5 = 325,936 B / `F75E76AE…`、1.5.4 = 322,516 B / `A757E17C…`） |
+| 包名 / 版本 | `dsh-plugin-agent-browser` @ **1.5.14**（1.5.0 + 两轮验收期修正 + TICKET-041 JS 弹窗 + TICKET-042 写动作回执三态 + TICKET-044 `browser_wait` + TICKET-045 快照 `loc=` + TICKET-046 快照 `cursor` + TICKET-047 `browser_upload` + TICKET-048 `browser_scroll` 寻址滚动 + TICKET-049 页面 console 尾巴 + TICKET-050 面板标签页（tabs） + TICKET-051 页面 network 失败尾巴 + TICKET-052 拖拽 `browser_drag`，见开头；1.5.11 为内部构建、未发布） |
+| 产物 | `dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.14.tgz`，353,275 B / 28 文件；sha256 `285eaf9f546d1a202429f073ad2ee1eecbb0898cc25dd04840148e9084d1851f`（历史 1.5.13 = 348,861 B / `1ADC4DFF…`、1.5.12 = 346,051 B / `4BAD7FA1…`、1.5.10 = 339,454 B / `0E1E4FFE…`、1.5.9 = 337,820 B / `707FC466…`、1.5.8 = 336,112 B / `9ED041CB…`、1.5.7 = 330,413 B / `1EF93A55…`、1.5.6 = 328,742 B / `1D2933C7…`、1.5.5 = 325,936 B / `F75E76AE…`、1.5.4 = 322,516 B / `A757E17C…`） |
 | 许可 / 元数据 | `license: MIT`、`private: false`、`engines.dsh: ">=0.2.2-rc.3 <0.3.0"`、peer+dev `@deepseek-ai/schemastery ^3.19.0` |
-| 新增源文件 | `plugin/approvals.js`（1.5.0 起，纯逻辑）；`inject/guards.js` rev 3（1.5.3 起含弹窗守卫）；`plugin/inject/wait.js`（1.5.5 起，等待探针）；`plugin/inject/snapshot.js` 的 `cssPathOf` + `plugin/inject/actions.js` 的 `resolveLoc`（1.5.6 起，快照 `loc=` 生成与嗅探）；`plugin/inject/snapshot.js` 的 `cursor` 分页与 `stamp` 指纹（1.5.7 起，快照续读）；`inject/actions.js` 的 `isFileInput`/`base64ToBytes` 与 `upload` 分支、`plugin/tools.js` 的 `browserUploadTool`/`readUploadFile`（1.5.8 起，文件上传）；`plugin/client.js` 的 `TabStore`/`runTabCommand` 与 `plugin/tools.js` 的 `browserTabsTool`（1.5.12 起，面板标签页）；`plugin/inject/guards.js` rev 5 的 `fetch`/XHR 包装、`plugin/client.js` 的 `Guest.readNetwork` 与 `plugin/tools.js` 的 `networkNote`（1.5.13 起，页面 network 失败尾巴） |
-| 单测 | `345 / 345` 通过（`node --test plugin/test/*.test.mjs`；`network.test.mjs` 4 例、`tabs.test.mjs` 8 例、`console.test.mjs` 4 例、`scroll.test.mjs` 8 例、`upload.test.mjs` 10 例、`snapshot-cursor.test.mjs` 7 例、`snapshot-loc.test.mjs` 3 例、`wait.test.mjs` 16 例、`effect.test.mjs` 8 例、`guards.test.mjs` 22 例、`config.test.mjs` 12 例、`approvals.test.mjs` 18 例、`gate.test.mjs` 17 例） |
-| 文档一致性 | `node tools/check-docs.mjs` 六项全绿（配置字段 21、工具 14、YAML 13 顶层字段、decisions 10、B11、file:line 12） |
+| 新增源文件 | `plugin/approvals.js`（1.5.0 起，纯逻辑）；`inject/guards.js` rev 3（1.5.3 起含弹窗守卫）；`plugin/inject/wait.js`（1.5.5 起，等待探针）；`plugin/inject/snapshot.js` 的 `cssPathOf` + `plugin/inject/actions.js` 的 `resolveLoc`（1.5.6 起，快照 `loc=` 生成与嗅探）；`plugin/inject/snapshot.js` 的 `cursor` 分页与 `stamp` 指纹（1.5.7 起，快照续读）；`inject/actions.js` 的 `isFileInput`/`base64ToBytes` 与 `upload` 分支、`plugin/tools.js` 的 `browserUploadTool`/`readUploadFile`（1.5.8 起，文件上传）；`plugin/client.js` 的 `TabStore`/`runTabCommand` 与 `plugin/tools.js` 的 `browserTabsTool`（1.5.12 起，面板标签页）；`plugin/inject/guards.js` rev 5 的 `fetch`/XHR 包装、`plugin/client.js` 的 `Guest.readNetwork` 与 `plugin/tools.js` 的 `networkNote`（1.5.13 起，页面 network 失败尾巴）；`plugin/inject/actions.js` 的 `drag` 分支（`dragEvent`/`dragSequence`/`dragPayload`）、`plugin/client.js` 的 `Guest.drag` 与 `plugin/tools.js` 的 `browserDragTool`（1.5.14 起，拖拽） |
+| 单测 | `360 / 360` 通过（`node --test plugin/test/*.test.mjs`；`actions.test.mjs` 45 例（含 8 例拖拽）、`drag.test.mjs` 7 例、`network.test.mjs` 4 例、`tabs.test.mjs` 8 例、`console.test.mjs` 4 例、`scroll.test.mjs` 8 例、`upload.test.mjs` 10 例、`snapshot-cursor.test.mjs` 7 例、`snapshot-loc.test.mjs` 3 例、`wait.test.mjs` 16 例、`effect.test.mjs` 8 例、`guards.test.mjs` 22 例、`config.test.mjs` 12 例、`approvals.test.mjs` 18 例、`gate.test.mjs` 17 例） |
+| 文档一致性 | `node tools/check-docs.mjs` 六项全绿（配置字段 21、工具 15、YAML 13 顶层字段、decisions 10、B11、file:line 12） |
 
 ## 2. 安装 / 升级 / 卸载
 
 ```powershell
-plugin_manager install_bundle target="D:\...\dist\dsh-plugin-agent-browser\dsh-plugin-agent-browser-1.5.13.tgz"
+plugin_manager install_bundle target="D:\...\dist\dsh-plugin-agent-browser\dsh-plugin-agent-browser-1.5.14.tgz"
 plugin_manager list_plugins   # 目标行：include:agent-browser-panel / enabled true / fiberPhase active
 ```
 
-- 装完**刷新一次 DSH 页面**：本次 `CLIENT_REV` 48→…→57（弹窗结果回传、二次解码修复、`wait` 命令分发、`cursor`/`console`/`network` 读取、标签页都属于客户端 bundle），不刷新看不到。
+- 装完**刷新一次 DSH 页面**：本次 `CLIENT_REV` 48→…→58（弹窗结果回传、二次解码修复、`wait` 命令分发、`cursor`/`console`/`network` 读取、标签页与拖拽命令都属于客户端 bundle），不刷新看不到。
 - **客户端 bundle 有缓存**：同版本重装、或只 touch 安装目录里的 `client.js`，web shell 会复用已执行过的 factory，面板重挂但跑的还是旧代码。装完若标签条没出现/标题还是旧的，**完整重启一次 DSH**（本轮验收即如此，1.5.12 首次安装后面板一度整轮无响应，重启恢复）。
 - **`plugin/apply.js`、`bridge.js`、`tools.js` 属于宿主半**：本机实测 1.5.1 重装后新工具代码即时生效（`browser_type` 打密码框从「弹确认条等 30 秒」变成页面侧当场硬拒）；若装完行为没变，先重启 DSH 再看。同版本重装需 `remove_bundle` 再 `install_bundle`（同版本会被「already installed」挡回）。
 - 升级保留 profile 里的 `config` 行；没写 `approvals` 的 profile 走默认值（`first-touch`，即**默认开启**）。
@@ -68,9 +70,9 @@ plugin_manager list_plugins   # 目标行：include:agent-browser-panel / enable
 
 | 变化 | 1.4.24 | 1.5.0 | 影响 |
 |---|---|---|---|
-| 写动作 | 直接执行 | 默认**站点 × 会话第一次**问一次（输入 / 提交类点击/Enter / 下载 / eval / 上传文件） | Agent 的自主动作会多一次等待；`approvals.mode='off'` 可关 |
+| 写动作 | 直接执行 | 默认**站点 × 会话第一次**问一次（输入 / 提交类点击/Enter / 下载 / eval / 上传文件 / 拖拽） | Agent 的自主动作会多一次等待；`approvals.mode='off'` 可关 |
 | 面板 | 只有地址栏 + 四态徽章 | 顶部多一条确认条（允许一次 / 本会话允许本站 / 拒绝，30s 倒计时，Enter=拒绝）；1.5.12 起再加一条标签条（最多 6 个标签，标题/切换/关闭/新建，关最后一个先建空白） | 面板高度多约 88px；标签页让列表/详情、填一半的表单、A/B 两页可以同时活着 |
-| 错误码 | 13 个 | **16 个**：新增 `approval_required`（面板不在/不可见，未下发）、`approval_timeout`（超时）、`approval_denied`（拒绝/接管）；1.5.4 起 17（`action_unknown`），1.5.7 起 18（`stale_cursor`），1.5.8 起 19（`upload_rejected`），1.5.12 起 21（`tab_not_found`、`tab_limit`） | 旧日志里的 13 码语义不变；新增三个都在 message 里带可读文案 |
+| 错误码 | 13 个 | **16 个**：新增 `approval_required`（面板不在/不可见，未下发）、`approval_timeout`（超时）、`approval_denied`（拒绝/接管）；1.5.4 起 17（`action_unknown`），1.5.7 起 18（`stale_cursor`），1.5.8 起 19（`upload_rejected`），1.5.12 起 21（`tab_not_found`、`tab_limit`）；1.5.14 仍 21（拖拽复用 `not_found`/`multiple`/`occluded`/`disabled`/`out_of_view`） | 旧日志里的 13 码语义不变；新增三个都在 message 里带可读文案 |
 | 验证墙 | 漏报 Cloudflare Turnstile 演示页 | 补「正在进行安全验证 / 验证您是人类 / 请稍候」等文案、`challenge-platform` iframe、打开后 2 秒内二次复检；meta refresh 秒跳页与纯静态验证页不再误报 | 判定函数 14 例单测；真站仍只回归过 nopecha 一例 |
 | 接管 | 清空队列 | 接管时把**待确认**的写动作自动判为拒绝 | 不会出现「你接管了，30 秒后动作又冒出来」 |
 | client 侧 | — | `POST /page` 上报地址、`POST /decision` 回传决定、`/pending` 响应多 `approvals` 帧 | 纯新增；旧面板（不刷新页面）不会有确认条，但也不会崩：`/decision` 不会被调用 |
@@ -78,7 +80,7 @@ plugin_manager list_plugins   # 目标行：include:agent-browser-panel / enable
 ## 4. 写动作确认怎么工作（用户视角）
 
 - **读动作从不打扰**：`open`/`snapshot`/`scroll`/`hover`/`zoom`/`screenshot`、`browser_tabs({action:"list"})`、普通链接导航。
-- **五类写动作**：输入文字、会提交表单的点击或表单内 Enter、下载、执行页面脚本、上传工作区文件（`browser_upload`，文案只含站点与文件名）。密码框仍然是**直接硬拒**，不弹确认（密码不进文案、不进日志）。
+- **六类写动作**：输入文字、会提交表单的点击或表单内 Enter、下载、执行页面脚本、上传工作区文件（`browser_upload`，文案只含站点与文件名）、拖拽（`browser_drag`，文案只含站点与源元素可读名；拖拽无法预判是否改状态，一律按写动作首次触站必问）。密码框仍然是**直接硬拒**，不弹确认（密码不进文案、不进日志）。
 - 第一次在某站点写：面板顶部出现「{站点} 想让 agent {做什么}」，三个选择：
   - **允许一次**：只放行这一次（批准与执行是同一个请求，动作恰好发生 0 或 1 次）；
   - **本会话允许本站**：本会话内同站点不再问（切换站点重置、会话结束作废）；
@@ -95,6 +97,7 @@ plugin_manager list_plugins   # 目标行：include:agent-browser-panel / enable
 - **F7/F8 已于 2026-11-26 真机验收通过（1.5.4）**：F7（`sensitiveSites` 每次必问）——同一 origin 第一次「允许一次」成功后，第二次写动作仍弹条，拒绝后未写入；F8（`mode:'off'` 逐字回退）——type/eval/提交点击全部直接执行，无确认条、无 `approval_*` 错误码。验收走「改配置 → 完全重启 DSH → 一次性验完」的安全路径（不热重载、不启停 bundle），证据见 `docs/cases/015` §5 与 `docs/tickets/043`。仍在契约层锁住的有：`plugin/test/config.test.mjs`、`plugin/test/approvals.test.mjs`、`plugin/test/gate.test.mjs`。U1 窗口隐藏时 `visibilityState` 的真实取值已由 F5 间接证实（面板不可见时 `<1s` 返回 `approval_required`）；U2（提交判定对 `form.submit()`/`requestSubmit()`/`fetch` 的覆盖）与 U4（30s 默认值）仍待更多真机样本。
 - **面板 `/page` 遥测在本机宿主未落地**：不影响判定（写动作的 origin 来自页面侧 `inspect`），只影响遥测与未来的提示文案；已记入 TICKET-037 的后续项。
 - **标签页的已知边界**：面板重建（切 session / 插件重载 / 重启 DSH）后标签不恢复；页面 `window.open` 不自动建标签；缩放按 session 共享；上限 6 个（`tab_limit`）；真机只验收了夹具页，真实登录站点的多标签行为未逐站取样。
+- **拖拽的边界**：只覆盖页面脚本（pointer/mouse 事件族）实现的拖拽；原生 HTML5 drag-and-drop（`draggable="true"` 的 dragstart/drop）与 OS 文件拖拽不覆盖；`from` 必须是页面元素地址（不能从空白坐标起拖）；轨迹是线性插值（`steps` 2–30），没有多段路径/曲线；跨域 iframe 的指针事件受既有 frame 规则限制。
 - **network 尾巴的边界**：只覆盖 guards 注入之后页面自己发出的 `fetch`/XHR；不记录响应体、请求头、cookie、Service Worker 内部请求、WebSocket/EventSource 帧，也不记录 dom-ready 之前的请求；成功的请求只进分母、不出现在尾巴里。
 - **真实验证墙**只回归过 `nopecha.com/demo/cloudflare` 一页（needs_human → eval 被拒 → 人工过墙后恢复，均通过）；其他厂商墙未取样。
 

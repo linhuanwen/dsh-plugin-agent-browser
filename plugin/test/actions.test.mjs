@@ -44,6 +44,11 @@ function element(init = {}) {
     getBoundingClientRect: () => rect,
     scrollIntoView: () => {},
     closest: init.closest ?? (() => null),
+    events: init.events ?? [],
+    dispatchEvent: (event) => {
+      if (Array.isArray(init.events)) init.events.push({ type: event.type, ...(event.init ?? {}) })
+      return true
+    },
   }
 }
 
@@ -80,6 +85,14 @@ function dom(init = {}) {
     open: () => null,
     location: init.location ?? { assign: () => {} },
     requestAnimationFrame: (fn) => { fn(); return 1 },
+  }
+  // The drag sequence constructs these two families; the stub records the init
+  // dictionary so a test can assert on coordinates and button state.
+  win.PointerEvent = class {
+    constructor(type, init = {}) { this.type = type; this.init = init }
+  }
+  win.MouseEvent = class {
+    constructor(type, init = {}) { this.type = type; this.init = init }
   }
   return { doc, win, listeners }
 }
@@ -512,4 +525,121 @@ test('loc: an explicit bad ref is still refused before anything else', async () 
   const result = await run('click', { ref: 'not-a-ref' }, stub)
   assert.equal(result.ok, false)
   assert.equal(result.error, 'bad_ref')
+})
+
+// --- dragging (TICKET-052) ---------------------------------------------------
+// A drag is a press on one element, moves addressed to whatever sits under the
+// pointer, and a release over the drop target. These tests pin the two point
+// calculations (element centres, relative offsets), the dispatched event
+// sequence, and the refusals that must happen before any event is fired.
+
+/** Whether (x, y) falls inside a plain rect. */
+function inRect(rect, x, y) {
+  return x >= rect.left && x <= rect.left + rect.width && y >= rect.top && y <= rect.top + rect.height
+}
+
+/** A stub with a draggable handle and a drop lane; both receive events. */
+function dragStub(options = {}) {
+  const handleEvents = []
+  const laneEvents = []
+  const handle = element({
+    tagName: 'DIV',
+    text: 'handle',
+    attrs: { id: 'handle' },
+    rect: options.handleRect ?? { left: 100, top: 100, width: 20, height: 20 },
+    events: handleEvents,
+    disabled: options.disabled === true,
+  })
+  const lane = element({
+    tagName: 'DIV',
+    text: 'lane',
+    attrs: { id: 'lane' },
+    rect: options.laneRect ?? { left: 300, top: 100, width: 100, height: 60 },
+    events: laneEvents,
+  })
+  const banner = element({ tagName: 'DIV', text: 'banner' })
+  const stub = dom({
+    find: (selector) => {
+      if (selector === '#handle' || selector === '[data-dsh-ref="e1"]') return handle
+      if (selector === '#lane') return lane
+      return null
+    },
+    pointAt: (x, y) => {
+      if (options.occluded === true) return banner
+      if (inRect(handle.getBoundingClientRect(), x, y)) return handle
+      if (inRect(lane.getBoundingClientRect(), x, y)) return lane
+      return null
+    },
+  })
+  return { stub, handle, lane, handleEvents, laneEvents }
+}
+
+test('drag: a loc-to-loc drag presses the handle and releases over the lane', async () => {
+  const { stub, handle, lane, handleEvents, laneEvents } = dragStub()
+  const result = await run('drag', { loc: 'css:#handle', toLoc: 'css:#lane', steps: 3 }, stub)
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.deepEqual(result.from, { x: 110, y: 110, width: 20, height: 20 })
+  assert.deepEqual(result.to, { x: 350, y: 130, width: 100, height: 60 })
+  assert.equal(result.steps, 3)
+  assert.equal(result.dispatched, 3)
+  assert.equal(result.target.info.name, 'lane')
+  assert.deepEqual(handleEvents.slice(0, 4).map((event) => event.type), ['pointerover', 'mouseover', 'pointerdown', 'mousedown'])
+  const moves = [...handleEvents, ...laneEvents].filter((event) => event.type === 'pointermove' && event.buttons === 1)
+  assert.equal(moves.length, 3, 'one move per step, with the button held')
+  assert.deepEqual(laneEvents.slice(-2).map((event) => event.type), ['pointerup', 'mouseup'])
+  assert.equal(laneEvents.at(-1).buttons, 0, 'the release is not reported as a press')
+})
+
+test('drag: dx/dy move relative to the source centre (a slider by 80px)', async () => {
+  const { stub } = dragStub()
+  const result = await run('drag', { ref: 'e1', dx: 80, dy: -40, steps: 2 }, stub)
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.deepEqual(result.to, { x: 190, y: 70 })
+})
+
+test('drag: a target may be expressed as a viewport point', async () => {
+  const { stub } = dragStub()
+  const result = await run('drag', { loc: 'css:#handle', toX: 400, toY: 300, steps: 2 }, stub)
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.deepEqual(result.to, { x: 400, y: 300 })
+  assert.equal(result.target, null)
+})
+
+test('drag: steps are clamped into 2..30', async () => {
+  const many = await run('drag', { loc: 'css:#handle', toLoc: 'css:#lane', steps: 99 }, dragStub().stub)
+  assert.equal(many.steps, 30)
+  const few = await run('drag', { loc: 'css:#handle', toLoc: 'css:#lane', steps: 1 }, dragStub().stub)
+  assert.equal(few.steps, 2)
+})
+
+test('drag: a release point outside the viewport is out_of_view, target:true', async () => {
+  const { stub } = dragStub()
+  const result = await run('drag', { loc: 'css:#handle', toX: 2000, toY: 100 }, stub)
+  assert.equal(result.ok, false)
+  assert.equal(result.error, 'out_of_view')
+  assert.equal(result.target, true)
+})
+
+test('drag: a disabled handle is refused before any event is dispatched', async () => {
+  const { stub, handleEvents } = dragStub({ disabled: true })
+  const result = await run('drag', { loc: 'css:#handle', toLoc: 'css:#lane' }, stub)
+  assert.equal(result.ok, false)
+  assert.equal(result.error, 'disabled')
+  assert.equal(handleEvents.length, 0)
+})
+
+test('drag: a covered handle is occluded, never a silent drag on the banner', async () => {
+  const { stub, handleEvents } = dragStub({ occluded: true })
+  const result = await run('drag', { loc: 'css:#handle', toLoc: 'css:#lane' }, stub)
+  assert.equal(result.ok, false)
+  assert.equal(result.error, 'occluded')
+  assert.equal(handleEvents.length, 0)
+})
+
+test('drag: a zero-size drop target is out_of_view with target:true', async () => {
+  const { stub } = dragStub({ laneRect: { left: 300, top: 100, width: 0, height: 0 } })
+  const result = await run('drag', { loc: 'css:#handle', toLoc: 'css:#lane' }, stub)
+  assert.equal(result.ok, false)
+  assert.equal(result.error, 'out_of_view')
+  assert.equal(result.target, true)
 })

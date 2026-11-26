@@ -45,8 +45,8 @@
 | 词 | 含义 |
 |---|---|
 | 读动作 | 不改变站点状态、不提交数据的工具调用：`open`/`snapshot`/`scroll`/`hover`/`zoom`/`screenshot`，普通链接点击，非提交类按键 |
-| 写动作 | 可能改变站点或带出数据的调用：`type`（非密码）、提交类点击、表单内 Enter、`download`、`eval`、`upload` |
-| `actionClass` | 写动作的五类之一：`type` / `submit` / `download` / `eval` / `upload` |
+| 写动作 | 可能改变站点或带出数据的调用：`type`（非密码）、提交类点击、表单内 Enter、`download`、`eval`、`upload`、`drag`（拖拽，1.5.14 起） |
+| `actionClass` | 写动作的六类之一：`type` / `submit` / `download` / `eval` / `upload` / `drag` |
 | `origin` | `scheme://host:port`；grant 的粒度单位 |
 | grant | host 进程内存里的一次性授权记录 `{ id, fingerprint, origin, actionClass, scope: 'once' \| 'site', expiresAt }` |
 | 指纹 | `origin + actionClass + target（ref/selector 解析结果）`；**不含**输入值（隐私），也不含时间 |
@@ -75,6 +75,7 @@
 | `browser_download` | `download` | 确认发生在宿主 fetch 之前 |
 | `browser_eval` | `eval` | `evalEnabled: false` 时仍是 `eval_disabled`（优先于确认） |
 | `browser_upload` | `upload` | 确认发生在读取文件与下发动作之前；路径必须在工作区内，限额见用户手册 |
+| `browser_drag` | `drag` | 拖拽无法从 inspect 判断是否改状态，一律按写动作首次触站必问；文案只含站点与源元素可读名，不含坐标 |
 | `browser_open` / `snapshot` / `scroll` / `hover` / `zoom` / `screenshot` | 读 | — |
 
 页面侧只负责**标记**（提交目标、表单归属），是否确认由 host 判定（§5）。页面标记不可信，只作为补充信号（§8）。
