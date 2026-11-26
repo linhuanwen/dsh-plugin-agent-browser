@@ -226,6 +226,69 @@ function dshSnapshot(options) {
     return out
   }
 
+  /**
+   * A short CSS path to an element, or '' when no unique path is worth printing.
+   *
+   * Refs renumber on every snapshot, so a model that takes two snapshots in a
+   * row cannot use the ref from the first one. This path survives renumbering
+   * and structural re-renders of sibling nodes. It is verified against the very
+   * element it was built for: a path that lands somewhere else is worse than no
+   * path at all, because the action tools would act on the wrong node.
+   *
+   * Anchors are tried nearest-first (`#id`, `[data-testid]`, `tag[name]`), then
+   * `tag:nth-of-type(n)` hops up to the body. Anything longer than the caller's
+   * budget is dropped rather than truncated — a partial selector would either
+   * match nothing or match the wrong node.
+   */
+  function cssPathOf(el, doc) {
+    var parts = []
+    var node = el
+    for (var depth = 0; node && node.nodeType === 1 && depth < 12; depth += 1) {
+      var tag = node.tagName.toLowerCase()
+      var anchor = ''
+      var id = node.getAttribute('id')
+      if (id && /^[A-Za-z][\w.:-]*$/.test(id)) anchor = '#' + id
+      if (!anchor) {
+        var testId = node.getAttribute('data-testid')
+        if (testId && /^[\w.:-]+$/.test(testId)) anchor = '[data-testid="' + testId + '"]'
+      }
+      if (!anchor && (tag === 'input' || tag === 'select' || tag === 'textarea' || tag === 'button' || tag === 'form')) {
+        var name = node.getAttribute('name')
+        if (name) anchor = tag + '[name="' + String(name).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"]'
+      }
+      if (anchor !== '') {
+        var path = anchor + (parts.length === 0 ? '' : ' > ' + parts.join(' > '))
+        var hit = null
+        try {
+          hit = doc.querySelector(path)
+        } catch (error) {
+          hit = null
+        }
+        if (hit === node) return path
+      }
+      var parent = node.parentElement
+      if (!parent) {
+        parts.unshift(tag)
+        break
+      }
+      var index = 1
+      var kids = parent.children
+      for (var i = 0; i < kids.length; i += 1) {
+        if (kids[i] === node) break
+        if (kids[i].tagName === node.tagName) index += 1
+      }
+      parts.unshift(tag + ':nth-of-type(' + index + ')')
+      node = parent
+    }
+    var joined = parts.join(' > ')
+    if (joined === '') return ''
+    try {
+      return doc.querySelector(joined) === el ? joined : ''
+    } catch (error) {
+      return ''
+    }
+  }
+
   function walk(start, startDepth, startPrefix, doc) {
     var stack = [{ node: start, depth: startDepth, prefix: startPrefix, named: false, muted: false }]
     while (stack.length > 0 && !truncated) {
@@ -293,13 +356,22 @@ function dshSnapshot(options) {
 
       if (shown && role) {
         var ref = ''
+        var loc = ''
         if (REF_ROLE[role] === 1) {
           refCount += 1
           ref = frame.prefix + 'e' + refCount
+          var path = cssPathOf(node, doc)
+          if (path !== '') {
+            var locator = (frame.prefix ? frame.prefix + ':' : '') + 'css:' + path
+            // 120 characters keeps the locator smaller than the line it rides on
+            // and below what a model can copy without wrapping.
+            if (locator.length <= 120) loc = locator
+          }
         }
         var line = indent(frame.depth) + '- ' + role
         if (name) line += ' ' + quote(name)
         if (ref) line += ' [ref=' + ref + ']'
+        if (loc) line += ' [loc=' + quote(loc) + ']'
         var states = stateOf(node, tag, role)
         if (states.length > 0) line += ' ' + states.join(' ')
         emitted = push(line)

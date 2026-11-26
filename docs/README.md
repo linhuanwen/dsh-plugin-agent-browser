@@ -37,6 +37,7 @@
 | [016-js-dialogs-cases.md](cases/016-js-dialogs-cases.md) | JS 弹窗夹具：alert/confirm/prompt 保守拦截与记录、迟到的弹窗进入下一次结果、页面不冻结（record 模式；off 对照待 TICKET-040） |
 | [017-action-effect-cases.md](cases/017-action-effect-cases.md) | 写动作回执三态：`effect: none/committed/unknown` + `action_unknown`；真机两条 unknown（eval 页面抛错、接管中断）与已知边界 |
 | [018-browser-wait-cases.md](cases/018-browser-wait-cases.md) | `browser_wait` 四种情形真机：立即命中 / 等出现（可见性判定）/ 等消失 / 超时可接受；三个验收期发现 |
+| [019-loc-locator-cases.md](cases/019-loc-locator-cases.md) | 快照稳定定位符 `loc="css:…"`：ref 过期后用 loc 完成输入/点击、`stale_loc` 与 `bad_loc` 的页面侧表现；三个验收期发现 |
 | [cases/shots/](cases/shots/) | 案例截图原图 |
 | [cases/outputs/](cases/outputs/) | 案例执行产物：R4/R8/S1–S6 的记录、素材与报告 |
 
@@ -46,9 +47,9 @@
 | --- | --- |
 | [2026-11-24-browser-automation-competitive-report.md](research/2026-11-24-browser-automation-competitive-report.md) | 5 个同类项目（BrowserSkill / browserpaw / browser-mcp / browser-automation / dsh-browser-cdp）的横评，与我们护城河和短板的对照，P0–P2 建议与两周清单 |
 
-## tickets/ —— 44 张工单
+## tickets/ —— 45 张工单
 
-按时间编号，每张记录一个失败模式、根因与验收证据（`034-screenshot-large-capture-hang.md` 是截图大载荷修复，`037`–`039` 是「首次写动作确认」的实现拆分：host 判定/门 → 面板确认条 → 配置与夹具，`040`–`043` 是「阶段 A 边界收口」：白屏根因 → JS 弹窗 → 写动作三态 → F7/F8 真机验收；`044` 是「阶段 B1 第一个能力」：`browser_wait` 等待条件——纯读、零审批、`needs_human`/`taken_over` 下可用）。
+按时间编号，每张记录一个失败模式、根因与验收证据（`034-screenshot-large-capture-hang.md` 是截图大载荷修复，`037`–`039` 是「首次写动作确认」的实现拆分：host 判定/门 → 面板确认条 → 配置与夹具，`040`–`043` 是「阶段 A 边界收口」：白屏根因 → JS 弹窗 → 写动作三态 → F7/F8 真机验收；`044` 是「阶段 B1 第一个能力」：`browser_wait` 等待条件——纯读、零审批、`needs_human`/`taken_over` 下可用；`045` 是「阶段 B2 观察增强」：快照 `loc="css:…"` 稳定定位符，ref 换新后仍可寻址，`bad_loc`/`stale_loc` 分型）。
 
 ## release/ —— 上线与发布
 

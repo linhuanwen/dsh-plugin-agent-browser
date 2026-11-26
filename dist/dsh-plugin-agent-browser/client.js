@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
      * The renderer caches `client.js` aggressively, and a stale half looks
      * exactly like a bug in the host half.
      */
-    const CLIENT_REV = 51
+    const CLIENT_REV = 52
     /** The panel talks to the host half over loopback; both sides carry this mark. */
     const BRIDGE_PREFIX = '/dsh-agent-browser'
     const BRIDGE_MARK = 'dsh-plugin-agent-browser/1'
@@ -1522,6 +1522,7 @@ window.__ModuleLoader__.load({
         if (source === '') throw new Error('the action source was not delivered')
         const args = {
           ref: params?.ref,
+          loc: params?.loc,
           selector: params?.selector,
           strict: params?.strict,
           text: params?.text,

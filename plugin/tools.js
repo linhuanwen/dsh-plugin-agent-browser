@@ -310,6 +310,9 @@ export function browserSnapshotTool(ctx, bridge, options = {}) {
       + 'and number the things you can act on as [ref=e1], [ref=e2], … Pass those refs (or an iframe '
       + 'prefix like f1e2) to browser_click / browser_type / browser_press. Refs are only valid for '
       + 'the snapshot that produced them; take a new snapshot after the page changes. '
+      + 'Each ref may also carry a stable locator like [loc="css:#save"]: that locator survives ref '
+      + 'renumbering, so when you work from an older snapshot pass loc instead of ref and the action '
+      + 'still lands on the same element (a page that re-rendered away from it answers stale_loc). '
       + 'Use it once the panel already holds the page (opened by browser_open, or by the user); for a public '
       + 'static page that `web_fetch` can read, that call is cheaper and needs no panel.',
     parameters: {
@@ -624,6 +627,17 @@ function actionFailure(result, mode = 'click') {
       return new Error(
         `"${String(result?.selector ?? '')}" is not a usable CSS selector: ${String(result?.message ?? 'the page could not parse it')}`,
       )
+    case 'stale_loc':
+      return new Error(
+        `loc "${String(result?.loc ?? '')}"${typeof result?.frame === 'string' ? ` (in iframe ${result.frame})` : ''} `
+        + 'no longer matches anything in the page — it was replaced, removed, or you are on a different page now. '
+        + 'Take a new browser_snapshot and use a loc (or ref) from that snapshot.',
+      )
+    case 'bad_loc':
+      return new Error(
+        `"${String(result?.loc ?? '')}" is not a loc. Copy the whole loc="css:…" value from the latest browser_snapshot, `
+        + 'e.g. css:#save, and pass it as the loc parameter.',
+      )
     default:
       return new Error(`the page refused the action: ${String(result?.error ?? 'unknown error')}`)
   }
@@ -852,15 +866,18 @@ export function browserClickTool(bridge) {
   return {
     name: 'browser_click',
     description:
-      'Click something in the browser panel. Prefer a ref from the latest browser_snapshot; pass `selector` (CSS) '
-      + 'when the element has no usable ref — a canvas-adjacent widget, a card stack, an icon-only pager; pass x/y '
-      + '(CSS pixels inside the panel, origin top-left) only for canvas widgets and cross-origin frames. '
-      + 'A selector click fails as not_found / multiple / occluded / disabled instead of clicking the wrong thing. '
-      + 'Links that wanted a new window are followed in the same view. One click per call; snapshot again afterwards.',
+      'Click something in the browser panel. Prefer a ref from the latest browser_snapshot; pass `loc` (the verified '
+      + 'css: locator printed next to that ref) when you are working from an older snapshot — locators survive ref '
+      + 'renumbering. Pass `selector` (CSS) when the element has no usable ref — a canvas-adjacent widget, a card '
+      + 'stack, an icon-only pager; pass x/y (CSS pixels inside the panel, origin top-left) only for canvas widgets '
+      + 'and cross-origin frames. A selector click fails as not_found / multiple / occluded / disabled instead of '
+      + 'clicking the wrong thing. Links that wanted a new window are followed in the same view. One click per call; '
+      + 'snapshot again afterwards.',
     parameters: {
       type: 'object',
       properties: {
         ref: { type: 'string', description: 'A ref from the latest browser_snapshot, e.g. e5 or f1e2.' },
+        loc: { type: 'string', description: 'A stable locator copied from a snapshot line, e.g. css:#save or css:body > div:nth-of-type(2) > button:nth-of-type(1). Use it when the ref you have may be stale; a vanished locator fails as stale_loc.' },
         selector: { type: 'string', description: 'A CSS selector, used when no ref fits. Must match exactly one visible element unless strict is false.' },
         strict: { type: 'boolean', description: 'With selector: false accepts the first of several matches instead of failing as multiple. Defaults to true.' },
         x: { type: 'integer', description: 'Viewport x in CSS pixels. Requires y; ignored when ref or selector is given.' },
@@ -908,15 +925,20 @@ export function browserClickTool(bridge) {
       const sessionId = sessionOf(exec)
       const hasPoint = Number.isFinite(args?.x) && Number.isFinite(args?.y)
       const selector = typeof args?.selector === 'string' && args.selector.trim() !== '' ? args.selector.trim() : ''
-      if (!hasPoint && selector === '') requireRef(args?.ref)
-      if (hasPoint && selector !== '') {
-        throw new Error('pass either selector or x/y, not both: a selector is resolved to a point for you.')
+      const loc = typeof args?.loc === 'string' && args.loc.trim() !== '' ? args.loc.trim() : ''
+      if (loc !== '' && selector !== '') {
+        throw new Error('pass either loc or selector, not both: a locator is already a CSS path.')
       }
+      if (hasPoint && (selector !== '' || loc !== '')) {
+        throw new Error('pass either a locator/selector or x/y, not both: a locator is resolved to a point for you.')
+      }
+      if (!hasPoint && selector === '' && loc === '') requireRef(args?.ref)
       const result = await bridge.request(
         sessionId,
         'click',
         {
-          ref: selector === '' && !hasPoint ? requireRef(args?.ref) : undefined,
+          ref: !hasPoint && selector === '' && loc === '' ? requireRef(args?.ref) : undefined,
+          loc: loc === '' ? undefined : loc,
           selector: selector === '' ? undefined : selector,
           strict: typeof args?.strict === 'boolean' ? args.strict : undefined,
           x: args?.x,
@@ -944,7 +966,7 @@ export function browserClickTool(bridge) {
       return false
     },
     presentCall(args) {
-      const what = args?.selector ?? args?.ref ?? `${args?.x},${args?.y}`
+      const what = args?.loc ?? args?.selector ?? args?.ref ?? `${args?.x},${args?.y}`
       return { card: 'generic', title: `Click ${what}`, kind: 'edit', rawInput: args }
     },
     presentResult() {
@@ -967,12 +989,13 @@ export function browserHoverTool(bridge) {
     description:
       'Move the pointer over an element in the browser panel without clicking it. Use it before browser_click when a '
       + 'control only becomes reachable on hover (stacked cards that fan out, fly-out menus, tooltips). Pass a ref from '
-      + 'the latest browser_snapshot, a CSS selector, or x/y. Returns where the pointer rests and grew:true when the '
-      + 'page reacted (a control expanded) — snapshot again, then click.',
+      + 'the latest browser_snapshot, a stable `loc` locator from a snapshot line, a CSS selector, or x/y. Returns where '
+      + 'the pointer rests and grew:true when the page reacted (a control expanded) — snapshot again, then click.',
     parameters: {
       type: 'object',
       properties: {
         ref: { type: 'string', description: 'A ref from the latest browser_snapshot, e.g. e5 or f1e2.' },
+        loc: { type: 'string', description: 'A stable locator copied from a snapshot line, e.g. css:#save. Use it when the ref you have may be stale; a vanished locator fails as stale_loc.' },
         selector: { type: 'string', description: 'A CSS selector, used when no ref fits. Must match exactly one visible element unless strict is false.' },
         strict: { type: 'boolean', description: 'With selector: false accepts the first of several matches instead of failing as multiple. Defaults to true.' },
         x: { type: 'integer', description: 'Viewport x in CSS pixels. Requires y; ignored when ref or selector is given.' },
@@ -1007,16 +1030,21 @@ export function browserHoverTool(bridge) {
       const sessionId = sessionOf(exec)
       const hasPoint = Number.isFinite(args?.x) && Number.isFinite(args?.y)
       const selector = typeof args?.selector === 'string' && args.selector.trim() !== '' ? args.selector.trim() : ''
-      if (!hasPoint && selector === '') requireRef(args?.ref)
-      if (hasPoint && selector !== '') {
-        throw new Error('pass either selector or x/y, not both: a selector is resolved to a point for you.')
+      const loc = typeof args?.loc === 'string' && args.loc.trim() !== '' ? args.loc.trim() : ''
+      if (loc !== '' && selector !== '') {
+        throw new Error('pass either loc or selector, not both: a locator is already a CSS path.')
       }
+      if (hasPoint && (selector !== '' || loc !== '')) {
+        throw new Error('pass either a locator/selector or x/y, not both: a locator is resolved to a point for you.')
+      }
+      if (!hasPoint && selector === '' && loc === '') requireRef(args?.ref)
       const waitMs = Number.isFinite(args?.waitMs) ? Math.min(2000, Math.max(0, Math.round(args.waitMs))) : undefined
       const result = await bridge.request(
         sessionId,
         'hover',
         {
-          ref: selector === '' && !hasPoint ? requireRef(args?.ref) : undefined,
+          ref: !hasPoint && selector === '' && loc === '' ? requireRef(args?.ref) : undefined,
+          loc: loc === '' ? undefined : loc,
           selector: selector === '' ? undefined : selector,
           strict: typeof args?.strict === 'boolean' ? args.strict : undefined,
           x: hasPoint ? args.x : undefined,
@@ -1038,7 +1066,7 @@ export function browserHoverTool(bridge) {
       return false
     },
     presentCall(args) {
-      const what = args?.selector ?? args?.ref ?? `${args?.x},${args?.y}`
+      const what = args?.loc ?? args?.selector ?? args?.ref ?? `${args?.x},${args?.y}`
       return { card: 'generic', title: `Hover ${what}`, kind: 'edit', rawInput: args }
     },
     presentResult() {
@@ -1151,18 +1179,19 @@ export function browserTypeTool(bridge) {
   return {
     name: 'browser_type',
     description:
-      'Type text into a field identified by a ref from the latest browser_snapshot. Clears the field first by '
-      + 'default; pass submit:true to press Enter afterwards. Password fields are refused — ask the user to type '
-      + 'those in the panel instead.',
+      'Type text into a field identified by a ref from the latest browser_snapshot, or by the stable `loc` locator '
+      + 'printed next to that ref. Clears the field first by default; pass submit:true to press Enter afterwards. '
+      + 'Password fields are refused — ask the user to type those in the panel instead.',
     parameters: {
       type: 'object',
       properties: {
         ref: { type: 'string', description: 'A ref from the latest browser_snapshot, e.g. e3.' },
+        loc: { type: 'string', description: 'A stable locator copied from a snapshot line, e.g. css:#email. Use it when the ref you have may be stale; a vanished locator fails as stale_loc.' },
         text: { type: 'string', description: 'The text to put in the field.' },
         clear: { type: 'boolean', description: 'Replace the current value. Defaults to true; false appends.' },
         submit: { type: 'boolean', description: 'Press Enter after typing. Defaults to false.' },
       },
-      required: ['ref', 'text'],
+      required: ['text'],
       additionalProperties: false,
     },
     output: {
@@ -1183,22 +1212,26 @@ export function browserTypeTool(bridge) {
     },
     async execute(args, exec) {
       const sessionId = sessionOf(exec)
-      const ref = requireRef(args?.ref)
+      const loc = typeof args?.loc === 'string' && args.loc.trim() !== '' ? args.loc.trim() : ''
+      const ref = loc === '' ? requireRef(args?.ref) : undefined
+      if (loc !== '' && args?.ref !== undefined) {
+        throw new Error('pass either ref or loc, not both: a locator is the stable form of a ref.')
+      }
       if (typeof args?.text !== 'string') throw new Error('text is required')
       const result = await bridge.request(
         sessionId,
         'type',
-        { ref, text: args.text, clear: args?.clear !== false, submit: args?.submit === true, source: actionSource() },
+        { ref, loc: loc === '' ? undefined : loc, text: args.text, clear: args?.clear !== false, submit: args?.submit === true, source: actionSource() },
         20_000,
       )
-      if (result?.ok !== true) throw actionFailure({ ...result, ref })
+      if (result?.ok !== true) throw actionFailure({ ...result, ...(loc === '' ? { ref } : { loc }) })
       return committed(withDialogs({ ...(result.info ?? {}), length: result.length ?? 0, submitted: result.submitted === true }, result))
     },
     isConcurrencySafe() {
       return false
     },
     presentCall(args) {
-      return { card: 'generic', title: `Type into ${args?.ref ?? 'field'}`, kind: 'edit', rawInput: args }
+      return { card: 'generic', title: `Type into ${args?.loc ?? args?.ref ?? 'field'}`, kind: 'edit', rawInput: args }
     },
     presentResult() {
       return { card: 'generic', title: 'Typed' }
@@ -1999,7 +2032,13 @@ export function createGate(bridge, policy = {}) {
     try {
       const seen = await send(sessionId, 'inspect', { ...params, source: actionSource() }, 8_000)
       if (seen === null || typeof seen !== 'object' || seen.ok === false) {
-        return { known: false, isSubmit: false, target: null, url: '' }
+        return {
+          known: false,
+          isSubmit: false,
+          target: null,
+          url: '',
+          addressError: typeof seen?.error === 'string' ? seen.error : '',
+        }
       }
       const target = seen.info !== null && typeof seen.info === 'object' ? seen.info : null
       return {
@@ -2007,6 +2046,7 @@ export function createGate(bridge, policy = {}) {
         isSubmit: seen.isSubmit === true,
         target,
         url: typeof seen.url === 'string' ? seen.url : '',
+        addressError: '',
       }
     } catch (error) {
       if (isAgentBrowserError(error) === true
@@ -2075,10 +2115,18 @@ export function createGate(bridge, policy = {}) {
       // A coordinate click names no element; it is treated as a read (C2), and
       // the user can see the pointer land in the panel.
       if (params?.x !== undefined || params?.y !== undefined) return
-      const address = typeof params?.ref === 'string' && params.ref !== ''
-        ? { ref: params.ref }
-        : { selector: params?.selector, strict: params?.strict }
+      const address = typeof params?.loc === 'string' && params.loc !== ''
+        ? { loc: params.loc }
+        : typeof params?.ref === 'string' && params.ref !== ''
+          ? { ref: params.ref }
+          : { selector: params?.selector, strict: params?.strict }
       const seen = await inspect(sessionId, address)
+      // If the address itself cannot be resolved (`stale_loc` / `bad_loc` /
+      // `stale_ref` / `bad_ref`), the same page-side resolution will fail for
+      // the real action too: there is nothing to confirm and nothing to send,
+      // so let the action report its own precise error instead of asking the
+      // user about an action that can never happen.
+      if (seen.addressError !== '') return
       await confirmWrite(sessionId, {
         actionClass: clickClass(seen.known === false ? null : { isSubmit: seen.isSubmit }),
         origin: originOf(seen.url),
@@ -2092,7 +2140,11 @@ export function createGate(bridge, policy = {}) {
       // asking the user about it would promise something that can never happen.
       // Inspect first: one extra round trip only on the first write per site,
       // and the page's own refusal still produces the error the model sees.
-      const seen = await inspect(sessionId, { ref: params?.ref })
+      const where = typeof params?.loc === 'string' && params.loc !== '' ? { loc: params.loc } : { ref: params?.ref }
+      const seen = await inspect(sessionId, where)
+      // Unresolvable address: the page will refuse this exact command anyway;
+      // asking the user would only delay a guaranteed failure (same rule as click).
+      if (seen.addressError !== '') return
       if (seen.known === true && seen.target?.role === 'password') return
       await confirmWrite(sessionId, {
         actionClass: 'type',

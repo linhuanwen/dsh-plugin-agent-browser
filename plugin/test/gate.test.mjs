@@ -177,4 +177,46 @@ test('an approval error reaches the caller unchanged and the action never runs',
   assert.deepEqual(bridge.calls.map((call) => call.type), ['inspect'], 'nothing was sent to the page')
 })
 
+test('a click addressed by loc inspects with the same locator, then clicks', async () => {
+  const bridge = fakeBridge({
+    request: async (sessionId, type, params) => {
+      bridge.calls.push({ sessionId, type, params })
+      if (type === 'inspect') {
+        return { ok: true, info: { tag: 'button', role: 'button', name: '提交' }, isSubmit: true, url: PAGE }
+      }
+      return { ok: true, info: { tag: 'button' } }
+    },
+  })
+  const gate = gated(bridge)
+  await gate.request('s1', 'click', { loc: 'css:#submit-btn' }, 20_000)
+  assert.deepEqual(bridge.calls.map((call) => call.type), ['inspect', 'click'])
+  assert.equal(bridge.calls[0].params.loc, 'css:#submit-btn')
+  assert.equal(bridge.calls[1].params.loc, 'css:#submit-btn', 'the locator travels with the action')
+  assert.equal(bridge.approvals.length, 1, 'a submitting loc addressee still goes through the write gate')
+  assert.equal(bridge.approvals[0].actionClass, 'submit')
+})
+
+test('a type addressed by loc inspects that locator', async () => {
+  const bridge = fakeBridge()
+  const gate = gated(bridge)
+  await gate.request('s1', 'type', { loc: 'css:#email', text: 'a' }, 20_000)
+  assert.deepEqual(bridge.calls.map((call) => call.type), ['inspect', 'type'])
+  assert.equal(bridge.calls[0].params.loc, 'css:#email')
+})
+
+test('an unresolvable loc skips the prompt and lets the action report its own error', async () => {
+  const stale = { ok: false, error: 'stale_loc', loc: 'css:#gone' }
+  const bridge = fakeBridge({
+    request: async (sessionId, type, params) => {
+      bridge.calls.push({ sessionId, type, params })
+      return stale
+    },
+  })
+  const gate = gated(bridge)
+  const result = await gate.request('s1', 'click', { loc: 'css:#gone' }, 20_000)
+  assert.equal(result.error, 'stale_loc')
+  assert.deepEqual(bridge.calls.map((call) => call.type), ['inspect', 'click'])
+  assert.equal(bridge.approvals.length, 0, 'no prompt for an address that can never resolve')
+})
+
 void assert

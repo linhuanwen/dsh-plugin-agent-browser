@@ -160,6 +160,40 @@ function dshAction(op, params) {
     return { element: element, doc: doc, frame: frame }
   }
 
+  /**
+   * The element a stable `css:` locator points at.
+   *
+   * Refs renumber on every snapshot, so a model that holds a ref across two
+   * snapshots acts on a stale or — worse — a different node. The snapshot
+   * prints a verified CSS path next to each ref for exactly this case. The
+   * shape is `css:<selector>` with the same optional `f1:` frame prefix the
+   * refs use. A locator is advisory: if the page re-rendered away from it the
+   * answer is `stale_loc` and the caller takes a fresh snapshot, never a guess.
+   */
+  function resolveLoc(locator) {
+    var text = String(locator || '')
+    var frame = ''
+    var doc = document
+    var prefixed = /^(f\d+):([\s\S]*)$/.exec(text)
+    if (prefixed) {
+      frame = prefixed[1].slice(1)
+      text = prefixed[2]
+      doc = frameDocument(frame)
+      if (!doc) return { error: 'stale_loc', frame: frame }
+    }
+    if (text.slice(0, 4) !== 'css:') return { error: 'bad_loc' }
+    var expression = text.slice(4)
+    if (expression === '') return { error: 'bad_loc' }
+    var element = null
+    try {
+      element = doc.querySelector(expression)
+    } catch (error) {
+      return { error: 'bad_loc' }
+    }
+    if (!element) return { error: 'stale_loc', frame: frame }
+    return { element: element, doc: doc, frame: frame }
+  }
+
   /** A short, human-readable description of what the ref points at. */
   function describe(element, doc) {
     var tag = element.tagName.toLowerCase()
@@ -453,9 +487,9 @@ function dshAction(op, params) {
   if (op === 'scroll') return doScroll()
 
   // `inspect` answers "what is this address?" before a write is approved. With
-  // no ref/selector it describes the focused control, which is what an Enter
-  // press will act on. Nothing is mutated here.
-  if (op === 'inspect' && typeof input.selector !== 'string' && typeof input.ref !== 'string') {
+  // no ref/selector/locator it describes the focused control, which is what an
+  // Enter press will act on. Nothing is mutated here.
+  if (op === 'inspect' && typeof input.selector !== 'string' && typeof input.ref !== 'string' && typeof input.loc !== 'string') {
     var focused = document.activeElement
     return JSON.stringify({
       ok: true,
@@ -470,7 +504,18 @@ function dshAction(op, params) {
   var frame = ''
   var matched = 0
 
-  if (typeof input.selector === 'string' && input.selector !== '') {
+  if (typeof input.loc === 'string' && input.loc !== '') {
+    var anchored = resolveLoc(input.loc)
+    if (anchored.error) {
+      var locExtra = { loc: String(input.loc || '') }
+      if (anchored.frame) locExtra.frame = anchored.frame
+      return fail(anchored.error, locExtra)
+    }
+    element = anchored.element
+    doc = anchored.doc
+    frame = anchored.frame
+    matched = 1
+  } else if (typeof input.selector === 'string' && input.selector !== '') {
     var picked = pickSelector(input.selector, input.strict)
     if (picked.error) {
       if (picked.error === 'multiple') return fail(picked.error, { matched: picked.matched, selector: picked.selector, candidates: picked.candidates })
@@ -533,7 +578,8 @@ function dshAction(op, params) {
   // say `selector "#covered"` instead of `ref ""` in the error text.
   var who = function (extra) {
     var out = extra || {}
-    if (typeof input.selector === 'string' && input.selector !== '') out.selector = input.selector
+    if (typeof input.loc === 'string' && input.loc !== '') out.loc = input.loc
+    else if (typeof input.selector === 'string' && input.selector !== '') out.selector = input.selector
     else if (typeof input.ref === 'string' && input.ref !== '') out.ref = input.ref
     return out
   }

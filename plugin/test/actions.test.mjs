@@ -86,8 +86,10 @@ function dom(init = {}) {
 async function run(op, params, stub) {
   const previousDocument = globalThis.document
   const previousWindow = globalThis.window
+  const previousLocation = globalThis.location
   globalThis.document = stub.doc
   globalThis.window = stub.win
+  globalThis.location = { href: 'https://example.com/actions' }
   try {
     let raw = dshAction(op, params)
     // A click resolves one frame later, so the page can settle after the
@@ -97,6 +99,7 @@ async function run(op, params, stub) {
   } finally {
     globalThis.document = previousDocument
     globalThis.window = previousWindow
+    globalThis.location = previousLocation
   }
 }
 
@@ -434,4 +437,58 @@ test('popup guard: a human click on target=_blank rewrites it to the same view',
   assert.ok(handlers.length >= 1, 'a capture-phase click guard is installed')
   for (const handler of handlers) handler({ target: inner })
   assert.equal(anchor.getAttribute('target'), '_self')
+})
+
+// --- stable locators (`loc`) -------------------------------------------------
+// A ref only lives for one snapshot; the locator the snapshot prints next to it
+// is a CSS path that survives renumbering. These tests pin the resolution rules:
+// exactly the path, never a fuzzy fallback, and a distinct code when the page
+// re-rendered away from it.
+
+test('loc click: the css path is resolved against the page and clicked', async () => {
+  const button = element({ tagName: 'BUTTON', text: '保存', attrs: { id: 'save' } })
+  const stub = dom({ find: (selector) => (selector === '#save' ? button : null), point: button })
+  const result = await run('click', { loc: 'css:#save' }, stub)
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.equal(result.info.name, '保存')
+})
+
+test('loc inspect: describes the element the locator points at', async () => {
+  const input = element({ tagName: 'INPUT', attrs: { id: 'email' } })
+  input.type = 'email'
+  const stub = dom({ find: (selector) => (selector === '#email' ? input : null) })
+  const result = await run('inspect', { loc: 'css:#email' }, stub)
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.equal(result.info.tag, 'input')
+})
+
+test('loc: a path that no longer matches is stale_loc, never a guess', async () => {
+  const stub = dom({ find: () => null })
+  const result = await run('click', { loc: 'css:#gone' }, stub)
+  assert.equal(result.ok, false)
+  assert.equal(result.error, 'stale_loc')
+  assert.equal(result.loc, 'css:#gone')
+})
+
+test('loc: a frame-prefixed locator needs the frame; a missing one is stale_loc', async () => {
+  const stub = dom({ find: () => null })
+  const result = await run('click', { loc: 'f1:css:#save' }, stub)
+  assert.equal(result.ok, false)
+  assert.equal(result.error, 'stale_loc')
+  assert.equal(result.frame, '1')
+})
+
+test('loc: an unsupported scheme is bad_loc, not a silent miss', async () => {
+  const stub = dom({ find: () => null })
+  const result = await run('click', { loc: 'xpath://button[1]' }, stub)
+  assert.equal(result.ok, false)
+  assert.equal(result.error, 'bad_loc')
+  assert.equal(result.loc, 'xpath://button[1]')
+})
+
+test('loc: an explicit bad ref is still refused before anything else', async () => {
+  const stub = dom({ find: () => null })
+  const result = await run('click', { ref: 'not-a-ref' }, stub)
+  assert.equal(result.ok, false)
+  assert.equal(result.error, 'bad_ref')
 })
