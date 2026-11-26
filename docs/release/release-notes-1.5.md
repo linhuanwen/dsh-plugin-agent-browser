@@ -18,6 +18,8 @@
 >
 > **1.5.4 是阶段 A 的第二件（TICKET-042，写动作回执三态）**：写动作过去只有「成功 / 抛错」两种结局，无法回答「这次到底发出去了没有」。现在：成功结果带 `effect:'committed'`；没发出（参数/审批/策略/相位/入队前失败）带 `details.effect:'none'`；**已下发但回执丢失**（超时/断线/取消/接管/关闭）返回新错误码 `action_unknown`（`retryable:false`，hint 明确「先 `browser_snapshot` 核对，不要重发」）。`browser_eval` 的页面侧抛错也改报 `action_unknown`（脚本到过页面）。`bridge_timeout` 语义不变（未发出）。单测新增 `effect.test.mjs` 8 例、`cancel.test.mjs` 改断言，251→259；真机两条 unknown（eval 页面抛错、接管中断），见 `docs/cases/017`。已知边界：已下发后页面回报 `ok:false` 仍统一按 `none`（`browser_eval` 抛错除外），`type` 中途失败边界尚未细拆。
 >
+> **TICKET-040（客户端重载后白屏）的结论与规避（2026-11-26）**：两次白屏都发生在「插件客户端/host 重载后约 1 分钟内 + 面板正在交互（确认条）」的窗口里，但四组最小实验（客户端 entry 重载、host 半重建 + 确认条、bundle 启停、重载后静置）均**未能复现**；静态勘察确认 DSH 外壳没有整页刷新、React slot 有错误边界、渲染进程异常会显示错误页而不是白屏，因此按「不可复现 + 文档化规避」收口。**使用与验收注意**：真机验收/演示前先重启一次 DSH、一次性配好插件配置；验收过程中不要改 `cordis.patch.yml`，也不要用 `plugin_manager` 启停插件 bundle；若必须改配置，等面板重挂（回 `about:blank`）后重新 `browser_open` 再继续。万一白屏，直接重启 DSH 即可恢复（会话与配置不丢）。详见 `docs/tickets/040-blank-window-on-client-reload.md`。
+>
 > 日期：2026-11-24（1.5.1 验收于 2026-11-25，1.5.2 同日晚收口，1.5.3 与 1.5.4 于 2026-11-26）。适用对象：DSH **Desktop**，宿主实测 `0.2.2-rc.5`。上一版基线：1.4.24。
 > 相关：用户侧文档 `dist/dsh-plugin-agent-browser/README.md`；契约 `docs/spec/003-first-touch-approval-spec.md`；决策 `docs/decisions/010-first-touch-approval.md`；夹具 `docs/cases/015-first-touch-cases.md`。
 
@@ -73,7 +75,7 @@ plugin_manager list_plugins   # 目标行：include:agent-browser-panel / enable
 - **按站点判断，不按登录态**：面板读不到 HttpOnly Cookie，无法区分「登录后页面」；用「站点首次写动作」这个可观测信号代替（ADR 010 §2）。
 - **只覆盖四类写动作**：非表单按钮的副作用（如「删除」按钮发 `fetch`）按读处理。
 - **页面侧标记可伪造**：页面能把自己伪装成提交按钮，但最坏结果只是**多问一次**，不会少问。
-- **未验证（需改配置）**：F7（`sensitiveSites` 每次必问）与 F8（`mode:'off'` 逐字回退）属配置级，需改 profile 并重载，本轮未做真机；由 `plugin/test/config.test.mjs`、`plugin/test/approvals.test.mjs`、`plugin/test/gate.test.mjs` 在契约层锁住。U1 窗口隐藏时 `visibilityState` 的真实取值已由 F5 间接证实（面板不可见时 `<1s` 返回 `approval_required`）；U2（提交判定对 `form.submit()`/`requestSubmit()`/`fetch` 的覆盖）与 U4（30s 默认值）仍待更多真机样本。
+- **F7/F8 已于 2026-11-26 真机验收通过（1.5.4）**：F7（`sensitiveSites` 每次必问）——同一 origin 第一次「允许一次」成功后，第二次写动作仍弹条，拒绝后未写入；F8（`mode:'off'` 逐字回退）——type/eval/提交点击全部直接执行，无确认条、无 `approval_*` 错误码。验收走「改配置 → 完全重启 DSH → 一次性验完」的安全路径（不热重载、不启停 bundle），证据见 `docs/cases/015` §5 与 `docs/tickets/043`。仍在契约层锁住的有：`plugin/test/config.test.mjs`、`plugin/test/approvals.test.mjs`、`plugin/test/gate.test.mjs`。U1 窗口隐藏时 `visibilityState` 的真实取值已由 F5 间接证实（面板不可见时 `<1s` 返回 `approval_required`）；U2（提交判定对 `form.submit()`/`requestSubmit()`/`fetch` 的覆盖）与 U4（30s 默认值）仍待更多真机样本。
 - **面板 `/page` 遥测在本机宿主未落地**：不影响判定（写动作的 origin 来自页面侧 `inspect`），只影响遥测与未来的提示文案；已记入 TICKET-037 的后续项。
 - **真实验证墙**只回归过 `nopecha.com/demo/cloudflare` 一页（needs_human → eval 被拒 → 人工过墙后恢复，均通过）；其他厂商墙未取样。
 

@@ -158,11 +158,33 @@
 | F10 eval | ✅ | 面板可见时 `browser_eval` 弹条并等 30s；点「拒绝」→ `approval_denied`。1.5.2 修复后提示文案写「在 127.0.0.1 执行页面脚本」而不是「当前页面」（origin 改由页面侧 `inspect` 提供，不再依赖面板 `/page` 遥测） |
 | F11 验证墙优先 | ✅ | `browser_open https://nopecha.com/demo/cloudflare` → `needs_human`；该页 `browser_eval` → `needs_human` 被拒（1.5.2 修复：审批提示不再盖过 `needs_human`）；用户在面板过 Turnstile 后跳到 `nopecha.com/demo`，`browser_snapshot` 立即可读、不再带 `needs_human` |
 | F12 接管作废 | ✅ | pending 期间点「我来接管」→ 写动作立刻 `approval_denied`，页面为空、动手未发生 |
-| F7 敏感站 / F8 mode off | ⚪ 契约级 | 需改 profile 配置并重载，未做真机；由 `plugin/test/config.test.mjs`（解析与回落）、`plugin/test/approvals.test.mjs`（`sensitiveSites` 匹配、`shouldConfirm` 矩阵）、`plugin/test/gate.test.mjs`（`mode:'off'` 不问不 inspect）锁住 |
+| F7 敏感站 / F8 mode off | ✅ 2026-11-26 真机（1.5.4，见 §5） | F7：同 origin 第一次「允许一次」成功、第二次仍弹条，拒绝后未写入；F8：`mode:'off'` 下 type/eval/提交点击全部直接执行、无确认条、无 `approval_*` 错误码 |
 
 验收期发现并修掉的三个真问题（都只有在真面板上才看得见）：
 1. **1.5.0 写动作完全不弹条**：`plugin/apply.js` 的薄门没有向 `createGate` 转发 `approve`/`hasClient`/`pageOf`，`canAsk()` 恒 false；单测假桥本来就没有这三个方法，231 例全绿也没照出。1.5.1 修复，`gate.test.mjs` 锁住。
 2. **密码框先弹条再被页面硬拒**：审批在宿主侧先跑、硬拒在页面侧后跑。1.5.1 改成 `browser_type` 先 `inspect`，`role=password` 直接不进确认。
 3. **`needs_human` 被审批与读命令盖过**：`bridge.request()` 对除 `snapshot` 外的一切命令都把 phase 置回 `agent`，审批前的 `inspect` 因此会清掉 `needs_human`/`taken_over`；`bridge.approve()` 也没有先看人工相位。1.5.2 修复：新增 `READ_TYPES={snapshot,inspect}` 不抢相位，`approve()` 先 `#assert`（人工相位优先，SPEC-003 C8）；`bridge.test.mjs` 增加 3 例锁住。同批还修了 eval 提示的 origin（改由页面侧 `inspect` 提供，面板 `/page` 上报在本机宿主未落地，仅作遥测保留）。
 
-装机结论：**F1–F6、F9–F12 全部真机通过，F7/F8 为契约级覆盖**；单测 245 例全绿（1.5.2），`node tools/check-docs.mjs` 六项一致。
+装机结论：**F1–F6、F9–F12 于 1.5.2 真机通过**；F7/F8 于 2026-11-26 在 1.5.4 上补做真机验收（见 §5）——至此 **F1–F12 全部真机通过**。单测当时 245 例（1.5.2）→ 现 259 例（1.5.4），`node tools/check-docs.mjs` 六项一致。
+
+## 5. F7/F8 真机验收（2026-11-26，1.5.4 / 宿主 0.2.2-rc.5）
+
+按 TICKET-043 的安全路径：改配置 → 用户**完全重启 DSH** → 一次性验完；不用热重载、不用 bundle 启停，全程未白屏。
+
+### F7 敏感站每次必问
+
+- 备份 patch 为 `.bak-f7`，注入 `approvals: {mode: first-touch, timeoutMs: 30000, sensitiveSites: [127.0.0.1]}`（`tmp/add-approvals-f7.mjs on`，UTF-8 无 BOM）；用户重启 DSH。
+- `browser_open {path:'demo/approval-form.html'}` → 新 origin `http://127.0.0.1:5359/t/demo/approval-form.html`（无任何授权），snapshot 7 refs。
+- `browser_type e2 'F7 sensitive first'` → 弹条，用户点「允许一次」→ `Typed 18 characters`。
+- **同一 origin 第二次** `browser_type e2 'F7 sensitive second should be denied'` → **再次弹条**（`sensitiveSites` 覆盖站点豁免），用户点「拒绝」→ `approval_denied`；snapshot 值仍是 `F7 sensitive first`，第二次未写入 → ✅。
+
+### F8 mode off 完全不问
+
+- 配置改 `approvals: {mode: "off"}`（`tmp/add-approvals-f7.mjs off`），用户重启。
+- `browser_open` 夹具 → `http://127.0.0.1:1304/t/demo/approval-form.html`；`browser_type e2 'F8 mode off no prompt'` 直接成功；`browser_eval {script:'document.title'}` 直接返回 `"写动作确认夹具"`；`browser_click e4`（提交）直接点击、`#count` 变 1；无确认条、无 `approval_*` 错误码 → ✅（与 1.4.x 无审批行为一致）。
+
+### 恢复
+
+- `tmp/add-approvals-f7.mjs strip` 删除 approvals 块；`Compare-Object` 与 `.bak-f7` 逐行一致（7200 B、UTF-8 无 BOM）。
+- 用户第三次重启后 `browser_type` 再次弹条，用户点「拒绝」→ `approval_denied`、未写入 → 默认 `first-touch` 已恢复 ✅。
+- 三次配置生效都依赖「用户完全重启 DSH」，与 TICKET-040 的规避流程一致。

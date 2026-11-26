@@ -1,6 +1,6 @@
 # SPEC-004：能力准入契约与两步走路线
 
-- 状态：已定（2026-11-26，待实现；阶段 A 的工单见 §11）
+- 状态：已定（2026-11-26；**阶段 A 已全部结案**，阶段 B 待开工）
 - 版本：v1（2026-11-26）
 - 前置规格：`docs/spec/001-agent-browser-plugin-spec.md`（产品范围与 A1–A19 不动）、`docs/spec/002-official-alignment-spec.md`（工程约束 B1–B11 不动）、`docs/spec/003-first-touch-approval-spec.md`（审批机制 C1–C12 已实现并真机验收）
 - 关联决策：`docs/decisions/005-loopback-bridge-over-cdp.md`、`006-no-official-browser-use.md`、`010-first-touch-approval.md`（信任姿势）

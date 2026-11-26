@@ -1,6 +1,6 @@
 # TICKET-043：F7/F8 安全真机验收（不依赖热重载）
 
-- 状态：📋 待办 P1（阶段 A4，见 `docs/spec/004-capability-admission-spec.md` §6）
+- 状态：✅ 已完成（2026-11-26，F7/F8 真机通过；阶段 A4，见 `docs/spec/004-capability-admission-spec.md` §6）
 - 发现：2026-11-25 F7/F8 尝试被两次白屏打断（TICKET-040）
 - 关联：`docs/spec/003-first-touch-approval-spec.md` C3（站点级豁免）、C9（配置）、`docs/cases/015-first-touch-cases.md` §4、`docs/tickets/040`
 
@@ -57,11 +57,38 @@
 
 ## 验收
 
-- [ ] F7 真机：敏感站第二次写动作仍弹条（有截图或工具回执记录）。
-- [ ] F8 真机：off 模式下 type/click/eval 全部不弹条、直接执行，且无 approval 错误码。
-- [ ] 结束后 profile 配置已恢复默认（`approvals` 键不存在），面板正常。
-- [ ] 结果写进 `docs/cases/015-first-touch-cases.md` §4（把 F7/F8 从「⚪ 契约级」改为「✅ 真机」）与 `docs/release/release-notes-1.5.md` 已知限制。
-- [ ] 若 F7/F8 任一不通过：建缺陷 ticket，写清复现路径（这是功能缺陷，不是验收方法问题）。
+- [x] F7 真机：敏感站第二次写动作仍弹条（有截图或工具回执记录）。
+- [x] F8 真机：off 模式下 type/click/eval 全部不弹条、直接执行，且无 approval 错误码。
+- [x] 结束后 profile 配置已恢复默认（`approvals` 键不存在），面板正常。
+- [x] 结果写进 `docs/cases/015-first-touch-cases.md` §4（把 F7/F8 从「⚪ 契约级」改为「✅ 真机」）与 `docs/release/release-notes-1.5.md`。
+- [x] 若 F7/F8 任一不通过：建缺陷 ticket。→ N/A，两项都通过，没有发现缺陷。
+
+## 执行记录（2026-11-26，1.5.4 / 宿主 0.2.2-rc.5）
+
+采用「改配置 → 用户完全重启 DSH → 一次性验完」的安全路径，全程未用热重载、未用 bundle 启停，未再白屏。
+
+### F7（`sensitiveSites: [127.0.0.1]`，每次必问）
+
+1. 备份 `cordis.patch.yml` 为 `.bak-f7`；在 `agent-browser-panel.config` 下注入 `approvals: {mode: first-touch, timeoutMs: 30000, sensitiveSites: [127.0.0.1]}`（`tmp/add-approvals-f7.mjs on`，UTF-8 无 BOM）。用户手动重启 DSH。
+2. 面板重挂后 `browser_open {path:'demo/approval-form.html'}` → 新 origin `http://127.0.0.1:5359/t/demo/approval-form.html`（无任何授权），snapshot 7 refs。
+3. 第一次 `browser_type e2 'F7 sensitive first'`（18 字）→ 确认条出现，用户点「允许一次」→ 输入成功。
+4. **同一 origin 第二次** `browser_type e2 'F7 sensitive second should be denied'` → **再次弹条**（`sensitiveSites` 压过站点豁免），用户点「拒绝」→ `Error: approval_denied: 用户拒绝了在 127.0.0.1 的输入框里输入文字。The user refused this write action; nothing was sent to the page.`；随后 snapshot 输入框值仍是 `F7 sensitive first`、第二次未写入 → F7 ✅。
+
+### F8（`mode: 'off'`，完全不问）
+
+1. 配置改为 `approvals: {mode: "off"}`（`tmp/add-approvals-f7.mjs off`），用户再次手动重启 DSH。
+2. `browser_open {path:'demo/approval-form.html'}` → `http://127.0.0.1:1304/t/demo/approval-form.html`。
+3. `browser_type e2 'F8 mode off no prompt'` → 直接 `Typed 21 characters`（无确认条）；`browser_eval {script:'document.title'}` → 直接返回 `"写动作确认夹具"`（无确认条）；`browser_click e4`（提交类）→ 直接 `Clicked button "提交"`（无确认条）。
+4. snapshot：输入框值正确、`#count = 1`（提交恰好一次）；全程无 `approval_*` 错误码 → F8 ✅（与 1.4.x 无审批行为一致）。
+
+### 恢复
+
+`tmp/add-approvals-f7.mjs strip` 删除 approvals 块，`Compare-Object` 与 `.bak-f7` 逐行一致（7200 B、UTF-8 无 BOM）；用户第三次重启 DSH 后：`browser_open` 夹具页 → `browser_type e2 'restored default should prompt'` → 确认条再次出现，用户点「拒绝」→ `approval_denied`、未写入 → 默认 first-touch 已恢复 ✅。
+
+### 备注
+
+- 三次配置生效都靠「用户完全重启 DSH」：符合 TICKET-040 的规避流程；期间没有任何白屏。
+- F7 证据是「第二次仍弹条 + 拒绝后未写入」，不是截图；工具回执已在此记录。
 
 ## 注意
 
