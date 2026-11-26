@@ -9,15 +9,15 @@
 `dsh-plugin-agent-browser` · DSH 桌面端插件
 
 <p>
-  <img alt="version 1.5.10" src="https://img.shields.io/badge/version-1.5.10-2563eb?style=flat-square" />
+  <img alt="version 1.5.12" src="https://img.shields.io/badge/version-1.5.12-2563eb?style=flat-square" />
   <img alt="DSH 0.2.2 - 0.3.0" src="https://img.shields.io/badge/DSH-0.2.2%20~%200.3.0-1d4ed8?style=flat-square" />
-  <img alt="13 tools" src="https://img.shields.io/badge/tools-13-0f766e?style=flat-square" />
-  <img alt="327 tests passed" src="https://img.shields.io/badge/tests-327%20passed-16a34a?style=flat-square" />
+  <img alt="14 tools" src="https://img.shields.io/badge/tools-14-0f766e?style=flat-square" />
+  <img alt="335 tests passed" src="https://img.shields.io/badge/tests-335%20passed-16a34a?style=flat-square" />
   <img alt="platform Windows and macOS" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-475569?style=flat-square" />
   <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-0284c7?style=flat-square" />
 </p>
 
-[什么时候用](#什么时候会用到它) · [快速开始](#快速开始) · [它能做什么](#它能做什么) · [十三个工具](#十三个工具) · [接管](#人机验证与接管) · [安全](#安全与隐私) · [设置页](#设置页) · [配置](#配置) · [文档地图](#文档地图)
+[什么时候用](#什么时候会用到它) · [快速开始](#快速开始) · [它能做什么](#它能做什么) · [十四个工具](#十四个工具) · [接管](#人机验证与接管) · [安全](#安全与隐私) · [设置页](#设置页) · [配置](#配置) · [文档地图](#文档地图)
 
 </div>
 
@@ -62,7 +62,7 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 | 留下整页证据、把附件下载回来 | | | ✅ 手动 | ✅ 带 sha256 |
 | 遇到人机验证 | | | ✅ | 检测到就交给你 |
 
-浏览器本身不缺，缺的是**给 Agent 用的那一层**：可寻址的元素（`ref`）、可回放的错误（19 个稳定错误码）、可交还的控制权（顶部那条接管按钮）。这三样才是这个插件的正文。
+浏览器本身不缺，缺的是**给 Agent 用的那一层**：可寻址的元素（`ref`）、可回放的错误（21 个稳定错误码）、可交还的控制权（顶部那条接管按钮）。这三样才是这个插件的正文。
 
 判据、计费与边界讨论见 [`docs/design/web-tools-and-agent-browser.md`](docs/design/web-tools-and-agent-browser.md)。
 
@@ -72,13 +72,13 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 |---|---|
 | **侧栏里的真浏览器** | Electron `<webview>`，不是截图流、也不是无头浏览器。登录态、Cookie、JS 渲染、跨域 iframe 都是真的，页面就在你眼前 |
 | **快照带 `ref`** | `browser_snapshot` 把无障碍树 + 一张截图一起给模型，可交互元素都带 `[ref=eN]`，能算出稳定路径时还带 `[loc="css:…"]`；点击、输入、悬停直接用 ref/loc，不用猜坐标。树被预算截断时返回 `cursor`，下次带 `cursor` 续读下一段；页面在两次快照之间打印的 console 与未捕获错误会附在末尾（最多 10 条） |
-| **十三个工具** | 打开 / 快照 / 等待 / 点击 / 滚动 / 悬停 / 缩放 / 截图 / 输入 / 按键 / 上传 / 求值 / 下载，覆盖一个正常人会用浏览器做的事 |
+| **十四个工具** | 打开 / 快照 / 标签页 / 等待 / 点击 / 滚动 / 悬停 / 缩放 / 截图 / 输入 / 按键 / 上传 / 求值 / 下载，覆盖一个正常人会用浏览器做的事 |
 | **验证墙不硬闯** | 检测到 Cloudflare、reCAPTCHA、滑块这类验证页就停下，把控制权交给你；你过完再交还，Agent 会收到一段「你不在时发生了什么」的摘要 |
 | **证据落盘** | 截图默认拼接整页，下载件落盘，两者都带尺寸 / 字节数 / sha256，能直接当报告附件 |
 | **失败不毁现场** | 导航失败自动退回上一页，错误里带 `nav_dns` / `nav_cert` / `nav_blocked` 等具体原因；错误页上不会返回空树假成功 |
 | **过程看得见** | Web 端为截图 / 打开 / 下载各出一张工具卡片，模型调了什么、页面长什么样，一眼可查 |
 | **设置就在 DSH 里** | 装好后「设置」左侧多一页 **浏览器面板**：行为、预算、下载、搜索兜底、会话白名单、本地文件服务六组表单，改完保存即可，不用手改 YAML |
-| **工程化底座** | 动态端口 + 每进程令牌、19 个稳定错误码、取消、策略接缝、327 个单测 |
+| **工程化底座** | 动态端口 + 每进程令牌、21 个稳定错误码、取消、策略接缝、335 个单测 |
 
 ## 快速开始
 
@@ -93,11 +93,11 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 
 ### 2. 装包
 
-在对话里让 Agent 安装仓库里的 tgz（装完**不需要重启** DSH）：
+在对话里让 Agent 安装仓库里的 tgz（装完通常无需重启；若面板行为还是旧的，说明客户端 bundle 被缓存了，完整重启一次 DSH 即可）：
 
 ```text
 plugin_manager action: install_bundle
-                target: dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.10.tgz
+                target: dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.12.tgz
 ```
 
 ### 3. 打开面板
@@ -116,11 +116,12 @@ Agent 会自己走完 `browser_open` → `browser_snapshot` → 按 `ref` 点搜
 
 点面板顶部的 **「我来接管」**。此时 Agent 的 `open` / `click` / `type` / `press` / `eval` 全部被拒绝，但 `browser_snapshot` 仍然可用——它得能看见你做了什么。点「交还 Agent」时，面板会先截一张图，把交接摘要交给它。
 
-## 十三个工具
+## 十四个工具
 
 | 工具 | 作用 |
 |---|---|
-| `browser_open` | 打开 http(s) 地址；或传 `path` 打开工作区里的 HTML（自动起只读本地服务） |
+| `browser_open` | 打开 http(s) 地址；或传 `path` 打开工作区里的 HTML（自动起只读本地服务）；`newTab:true` 时在面板里另开一个标签，当前页留在后面不丢 |
+| `browser_tabs` | 列出、切换、关闭面板里的标签页（`action: "list"` / `"switch"` / `"close"`，`tab` 传标签 id）；切换保留每个标签的页面状态，关最后一个会先开一张空白页 |
 | `browser_snapshot` | 读当前页面的无障碍树（带 `[ref=eN]`；能算出稳定路径时紧跟 `[loc="css:…"]`）+ 一张截图；`includeImage:false` 可省掉截图；被字符预算截断时返回 `cursor`，带 `cursor` 再调用可续读下一段（页面变了会返回 `stale_cursor`）；页面自己打印的 console/未捕获错误也会附在末尾（最多 10 条，每次快照清空） |
 | `browser_wait` | 等某个 CSS 选择器或页面文字出现（`gone:true` 等它消失），超时返回 `timedOut`；纯读、无需确认，异步加载先等再快照 |
 | `browser_click` | 点某个 `ref`；ref 过期时改用快照里的 `loc="css:…"`（跨快照有效），或直接传 CSS `selector`（失败会分型报告 `not_found` / `multiple` / `occluded` / `disabled`） |
@@ -185,7 +186,7 @@ client 半 · 侧栏 tab / 四态徽章 / 三张工具卡片 / <webview>
 
 ![设置 → 浏览器面板：顶部是桥的状态行，下面是行为、预算、下载、搜索兜底、会话白名单、本地文件服务六组字段](docs/assets/settings-page.png)
 
-顶部那行现况（桥 `http://127.0.0.1:6549` · 工具 13 个 · 面板 client 1 个）就是排查入口：数字不对，先看插件有没有加载，再看是不是有别的后端在抢面板。
+顶部那行现况（桥 `http://127.0.0.1:6549` · 工具 14 个 · 面板 client 1 个）就是排查入口：数字不对，先看插件有没有加载，再看是不是有别的后端在抢面板。
 
 | 分组 | 能改什么 | 保存后 |
 |---|---|---|
@@ -263,7 +264,7 @@ client 半 · 侧栏 tab / 四态徽章 / 三张工具卡片 / <webview>
 ## 仓库结构
 
 ```
-plugin/         插件源码 —— 13 个工具、快照引擎、桥、守卫、注入脚本，以及 20 余个单测
+plugin/         插件源码 —— 14 个工具、快照引擎、桥、守卫、注入脚本，以及 20 余个单测
 dist/           打包产物 —— 可安装的 tgz、装机版 README、cordis.patch.yml
 demo/           本地测试夹具 —— V2/V3/V4 直接跑的那几个文件
 tools/          工程工具 —— pack（打包）、check-docs（文档一致性）、testsite（本地测试站）、case-run（案例探针与夹具）
@@ -275,7 +276,7 @@ screenshots/    运行截图 —— 案例证据与复跑留档
 
 | 文档 | 内容 |
 |---|---|
-| [用户手册](dist/dsh-plugin-agent-browser/README.md) | 安装 / 升级 / 卸载、全部配置字段、13 个工具、故障排查 |
+| [用户手册](dist/dsh-plugin-agent-browser/README.md) | 安装 / 升级 / 卸载、全部配置字段、14 个工具、故障排查 |
 | [与内置联网工具的分工](docs/design/web-tools-and-agent-browser.md) | 三层能力对比、`search → fetch → open` 判据、计费风险 |
 | [为什么不复用官方浏览器工具](docs/design/browser-use-contract.md) | 48 行互斥锁、MCP provider、三条路线对比 |
 | [技术规格](docs/spec/001-agent-browser-plugin-spec.md) | 工具契约、状态机、快照格式、安全边界 |
@@ -291,7 +292,7 @@ screenshots/    运行截图 —— 案例证据与复跑留档
 仓库是纯 JS，**没有构建步骤**；插件源码在 `plugin/`，发布产物在 `dist/`。
 
 ```bash
-# 单测（327 例）
+# 单测（335 例）
 node --test --test-timeout=60000 plugin/test/*.test.mjs
 
 # 打包 tgz

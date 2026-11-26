@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
      * The renderer caches `client.js` aggressively, and a stale half looks
      * exactly like a bug in the host half.
      */
-    const CLIENT_REV = 55
+    const CLIENT_REV = 56
     /** The panel talks to the host half over loopback; both sides carry this mark. */
     const BRIDGE_PREFIX = '/dsh-agent-browser'
     const BRIDGE_MARK = 'dsh-plugin-agent-browser/1'
@@ -192,6 +192,15 @@ window.__ModuleLoader__.load({
      * failure should return to must survive that.
      */
     const lastGoodUrls = new Map()
+    /**
+     * How many tabs one panel may hold (TICKET-050).
+     *
+     * Each tab is a real `<webview>` with its own lease, and every guest also
+     * gets a native input attachment in the host. Six is enough for the cases
+     * that motivated tabs (list + detail + one comparison) without turning the
+     * panel into a browser manager.
+     */
+    const MAX_TABS = 6
     /**
      * Zoom per session, kept outside React: a sidebar tab is rebuilt on a session
      * switch (and on `keepMounted` remounts), while the user's chosen zoom is a
@@ -654,6 +663,64 @@ window.__ModuleLoader__.load({
       return `${title} · ${url} · ${refs} refs · ${first.trim().slice(0, 120)}`.trim()
     }
 
+    /**
+     * Run a `tabs` command: panel bookkeeping, no page is touched.
+     *
+     * `list` is what the agent calls before any switch; `switch` changes which
+     * guest the following commands drive; `close` detaches one guest (and its
+     * lease) — the last tab is never removed, a fresh blank one replaces it.
+     * Errors carry `tab_not_found: …` / `tab_limit: …` prefixes so the bridge
+     * classifies them with `fromPanelMessage`.
+     * @param {TabStore} store - the panel's tab store.
+     * @param {object} command - the queued command.
+     * @returns {Promise<void>}
+     */
+    async function runTabCommand(store, command) {
+      const action = command.params?.action
+      const tabId = typeof command.params?.tab === 'string' ? command.params.tab : ''
+      report('tabs', { id: command.id, action, tab: tabId })
+      if (action !== 'list' && action !== 'switch' && action !== 'close') {
+        throw new Error(`unknown tab action "${String(action)}": use list, switch or close`)
+      }
+      if (action !== 'list' && tabId === '') {
+        throw new Error(`tab_not_found: pass the id of the tab to ${action} `
+          + '(browser_tabs { action: "list" } shows the ids). Nothing was changed.')
+      }
+      setState({ commands: state.commands + 1, note: `Agent: tabs ${action}` })
+      let result
+      if (action === 'list') {
+        await store.refreshUrls()
+        const view = store.snapshot()
+        result = { action, tabs: view.tabs, active: view.active }
+      } else if (action === 'switch') {
+        const tab = store.activate(tabId)
+        if (tab === null) {
+          throw new Error(`tab_not_found: there is no tab "${tabId}" in this panel. `
+            + 'Call browser_tabs({ action: "list" }) and use an id from that answer.')
+        }
+        await store.refreshUrls()
+        result = { action, tab: tab.id, url: tab.url, title: tab.guest.title(), ...store.snapshot() }
+      } else {
+        const tab = await store.close(tabId)
+        await store.refreshUrls()
+        result = { action, closed: tab.id, ...store.snapshot() }
+      }
+      if (cancelledIds.delete(command.id)) {
+        report('cancel dropped result', { id: command.id })
+        setState({ note: 'Cancelled' })
+        return
+      }
+      await settle(command.id, { ok: true, result })
+      setState({ note: 'Ready', url: store.activeGuest()?.url?.() ?? state.url })
+    }
+
+    /** Settle a command the panel could not even start (no tab, tab limit, …). */
+    async function failCommand(command, error) {
+      const message = String(error?.message ?? error)
+      report('command failed before run', { id: command.id, error: message })
+      await settle(command.id, { ok: false, error: message })
+    }
+
     /** Run one command against a guest and settle it — unless the host cancelled it. */
     async function runCommand(guest, command, sessionId) {
       report('run', { id: command.id, type: command.type })
@@ -1013,9 +1080,48 @@ window.__ModuleLoader__.load({
          * @type {null | ((state: { back: boolean, forward: boolean }) => void)}
          */
         this.onHistory = null
+        /**
+         * Which tab this guest belongs to (TICKET-050), assigned by `TabStore`.
+         *
+         * The session key is no longer unique for "the page I was on": with two
+         * tabs open, a failed navigation in one of them must not roll back to the
+         * other tab's last address. `goodUrlKey()` adds this id to the map key.
+         */
+        this.tabId = ''
+        /**
+         * Called when the document title changes, so the tab strip can relabel.
+         * @type {null | ((title: string) => void)}
+         */
+        this.onTitle = null
+        /** Title as last reported by the guest events; `getTitle()` is unreliable. */
+        this.lastTitle = ''
+        /**
+         * Whether this guest is the tab on screen (set by `TabStore`).
+         *
+         * Only the visible tab may write the shared panel note/address state or
+         * report the page to the host: a hidden tab loading in the background
+         * would otherwise put its URL into the approval origin and the address bar.
+         * @type {null | (() => boolean)}
+         */
+        this.isActive = null
         const siblings = guestsBySession.get(sessionId)
         if (siblings === undefined) guestsBySession.set(sessionId, new Set([this]))
         else siblings.add(this)
+      }
+
+      /** True unless a TabStore says another tab is on screen. */
+      active() {
+        return typeof this.isActive === 'function' ? this.isActive() : true
+      }
+
+      /** Key for the per-page "last good address" memory; one per tab. */
+      goodUrlKey() {
+        return this.tabId === '' ? this.sessionId : `${this.sessionId} ${this.tabId}`
+      }
+
+      /** Report the current address to the host, but only for the visible tab. */
+      reportPageNow() {
+        if (this.active()) void reportPage(this.sessionId, { url: this.url() })
       }
 
       /** Tell the page-side guard who is driving, now and after every navigation. */
@@ -1210,17 +1316,18 @@ window.__ModuleLoader__.load({
           executeJavaScript: typeof element.executeJavaScript,
         })
 
-        element.addEventListener('did-start-loading', () => { if (!this.detached) setState({ note: 'Loading…' }) })
+        element.addEventListener('did-start-loading', () => { if (!this.detached && this.active()) setState({ note: 'Loading…' }) })
         element.addEventListener('did-stop-loading', () => {
-          if (!this.detached) setState({ note: 'Ready', url: this.url() })
-          void reportPage(this.sessionId, { url: this.url() })
+          if (!this.detached && this.active()) setState({ note: 'Ready', url: this.url() })
+          this.reportPageNow()
           this.applyDriver()
           void this.injectGuards()
           this.syncHistory()
+          this.noteTitle(this.title())
         })
-        element.addEventListener('did-navigate', (event) => { this.remember(event.url); void reportPage(this.sessionId, { url: event.url }); this.applyDriver(); void this.injectGuards(); this.syncHistory(); if (!this.detached) setState({ url: this.url() }) })
-        element.addEventListener('did-navigate-in-page', (event) => { this.remember(event.url); void reportPage(this.sessionId, { url: event.url }); this.applyDriver(); void this.injectGuards(); this.syncHistory(); if (!this.detached) setState({ url: this.url() }) })
-        element.addEventListener('page-title-updated', () => { /* title is read on demand */ })
+        element.addEventListener('did-navigate', (event) => { this.remember(event.url); this.reportPageNow(); this.applyDriver(); void this.injectGuards(); this.syncHistory(); this.noteTitle(this.title()); if (!this.detached && this.active()) setState({ url: this.url() }) })
+        element.addEventListener('did-navigate-in-page', (event) => { this.remember(event.url); this.reportPageNow(); this.applyDriver(); void this.injectGuards(); this.syncHistory(); this.noteTitle(this.title()); if (!this.detached && this.active()) setState({ url: this.url() }) })
+        element.addEventListener('page-title-updated', (event) => { if (typeof event?.title === 'string' && event.title !== '') this.noteTitle(event.title) })
         element.addEventListener('crashed', () => { setState({ note: 'The page crashed' }) })
 
         await once(element, 'dom-ready', 20_000)
@@ -1257,7 +1364,8 @@ window.__ModuleLoader__.load({
 
       /** Current guest URL, or the empty string before the first navigation. */
       url() {
-        return this.lastAddress
+        // The cheapest guarantee the tab strip can rely on: a string or ''.
+        return typeof this.lastAddress === 'string' ? this.lastAddress : ''
       }
 
       /** Record an address the guest events reported, ignoring non-strings. */
@@ -1414,7 +1522,7 @@ window.__ModuleLoader__.load({
         if (typeof url !== 'string' || url === '') throw new Error('url is required')
         const element = this.element
         if (element === null) throw new Error('the browser panel is not mounted')
-        const previous = lastGoodUrls.get(this.sessionId) ?? ''
+        const previous = lastGoodUrls.get(this.goodUrlKey()) ?? ''
         setState({ phase: 'loading', note: 'Loading…', url })
         const stopped = once(element, 'did-stop-loading', 25_000)
         try {
@@ -1435,7 +1543,7 @@ window.__ModuleLoader__.load({
               await back.catch(() => undefined)
               const now = await this.address()
               navigation.restored = now !== '' && now.startsWith('chrome-error://') === false
-              if (navigation.restored) lastGoodUrls.set(this.sessionId, previous)
+              if (navigation.restored) lastGoodUrls.set(this.goodUrlKey(), previous)
             } catch (rollbackError) {
               report('navigation rollback failed', { error: String(rollbackError?.message ?? rollbackError) })
             }
@@ -1452,7 +1560,7 @@ window.__ModuleLoader__.load({
         await stopped.catch(() => undefined)
         const landed = await this.address()
         if (landed !== '' && landed.startsWith('chrome-error://') === false) {
-          lastGoodUrls.set(this.sessionId, landed)
+          lastGoodUrls.set(this.goodUrlKey(), landed)
         }
         // Fit after the load, not before: the width of the new page is only known
         // once it has laid out, and a fit zoom from the previous page would be
@@ -1468,17 +1576,28 @@ window.__ModuleLoader__.load({
           }, 600)?.unref?.()
         }
         const address = await this.address()
+        this.noteTitle(this.title())
         setState({ url: address, phase: 'idle', note: 'Ready' })
         return { url: address, title: this.title(), ...(fit === null ? {} : { fit: fit.zoom }) }
       }
 
-      /** Guest document title, best effort. */
+      /** Guest document title, best effort: the element's answer, else the last event. */
       title() {
         try {
-          return this.element?.getTitle?.() ?? ''
+          const value = this.element?.getTitle?.() ?? ''
+          if (typeof value === 'string' && value !== '') return value
         } catch {
-          return ''
+          // Fall back to the title the events reported.
         }
+        return this.lastTitle
+      }
+
+      /** Remember a title the guest reported and tell the tab strip (TICKET-050). */
+      noteTitle(title) {
+        const blank = typeof title === 'string' && title.startsWith('about:blank')
+        if (typeof title !== 'string' || title === '' || blank || title === this.lastTitle) return
+        this.lastTitle = title
+        if (typeof this.onTitle === 'function') this.onTitle(title)
       }
 
       /** Run source inside the guest and return what it produced, JSON-decoded. */
@@ -2208,6 +2327,203 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The panel's tabs (TICKET-050).
+     *
+     * The panel is one visible box but the agent may need two live pages: a list
+     * and a detail page, or a half-filled form and a document to read. Every tab
+     * is a full `Guest` (own webview, own lease) inside its own slot; exactly one
+     * slot is shown at a time. All tabs of a session share the workspace
+     * partition, so the login that made the first page work also works after a
+     * switch — the host reuses the partition per workspace.
+     *
+     * The store is plain DOM + guests, not React state: it is created in the
+     * panel effect and destroyed with it, while the tab list the user sees is a
+     * snapshot (`snapshot()`) pushed through `onChange`.
+     */
+    class TabStore {
+      /**
+       * @param {string} sessionId - the agent session this panel drives.
+       * @param {HTMLElement} container - the host box the slots live in.
+       * @param {{ onChange?: (view: { tabs: Array<object>, active: string }) => void, onNav?: (nav: { back: boolean, forward: boolean }) => void }} [hooks] -
+       *   `onChange` repaints the tab strip, `onNav` updates the toolbar for the active tab.
+       */
+      constructor(sessionId, container, hooks = {}) {
+        this.sessionId = sessionId
+        this.container = container
+        this.hooks = hooks
+        /** @type {Array<{ id: string, guest: Guest, slot: HTMLElement, title: string, url: string }>} */
+        this.tabs = []
+        this.activeId = ''
+        this.seq = 0
+        this.destroyed = false
+      }
+
+      /** What the panel and the agent see: ids, titles, the active one. */
+      snapshot() {
+        return {
+          tabs: this.tabs.map((tab) => {
+            const url = typeof tab.url === 'string' ? tab.url : ''
+            const blank = url === '' || url.startsWith('about:blank')
+            const titled = typeof tab.title === 'string' && tab.title !== ''
+              && !tab.title.startsWith('about:blank')
+            return {
+              id: tab.id,
+              title: titled ? tab.title : (blank ? '新标签页' : url),
+              url: blank ? '' : url,
+              active: tab.id === this.activeId,
+            }
+          }),
+          active: this.activeId,
+        }
+      }
+
+      /**
+       * Read each guest's real address before answering the agent.
+       *
+       * `getURL()` is asynchronous on the desktop bridge, so the tab structs
+       * cannot stay current on their own: a background tab can finish loading
+       * long after it was created. Reading on demand keeps `browser_tabs list`
+       * honest without a periodic poll.
+       */
+      async refreshUrls() {
+        for (const tab of this.tabs) {
+          const raw = await tab.guest.address()
+          const url = typeof raw === 'string' ? raw : ''
+          if (url !== '' && !url.startsWith('about:blank')) tab.url = url
+          if (tab.title === '') {
+            const title = tab.guest.title()
+            if (title !== '') tab.title = title
+          }
+        }
+      }
+
+      /** The tab struct currently on screen, or null before the first one exists. */
+      activeTab() {
+        const tab = this.tabs.find((entry) => entry.id === this.activeId)
+        return tab === undefined ? null : tab
+      }
+
+      /** The guest the tools should drive, or null. */
+      activeGuest() {
+        const tab = this.activeTab()
+        return tab === null ? null : tab.guest
+      }
+
+      /** Push the current tab list to React, if anyone is listening. */
+      changed() {
+        if (typeof this.hooks.onChange === 'function') this.hooks.onChange(this.snapshot())
+      }
+
+      /** Repaint the toolbar from the active tab. */
+      navChanged() {
+        const tab = this.activeTab()
+        if (tab !== null && typeof this.hooks.onNav === 'function') this.hooks.onNav(tab.guest.historyState())
+      }
+
+      /**
+       * Create a tab (a guest on `about:blank`), mount it in its own slot and
+       * make it active. Throws `tab_limit: …` past MAX_TABS.
+       * @returns {Promise<object>} the new tab struct.
+       */
+      async create() {
+        if (this.destroyed) throw new Error('the browser panel went away while opening a tab')
+        if (this.tabs.length >= MAX_TABS) {
+          throw new Error(`tab_limit: the panel already holds ${MAX_TABS} tabs. `
+            + 'Close one with browser_tabs({ action: "close", tab }) and try again.')
+        }
+        const id = `t${++this.seq}`
+        const slot = document.createElement('div')
+        slot.setAttribute('data-dsh-tab', id)
+        slot.style.cssText = 'position:absolute;inset:0;display:none'
+        this.container.appendChild(slot)
+        const guest = new Guest(this.sessionId)
+        guest.tabId = id
+        const tab = { id, guest, slot, title: '', url: '' }
+        this.tabs.push(tab)
+        guest.onTitle = (title) => {
+          tab.title = title
+          this.changed()
+        }
+        guest.onHistory = (nav) => {
+          if (this.activeId === id) this.hooks.onNav?.(nav)
+        }
+        guest.isActive = () => this.activeId === id
+        try {
+          await guest.mount(slot)
+        } catch (error) {
+          this.drop(tab)
+          throw error
+        }
+        if (this.destroyed) {
+          this.drop(tab)
+          throw new Error('the browser panel went away while opening a tab')
+        }
+        tab.url = guest.url()
+        this.activate(id)
+        return tab
+      }
+
+      /** Show one tab's slot and hide the others; no-op for an unknown id. */
+      activate(id) {
+        const tab = this.tabs.find((entry) => entry.id === id)
+        if (tab === undefined) return null
+        if (this.activeId === id && tab.slot.style.display === 'block') return tab
+        this.activeId = id
+        for (const entry of this.tabs) entry.slot.style.display = entry.id === id ? 'block' : 'none'
+        // The host scopes approval prompts and eval by "the page the panel is
+        // on"; switching tabs must move that address with the screen, not leave
+        // the last-loaded (possibly hidden) tab's URL behind.
+        void reportPage(this.sessionId, { url: tab.guest.url() })
+        this.navChanged()
+        this.changed()
+        return tab
+      }
+
+      /**
+       * Close a tab. Closing the last one opens a fresh blank tab first, so the
+       * panel is never left without a page to drive.
+       * @param {string} id - tab id from `snapshot()`.
+       * @returns {Promise<object>} the closed tab struct.
+       */
+      async close(id) {
+        const tab = this.tabs.find((entry) => entry.id === id)
+        if (tab === undefined) {
+          throw new Error(`tab_not_found: there is no tab "${id}" in this panel. `
+            + 'Call browser_tabs({ action: "list" }) and use an id from that answer. Nothing was closed.')
+        }
+        if (this.tabs.length === 1) await this.create()
+        const wasActive = this.activeId === id
+        const at = this.tabs.indexOf(tab)
+        this.drop(tab)
+        if (wasActive) {
+          const next = this.tabs[Math.min(at, this.tabs.length - 1)]
+          if (next !== undefined) this.activate(next.id)
+        }
+        return tab
+      }
+
+      /** Detach one tab's guest and slot; keeps the active pointer consistent. */
+      drop(tab) {
+        const at = this.tabs.indexOf(tab)
+        if (at >= 0) this.tabs.splice(at, 1)
+        try {
+          tab.slot.remove()
+        } catch {
+          // Removing a node the browser already dropped is not an error.
+        }
+        tab.guest.destroy()
+        if (this.activeId === tab.id) this.activeId = ''
+        this.changed()
+      }
+
+      /** Tear down every tab; called from the panel effect cleanup. */
+      async destroyAll() {
+        this.destroyed = true
+        for (const tab of [...this.tabs]) this.drop(tab)
+      }
+    }
+
+    /**
      * Give up on a guest call that never answers.
      *
      * A `<webview>` method can hang without rejecting — a capture of a busy or
@@ -2543,11 +2859,19 @@ window.__ModuleLoader__.load({
       const view = usePanelState()
       const wrapRef = React.useRef(null)
       const hostRef = React.useRef(null)
-      const guestRef = React.useRef(null)
+      const tabsRef = React.useRef(null)
       const addressInputRef = React.useRef(null)
       const [address, setAddress] = React.useState('')
       const [failure, setFailure] = React.useState(null)
       const [busy, setBusy] = React.useState(false)
+      /**
+       * Tab strip view, pushed by the store: `{ tabs: [...], active }`.
+       *
+       * Details are rendered by `TabStore` itself; React only needs the list to
+       * draw. The active mode known to the store is also what routes every tool
+       * command, so the strip can never disagree with the page being driven.
+       */
+      const [tabs, setTabs] = React.useState({ tabs: [], active: '' })
       const [zoom, setZoom] = React.useState(() => zooms.get(sessionId) ?? 1)
       /**
        * History availability for the Back/Forward buttons. Seeded by the guest
@@ -2668,12 +2992,46 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         let live = true
-        const guest = new Guest(sessionId)
-        guest.onHistory = (next) => { if (live) setNav(next) }
-        guestRef.current = guest
+        const store = new TabStore(sessionId, hostRef.current, {
+          onChange: (next) => {
+            if (live) setTabs(next)
+          },
+          onNav: (next) => { if (live) setNav(next) },
+        })
+        tabsRef.current = store
 
-        const runner = (command) => runCommand(guest, command, sessionId)
-        runner.isLive = () => guest.isLive()
+        const runner = (command) => {
+          if (command.type === 'tabs') {
+            return runTabCommand(store, command).catch((error) => failCommand(command, error))
+          }
+          // `browser_open({ newTab:true })` adds a tab first, then loads the URL
+          // into it; everything else runs against the tab on screen.
+          if (command.type === 'open' && command.params?.newTab === true) {
+            return (async () => {
+              let tab
+              try {
+                tab = await store.create()
+                setAddress('')
+                setZoom(tab.guest.zoom)
+              } catch (error) {
+                await failCommand(command, error)
+                return
+              }
+              await runCommand(tab.guest, command, sessionId)
+            })()
+          }
+          const guest = store.activeGuest()
+          if (guest === null) {
+            return failCommand(command, new Error(
+              'the browser panel has no tab yet (it is still starting); retry in a moment.',
+            ))
+          }
+          return runCommand(guest, command, sessionId)
+        }
+        runner.isLive = () => {
+          const guest = store.activeGuest()
+          return guest !== null && guest.isLive()
+        }
         executors.set(sessionId, runner)
         report('panel mount', { session: short(sessionId), hasHost: hostRef.current !== null })
 
@@ -2690,15 +3048,16 @@ window.__ModuleLoader__.load({
           })
           .catch(() => undefined)
 
-        guest.mount(hostRef.current)
-          .then(() => {
+        store.create()
+          .then((tab) => {
             if (!live) return
             setFailure(null)
-            setZoom(guest.zoom)
-            setNav(guest.historyState())
+            setTabs(store.snapshot())
+            setZoom(tab.guest.zoom)
+            setNav(tab.guest.historyState())
             const queued = deferred.get(sessionId) ?? []
             deferred.delete(sessionId)
-            report('panel ready', { session: short(sessionId), deferred: queued.length })
+            report('panel ready', { session: short(sessionId), deferred: queued.length, tabs: store.tabs.length })
             for (const command of queued) void runner(command)
           })
           .catch((error) => {
@@ -2711,15 +3070,21 @@ window.__ModuleLoader__.load({
         return () => {
           live = false
           if (executors.get(sessionId) === runner) executors.delete(sessionId)
-          guestRef.current = null
-          guest.destroy()
+          tabsRef.current = null
+          void store.destroyAll()
         }
       }, [sessionId])
+
+      /** The guest the panel chrome (address bar, zoom, takeover) acts on. */
+      const guestNow = () => {
+        const store = tabsRef.current
+        return store === null ? null : store.activeGuest()
+      }
 
       const go = () => {
         const target = address.trim()
         if (target === '') return
-        const guest = guestRef.current
+        const guest = guestNow()
         if (guest === null) return
         const url = /^[a-z]+:\/\//i.test(target) ? target : `https://${target}`
         void guest.load(url).catch((error) => { setFailure(String(error?.message ?? error)) })
@@ -2727,21 +3092,66 @@ window.__ModuleLoader__.load({
 
       /** Back/forward/reload for the human riding along in the panel. */
       const historyBack = () => {
-        const guest = guestRef.current
+        const guest = guestNow()
         if (guest === null) return
         void guest.goBack().then((next) => { setNav(next) }).catch(() => undefined)
       }
 
       const historyForward = () => {
-        const guest = guestRef.current
+        const guest = guestNow()
         if (guest === null) return
         void guest.goForward().then((next) => { setNav(next) }).catch(() => undefined)
       }
 
       const reloadPage = () => {
-        const guest = guestRef.current
+        const guest = guestNow()
         if (guest === null) return
         void guest.reloadPage()
+      }
+
+      /** Open a blank tab and put the caret in the address bar (TICKET-050). */
+      const newTab = () => {
+        const store = tabsRef.current
+        if (store === null) return
+        void store.create()
+          .then((tab) => {
+            setAddress('')
+            setZoom(tab.guest.zoom)
+            addressInputRef.current?.focus?.()
+          })
+          .catch((error) => {
+            report('new tab failed', { error: String(error?.message ?? error) })
+            setFailure(String(error?.message ?? error))
+          })
+      }
+
+      /** Show another tab; the panel chrome follows the newly active guest. */
+      const switchTab = (id) => {
+        const store = tabsRef.current
+        if (store === null) return
+        const tab = store.activate(id)
+        if (tab === null) return
+        setZoom(tab.guest.zoom)
+        setNav(tab.guest.historyState())
+        setAddress(tab.guest.url())
+      }
+
+      /** Close one tab; the store keeps at least one page alive. */
+      const closeTab = (id) => {
+        const store = tabsRef.current
+        if (store === null) return
+        void store.close(id)
+          .then(() => {
+            const active = store.activeTab()
+            if (active === null) return
+            setAddress(active.guest.url())
+            setZoom(active.guest.zoom)
+            setNav(active.guest.historyState())
+          })
+          .catch((error) => {
+            report('close tab failed', { error: String(error?.message ?? error) })
+            setFailure(String(error?.message ?? error))
+          })
       }
 
       /**
@@ -2752,7 +3162,7 @@ window.__ModuleLoader__.load({
        * `browser_zoom`, so a test can drive it without a human hand.
        */
       const changeZoom = (next) => {
-        const guest = guestRef.current
+        const guest = guestNow()
         if (guest === null) return
         const factor = Math.min(3, Math.max(0.25, Math.round(next * 100) / 100))
         void guest.setZoom(factor)
@@ -2765,7 +3175,7 @@ window.__ModuleLoader__.load({
         // A prompt about to be answered by the person who is taking the wheel is
         // moot: the agent must stop, not act on a consent that was never given.
         denyPendingApproval(sessionId)
-        const guest = guestRef.current
+        const guest = guestNow()
         if (guest !== null) {
           // Leave the page focused so the human can type straight away.
           void guest.evaluate('document.body?.focus?.(), true').catch(() => undefined)
@@ -2775,7 +3185,7 @@ window.__ModuleLoader__.load({
 
       /** Hand it back, and say what the agent missed while it was away. */
       const handBack = async () => {
-        const guest = guestRef.current
+        const guest = guestNow()
         setBusy(true)
         let digest = ''
         try {
@@ -2802,6 +3212,26 @@ window.__ModuleLoader__.load({
       const box = view.detection?.rect
 
       return h('div', { style: S.panel },
+        h('div', { style: S.tabs, role: 'tablist', 'aria-label': '浏览器标签页' },
+          ...tabs.tabs.map((tab) => h('div', {
+            key: tab.id,
+            style: tab.active === true ? S.tabOn : S.tab,
+          },
+          h('button', {
+            type: 'button',
+            style: S.tabName,
+            onClick: () => switchTab(tab.id),
+            title: tab.url === '' ? tab.title : `${tab.title} — ${tab.url}`,
+          }, tab.title === '' ? tab.id : tab.title),
+          h('button', {
+            type: 'button',
+            style: S.tabClose,
+            onClick: (event) => { event.stopPropagation?.(); closeTab(tab.id) },
+            title: 'Close this tab',
+          }, '×'),
+          )),
+          h('button', { type: 'button', style: S.tabAdd, onClick: newTab, title: 'New tab' }, '+'),
+        ),
         h('div', { style: S.bar },
           h('button', {
             type: 'button',
@@ -2944,6 +3374,12 @@ window.__ModuleLoader__.load({
     /** Inline styles: the panel ships no CSS file, so nothing to scope. */
     const S = {
       panel: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, background: '#fff' },
+      tabs: { display: 'flex', alignItems: 'center', gap: 4, padding: '6px 10px 0', borderBottom: '1px solid #eaecf0', overflowX: 'auto' },
+      tab: { display: 'flex', alignItems: 'center', gap: 2, padding: '0 2px 0 8px', height: 26, fontSize: 11, color: '#475467', background: '#f9fafb', border: '1px solid #eaecf0', borderBottom: 'none', borderTopLeftRadius: 6, borderTopRightRadius: 6, maxWidth: 180, minWidth: 0 },
+      tabOn: { display: 'flex', alignItems: 'center', gap: 2, padding: '0 2px 0 8px', height: 26, fontSize: 11, color: '#101828', background: '#fff', border: '1px solid #d0d5dd', borderBottom: 'none', borderTopLeftRadius: 6, borderTopRightRadius: 6, maxWidth: 180, minWidth: 0 },
+      tabName: { minWidth: 0, maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', border: 'none', background: 'transparent', fontSize: 11, color: 'inherit', cursor: 'pointer', padding: 0 },
+      tabClose: { width: 18, height: 18, lineHeight: '16px', padding: 0, fontSize: 12, border: 'none', background: 'transparent', color: '#98a2b3', cursor: 'pointer' },
+      tabAdd: { width: 24, height: 24, lineHeight: '22px', padding: 0, fontSize: 14, border: '1px solid #d0d5dd', background: '#fff', color: '#344054', cursor: 'pointer', borderRadius: 6, marginBottom: 2 },
       bar: { display: 'flex', gap: 6, padding: '8px 10px', borderBottom: '1px solid #eaecf0', alignItems: 'center' },
       input: { flex: '1 1 auto', minWidth: 0, height: 28, padding: '0 8px', fontSize: 12, borderRadius: 6, border: '1px solid #d0d5dd', outline: 'none' },
       button: { height: 28, padding: '0 10px', fontSize: 12, borderRadius: 6, border: '1px solid #d0d5dd', background: '#fff', color: '#344054', cursor: 'pointer', whiteSpace: 'nowrap' },

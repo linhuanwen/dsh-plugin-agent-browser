@@ -42,6 +42,7 @@
 | [021-browser-upload-cases.md](cases/021-browser-upload-cases.md) | `browser_upload` 真机：单文件/多文件、单文件 input 拒绝列表、越界与非 file input 拒绝、拒绝确认零副作用；三个验收期发现 |
 | [022-scroll-into-view-cases.md](cases/022-scroll-into-view-cases.md) | `browser_scroll` 寻址滚动：按 `loc` 滚到远端元素、按 `ref` 滚回顶部、旧 `dy` 行为不变、失效地址 `stale_loc`、地址与 `dy` 混用被拒 |
 | [023-console-tail-cases.md](cases/023-console-tail-cases.md) | 页面 console 尾巴：`[log]`/`[error]`/`[pageerror]`/`[unhandled]` 进下一次快照、无新日志时不重复、普通按钮不再误判提交类 |
+| [024-tabs-cases.md](cases/024-tabs-cases.md) | 面板标签页：`newTab` 开第二张、`list` 标题与真实 URL、切换后页面状态保留、关最后一个回落空白页、`tab_not_found`/`tab_limit`；三个验收期发现（URL 缓存、空白页标题、客户端 bundle 缓存） |
 | [cases/shots/](cases/shots/) | 案例截图原图 |
 | [cases/outputs/](cases/outputs/) | 案例执行产物：R4/R8/S1–S6 的记录、素材与报告 |
 
@@ -51,9 +52,9 @@
 | --- | --- |
 | [2026-11-24-browser-automation-competitive-report.md](research/2026-11-24-browser-automation-competitive-report.md) | 5 个同类项目（BrowserSkill / browserpaw / browser-mcp / browser-automation / dsh-browser-cdp）的横评，与我们护城河和短板的对照，P0–P2 建议与两周清单 |
 
-## tickets/ —— 49 张工单
+## tickets/ —— 50 张工单
 
-按时间编号，每张记录一个失败模式、根因与验收证据（`034-screenshot-large-capture-hang.md` 是截图大载荷修复，`037`–`039` 是「首次写动作确认」的实现拆分：host 判定/门 → 面板确认条 → 配置与夹具，`040`–`043` 是「阶段 A 边界收口」：白屏根因 → JS 弹窗 → 写动作三态 → F7/F8 真机验收；`044` 是「阶段 B1 第一个能力」：`browser_wait` 等待条件——纯读、零审批、`needs_human`/`taken_over` 下可用；`045` 是「阶段 B2 观察增强」：快照 `loc="css:…"` 稳定定位符，ref 换新后仍可寻址，`bad_loc`/`stale_loc` 分型；`046` 是「阶段 B2 观察增强」：快照被预算截断时返回 `cursor`，带 `cursor` 再调用续读下一段，页面变化返回 `stale_cursor`；`047` 是「阶段 B1 操作补全」：`browser_upload` 把工作区文件合成 `File` 放进 `<input type=file>`——首个不可逆写动作，接 `upload` 审批类与 `upload_rejected`（19 码）；`048` 是「阶段 B1 操作补全」：`browser_scroll` 支持按 `ref`/`loc`/`selector` 把元素滚进视口，回执带元素 `rect` 与 `visible`/`fullyVisible`）。
+按时间编号，每张记录一个失败模式、根因与验收证据（`034-screenshot-large-capture-hang.md` 是截图大载荷修复，`037`–`039` 是「首次写动作确认」的实现拆分：host 判定/门 → 面板确认条 → 配置与夹具，`040`–`043` 是「阶段 A 边界收口」：白屏根因 → JS 弹窗 → 写动作三态 → F7/F8 真机验收；`044` 是「阶段 B1 第一个能力」：`browser_wait` 等待条件——纯读、零审批、`needs_human`/`taken_over` 下可用；`045` 是「阶段 B2 观察增强」：快照 `loc="css:…"` 稳定定位符，ref 换新后仍可寻址，`bad_loc`/`stale_loc` 分型；`046` 是「阶段 B2 观察增强」：快照被预算截断时返回 `cursor`，带 `cursor` 再调用续读下一段，页面变化返回 `stale_cursor`；`047` 是「阶段 B1 操作补全」：`browser_upload` 把工作区文件合成 `File` 放进 `<input type=file>`——首个不可逆写动作，接 `upload` 审批类与 `upload_rejected`（19 码）；`048` 是「阶段 B1 操作补全」：`browser_scroll` 支持按 `ref`/`loc`/`selector` 把元素滚进视口，回执带元素 `rect` 与 `visible`/`fullyVisible`；`049` 是「阶段 B2 观察增强」：快照末尾附页面 console 尾巴；`050` 是「阶段 B3 面板能力」：面板标签页 `browser_tabs` 与 `browser_open.newTab`，多标签共享登录态、切换保状态）。
 
 ## release/ —— 上线与发布
 
@@ -62,7 +63,7 @@
 | [launch-test-plan.md](release/launch-test-plan.md) | G0–G5 上线门禁与逐项执行结果 |
 | [launch-report-1.4.13.md](release/launch-report-1.4.13.md) | 1.4.13 Windows 首发的上线报告与签字 |
 | [release-notes-1.4.md](release/release-notes-1.4.md) | 1.4.x 的产物、行为变化、未验证项与回滚 |
-| [release-notes-1.5.md](release/release-notes-1.5.md) | 1.5.0 信任闸门版：验证墙漏报修复 + 首次写动作确认（16 错误码、面板确认条、off 回退与回滚） |
+| [release-notes-1.5.md](release/release-notes-1.5.md) | 1.5.x 累积发布说明：1.5.0 信任闸门版（验证墙漏报修复 + 首次写动作确认）、1.5.4 写动作三态、1.5.5–1.5.12 阶段 B 能力（wait/loc/cursor/upload/寻址滚动/console 尾巴/标签页） |
 | [g3-ptc-prompt.md](release/g3-ptc-prompt.md) / [g3-ptc-result.md](release/g3-ptc-result.md) | G3 PTC 冒烟门的提示词与执行结果 |
 | [profile-install-baseline.txt](release/profile-install-baseline.txt) | 装机事故前的依赖基线快照 |
 

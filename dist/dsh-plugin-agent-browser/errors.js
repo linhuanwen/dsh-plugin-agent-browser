@@ -22,7 +22,7 @@
  * as `'local'` and keeps the code inside the message, where the model reads it.
  */
 
-/** @typedef {'panel_not_open'|'panel_taken_over'|'needs_human'|'bridge_timeout'|'bridge_closed'|'cancelled'|'unauthorized'|'scheme_rejected'|'eval_disabled'|'session_not_allowed'|'navigation_failed'|'download_rejected'|'budget_exceeded'|'approval_required'|'approval_timeout'|'approval_denied'|'action_unknown'|'stale_cursor'|'upload_rejected'} AgentBrowserErrorCode */
+/** @typedef {'panel_not_open'|'panel_taken_over'|'needs_human'|'bridge_timeout'|'bridge_closed'|'cancelled'|'unauthorized'|'scheme_rejected'|'eval_disabled'|'session_not_allowed'|'navigation_failed'|'download_rejected'|'budget_exceeded'|'approval_required'|'approval_timeout'|'approval_denied'|'action_unknown'|'stale_cursor'|'upload_rejected'|'tab_not_found'|'tab_limit'} AgentBrowserErrorCode */
 
 /**
  * The contract a caller can branch on: every code, whether trying again can
@@ -106,6 +106,14 @@ export const ERROR_CODES = {
   upload_rejected: {
     retryable: false,
     hint: 'the file was refused before anything was sent to the page (path outside the workspace, missing, too large, or the target is not a file input); see reason. Fix the argument and retry.',
+  },
+  tab_not_found: {
+    retryable: true,
+    hint: 'there is no tab with that id (it may have been closed); call browser_tabs({ action: "list" }) and use an id from that answer. Nothing was closed.',
+  },
+  tab_limit: {
+    retryable: false,
+    hint: 'the panel is already holding the maximum number of tabs; close one with browser_tabs({ action: "close", tab }) and open again.',
   },
 }
 

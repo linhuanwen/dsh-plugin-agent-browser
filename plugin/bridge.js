@@ -59,8 +59,13 @@ const INPUT_TYPES = new Set(['open', 'click', 'scroll', 'hover', 'zoom', 'screen
  * If a read like that flipped the phase to `agent`, a pending `needs_human` or
  * `taken_over` would be erased by the very call that checks whether asking is
  * allowed (SPEC-003 C8 keeps the human's phase on top of the approval gate).
+ *
+ * `tabs` is panel bookkeeping, not a page action: listing the open tabs or
+ * switching between them must not steal control either. The mutating half
+ * (`switch` / `close`) is still refused while a human is at the wheel — see
+ * `#assert`, which gets the command's params for exactly this reason.
  */
-const READ_TYPES = new Set(['snapshot', 'inspect', 'wait'])
+const READ_TYPES = new Set(['snapshot', 'inspect', 'wait', 'tabs'])
 
 /**
  * Commands whose effect cannot be proven absent once the panel pulled them.
@@ -324,19 +329,28 @@ export class Bridge {
    * agent cannot solve would otherwise be a dead end — opening another URL is how
    * it gives up on this page and carries on. Under `taken_over` even navigation
    * stays refused, because there the human owns the panel outright.
+   *
+   * Tab bookkeeping is the other nuance (TICKET-050): `tabs` is a read type so
+   * that listing tabs never steals the wheel, but `switch` / `close` change the
+   * page the human is looking at — under any human phase they are refused with
+   * the same codes, because hiding a verification wall or pulling the page out
+   * from under the user is exactly what the human phase exists to prevent.
    * @param {string} sessionId - the agent session.
    * @param {string} type - command type.
+   * @param {object} [params] - the command parameters (the tab action matters).
    */
-  #assert(sessionId, type) {
+  #assert(sessionId, type, params = {}) {
     const { phase } = this.stateOf(sessionId)
-    if (phase === 'taken_over' && INPUT_TYPES.has(type)) {
+    const tabAction = type === 'tabs' ? params.action : ''
+    const input = INPUT_TYPES.has(type) || (type === 'tabs' && tabAction !== 'list')
+    if (phase === 'taken_over' && input) {
       throw new AgentBrowserError(
         'panel_taken_over',
         '用户已接管，请等待交还。The user is driving the panel right now; '
         + 'wait until they hand it back, then continue. Reads (browser_snapshot) still work.',
       )
     }
-    if (phase === 'needs_human' && INPUT_TYPES.has(type) && type !== 'open') {
+    if (phase === 'needs_human' && input && type !== 'open') {
       throw new AgentBrowserError(
         'needs_human',
         '页面需要人工验证（a human verification step is on screen）。'
@@ -553,7 +567,7 @@ export class Bridge {
     // A `close()` may have run while the first listen was still in flight.
     if (this.#closed) throw new AgentBrowserError('bridge_closed', 'the browser panel bridge is shut down')
     if (signal?.aborted === true) throw cancelledError()
-    this.#assert(sessionId, type)
+    this.#assert(sessionId, type, params)
     if (READ_TYPES.has(type) === false) {
       const state = this.stateOf(sessionId)
       if (state.phase !== 'agent') this.setPhase(sessionId, 'agent', { reason: '' })

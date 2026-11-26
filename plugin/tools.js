@@ -166,6 +166,8 @@ export function browserOpenTool(ctx, bridge, sites, options = {}) {
       + 'Pass `path` instead of `url` to open an HTML file from the workspace (e.g. a prototype or a chart): '
       + 'it is served read-only over loopback from the session working directory. '
       + 'Use this before any other browser tool. The panel is a real browser the user can watch and take over. '
+      + 'Pass `newTab: true` to open the page in an additional panel tab instead of replacing the current one; '
+      + 'use `browser_tabs` to list, switch and close tabs. '
       + 'When to use it: the page needs the user\'s own logged-in session (dashboard, orders, mail, member-only '
       + 'content), needs JavaScript or clicking/typing/scrolling to reach the content, needs a file download, or '
       + 'needs a screenshot as evidence. When not to: a public static article — `web_fetch` returns clean Markdown '
@@ -184,6 +186,12 @@ export function browserOpenTool(ctx, bridge, sites, options = {}) {
             'A file in the workspace, relative to the session working directory (e.g. "demo.html" or '
             + '"prototypes/map/index.html"). Served read-only over loopback; `..` is refused. '
             + 'Ignored when `url` is given.',
+        },
+        newTab: {
+          type: 'boolean',
+          description:
+            'Open in a new panel tab (the current page stays alive behind it). Default false: '
+            + 'the current tab navigates. Ignored when the panel has no page yet.',
         },
       },
       additionalProperties: false,
@@ -246,7 +254,12 @@ export function browserOpenTool(ctx, bridge, sites, options = {}) {
 
       let opened
       try {
-        opened = await bridge.request(sessionId, 'open', { url, detect: detectSource() }, navigationTimeoutMs)
+        opened = await bridge.request(
+          sessionId,
+          'open',
+          { url, detect: detectSource(), ...(args?.newTab === true ? { newTab: true } : {}) },
+          navigationTimeoutMs,
+        )
       } catch (error) {
         // TICKET-013 classifies the failure; TICKET-027 may append candidates to
         // it. The fallback never runs for a refusal (only `navigation_failed` /
@@ -282,6 +295,122 @@ export function browserOpenTool(ctx, bridge, sites, options = {}) {
     },
     presentResult(_args, result) {
       return { card: 'generic', title: `Browser${result?.isError === true ? ' failed' : ' opened'}` }
+    },
+  }
+}
+
+/**
+ * `browser_tabs` — list, switch and close the panel's tabs (TICKET-050).
+ *
+ * Panel bookkeeping only: no page is touched, no request reaches the site, and
+ * nothing needs an approval. The agent always drives the *active* tab, so this
+ * is how it finds the ids and decides which page the next call works on.
+ * @param {import('./bridge.js').Bridge} bridge - host half of the channel.
+ * @returns {object} the tool definition.
+ */
+export function browserTabsTool(bridge) {
+  return {
+    name: 'browser_tabs',
+    description:
+      'List, switch or close the tabs of the visible browser panel. The agent always drives the active tab: '
+      + 'open another page with browser_open({ newTab: true }), then use this tool to see which tabs exist and '
+      + 'choose one. Switching keeps every tab\'s page state (form input, scroll, history); closing destroys that '
+      + 'page (the last tab is never removed). `list` still works while a human has the panel; `switch` and '
+      + '`close` are refused then, so a verification page cannot be hidden or pulled away.',
+    parameters: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['list', 'switch', 'close'],
+          description: 'What to do with the tabs.',
+        },
+        tab: {
+          type: 'string',
+          description: 'Tab id from a previous list (e.g. "t2"). Required for switch and close.',
+        },
+      },
+      required: ['action'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string' },
+          tabs: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                title: { type: 'string' },
+                url: { type: 'string' },
+                active: { type: 'boolean' },
+              },
+              required: ['id'],
+            },
+          },
+          active: { type: 'string' },
+          tab: { type: 'string' },
+          url: { type: 'string' },
+          title: { type: 'string' },
+          closed: { type: 'string' },
+        },
+        required: ['action', 'tabs'],
+      },
+      render(_args, value) {
+        const tabs = Array.isArray(value?.tabs) ? value.tabs : []
+        if (tabs.length === 0) return [{ type: 'text', text: 'The browser panel has no tabs.' }]
+        const lines = tabs.map((tab) => {
+          const mark = tab?.active === true ? '* ' : '  '
+          const title = typeof tab?.title === 'string' && tab.title !== '' ? tab.title : '(untitled)'
+          const url = typeof tab?.url === 'string' && tab.url !== '' ? ` — ${tab.url}` : ''
+          return `${mark}${tab?.id ?? '?'}: ${title}${url}`
+        })
+        const head = value?.action === 'switch' && typeof value?.tab === 'string'
+          ? `Switched to ${value.tab}.`
+          : value?.action === 'close' && typeof value?.closed === 'string'
+            ? `Closed ${value.closed}.`
+            : `${tabs.length} tab(s), active ${value?.active ?? '?'}.`
+        return [{ type: 'text', text: `${head}\n\n${lines.join('\n')}` }]
+      },
+    },
+    async execute(args, exec) {
+      const sessionId = sessionOf(exec)
+      const action = args?.action
+      if (action !== 'list' && action !== 'switch' && action !== 'close') {
+        throw new Error('browser_tabs needs `action`: "list", "switch" or "close"')
+      }
+      const tab = typeof args?.tab === 'string' ? args.tab.trim() : ''
+      if (action !== 'list' && tab === '') {
+        throw new Error(`browser_tabs {action:"${action}"} needs \`tab\`: an id from browser_tabs({action:"list"})`)
+      }
+      const result = await bridge.request(sessionId, 'tabs', { action, ...(tab === '' ? {} : { tab }) }, 20_000)
+      const tabs = Array.isArray(result?.tabs)
+        ? result.tabs.map((entry) => ({
+          id: String(entry?.id ?? ''),
+          ...(typeof entry?.title === 'string' ? { title: entry.title } : {}),
+          ...(typeof entry?.url === 'string' ? { url: entry.url } : {}),
+          active: entry?.active === true,
+        }))
+        : []
+      const value = { action, tabs, ...(typeof result?.active === 'string' ? { active: result.active } : {}) }
+      if (typeof result?.tab === 'string') value.tab = result.tab
+      if (typeof result?.url === 'string') value.url = result.url
+      if (typeof result?.title === 'string') value.title = result.title
+      if (typeof result?.closed === 'string') value.closed = result.closed
+      return value
+    },
+    /** The tab it switches to is where the next click lands: keep it serial. */
+    isConcurrencySafe() {
+      return false
+    },
+    presentCall(args) {
+      return { card: 'generic', title: 'Browser tabs', kind: 'fetch', rawInput: args }
+    },
+    presentResult(_args, result) {
+      return { card: 'generic', title: `Browser tabs${result?.isError === true ? ' failed' : ''}` }
     },
   }
 }
@@ -2728,6 +2857,7 @@ export function createTools(ctx, bridge, sites, policy = {}) {
       fallback,
     }),
     browserSnapshotTool(ctx, gate, { maxChars: limits.snapshotMaxChars, rules }),
+    browserTabsTool(gate),
     browserWaitTool(gate),
     browserClickTool(gate),
     browserScrollTool(gate),
@@ -2742,7 +2872,7 @@ export function createTools(ctx, bridge, sites, policy = {}) {
   ]
   // `exec.signal` is per call and the gate is shared, so the signal is carried in
   // async context instead of every tool parameter list. One wrapper here covers
-  // all thirteen tools, which is also why no call site can forget it.
+  // all fourteen tools, which is also why no call site can forget it.
   const wrapped = tools.map((tool) => {
     const execute = tool.execute
     if (typeof execute !== 'function') return tool
