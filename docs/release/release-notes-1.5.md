@@ -28,24 +28,26 @@
 >
 > **1.5.8 是阶段 B 的第四个能力（TICKET-047，`browser_upload`）**：agent 第一次能往页面里上传文件。宿主先读工作区文件（`realpathSync` 后必须落在工作区根目录内；单文件 2 MiB、合计 4 MiB、最多 5 个），base64 走长轮询交给面板，页面侧用 `DataTransfer` + `File` 合成文件、赋给 `<input type=file>.files` 并派发 `input`/`change`——不走 CDP、不打开宿主原生文件选择器（决策 005）。新增第 13 个工具 `browser_upload({ref?,loc?,selector?,strict?,files})`，新增不可逆写 `actionClass:'upload'`（第一次在站点上传要确认，文案只含站点与文件名、不含工作区路径），成功结果 `effect:'committed'`，失败统一 `upload_rejected`（第 19 个错误码，`retryable:false`，带 `reason`；路径越界/缺失/超限/目标不是 file input 都在读字节与弹条之前拒绝，`effect:'none'`）。`CLIENT_REV` 53→54。真机验收期修掉三个只有装上才看得见的问题（`inspect` 丢 `acceptsFiles`、上传命令漏传 `source`、注定失败的列表先弹确认条），单测 296→**309**；真机证据见 `docs/cases/021`。
 >
-> 日期：2026-11-24（1.5.1 验收于 2026-11-25，1.5.2 同日晚收口，1.5.3 与 1.5.4 于 2026-11-26，1.5.5、1.5.6、1.5.7 与 1.5.8 于 2026-11-27）。适用对象：DSH **Desktop**，宿主实测 `0.2.2-rc.5`。上一版基线：1.4.24。
+> **1.5.9 是阶段 B 的第五个能力（TICKET-048，`browser_scroll` 寻址滚动）**：`browser_scroll` 过去只能移动页面（`dy` / `to` / `container`），想把某个元素滚进视口只能反复 snapshot、或 eval 写 `scrollIntoView`（写动作、要审批）、或点它（会真的点击）。现在 `browser_scroll({ref?,loc?,selector?})` 使用与动作工具相同的地址（`loc > selector > ref`，三者互斥，且不能与 `dy`/`to`/`container` 混用），在页面内 `scrollIntoView({block:"center",inline:"center"})`，回执新增 `mode:"into-view"`、元素 `rect`、`visible`、`fullyVisible`、`info`、`frame`；旧的 `dy`/`to` 行为逐字不变（`mode:"by-dy"`/`"to-edge"`）。它是**纯读**：零审批；但和既有的 `browser_scroll` 一样仍属 `INPUT_TYPES`——`needs_human`/`taken_over` 相位下会被直接挡住（`needs_human`/`panel_taken_over`）且不改变相位，不新增例外。地址失效复用 `stale_loc`/`bad_loc`，`effect:"none"`。无新增错误码（仍 19 个），`CLIENT_REV` 不变（`Guest.act` 白名单已含这些字段）。单测新增 `scroll.test.mjs` 8 例 + bridge 1 例，309→**318**；真机证据见 `docs/cases/022`。
+>
+> 日期：2026-11-24（1.5.1 验收于 2026-11-25，1.5.2 同日晚收口，1.5.3 与 1.5.4 于 2026-11-26，1.5.5、1.5.6、1.5.7、1.5.8 与 1.5.9 于 2026-11-27）。适用对象：DSH **Desktop**，宿主实测 `0.2.2-rc.5`。上一版基线：1.4.24。
 > 相关：用户侧文档 `dist/dsh-plugin-agent-browser/README.md`；契约 `docs/spec/003-first-touch-approval-spec.md`；决策 `docs/decisions/010-first-touch-approval.md`；夹具 `docs/cases/015-first-touch-cases.md`。
 
 ## 1. 发布物
 
 | 项 | 值 |
 |---|---|
-| 包名 / 版本 | `dsh-plugin-agent-browser` @ **1.5.8**（1.5.0 + 两轮验收期修正 + TICKET-041 JS 弹窗 + TICKET-042 写动作回执三态 + TICKET-044 `browser_wait` + TICKET-045 快照 `loc=` + TICKET-046 快照 `cursor` + TICKET-047 `browser_upload`，见开头） |
-| 产物 | `dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.8.tgz`，336,112 B / 28 文件；sha256 `9ED041CB3CEA104A46A83D1E19BF7CF94C5521915E928892563F5CB58558DD91`（历史 1.5.7 = 330,413 B / `1EF93A55…`、1.5.6 = 328,742 B / `1D2933C7…`、1.5.5 = 325,936 B / `F75E76AE…`、1.5.4 = 322,516 B / `A757E17C…`） |
+| 包名 / 版本 | `dsh-plugin-agent-browser` @ **1.5.9**（1.5.0 + 两轮验收期修正 + TICKET-041 JS 弹窗 + TICKET-042 写动作回执三态 + TICKET-044 `browser_wait` + TICKET-045 快照 `loc=` + TICKET-046 快照 `cursor` + TICKET-047 `browser_upload` + TICKET-048 `browser_scroll` 寻址滚动，见开头） |
+| 产物 | `dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.9.tgz`，337,820 B / 28 文件；sha256 `707FC466A4D5EC08D8BE6C0C9E70AE226A1D07D9D04A3C3FE42C06C912B6A0DC`（历史 1.5.8 = 336,112 B / `9ED041CB…`、1.5.7 = 330,413 B / `1EF93A55…`、1.5.6 = 328,742 B / `1D2933C7…`、1.5.5 = 325,936 B / `F75E76AE…`、1.5.4 = 322,516 B / `A757E17C…`） |
 | 许可 / 元数据 | `license: MIT`、`private: false`、`engines.dsh: ">=0.2.2-rc.3 <0.3.0"`、peer+dev `@deepseek-ai/schemastery ^3.19.0` |
 | 新增源文件 | `plugin/approvals.js`（1.5.0 起，纯逻辑）；`inject/guards.js` rev 3（1.5.3 起含弹窗守卫）；`plugin/inject/wait.js`（1.5.5 起，等待探针）；`plugin/inject/snapshot.js` 的 `cssPathOf` + `plugin/inject/actions.js` 的 `resolveLoc`（1.5.6 起，快照 `loc=` 生成与嗅探）；`plugin/inject/snapshot.js` 的 `cursor` 分页与 `stamp` 指纹（1.5.7 起，快照续读）；`inject/actions.js` 的 `isFileInput`/`base64ToBytes` 与 `upload` 分支、`plugin/tools.js` 的 `browserUploadTool`/`readUploadFile`（1.5.8 起，文件上传） |
-| 单测 | `309 / 309` 通过（`node --test plugin/test/*.test.mjs`；`upload.test.mjs` 10 例、`snapshot-cursor.test.mjs` 7 例、`snapshot-loc.test.mjs` 3 例、`wait.test.mjs` 16 例、`effect.test.mjs` 8 例、`guards.test.mjs` 12 例、`config.test.mjs` 12 例、`approvals.test.mjs` 18 例、`gate.test.mjs` 17 例） |
+| 单测 | `318 / 318` 通过（`node --test plugin/test/*.test.mjs`；`scroll.test.mjs` 8 例、`upload.test.mjs` 10 例、`snapshot-cursor.test.mjs` 7 例、`snapshot-loc.test.mjs` 3 例、`wait.test.mjs` 16 例、`effect.test.mjs` 8 例、`guards.test.mjs` 12 例、`config.test.mjs` 12 例、`approvals.test.mjs` 18 例、`gate.test.mjs` 17 例） |
 | 文档一致性 | `node tools/check-docs.mjs` 六项全绿（配置字段 21、工具 13、YAML 13 顶层字段、decisions 10、B11、file:line 12） |
 
 ## 2. 安装 / 升级 / 卸载
 
 ```powershell
-plugin_manager install_bundle target="D:\...\dist\dsh-plugin-agent-browser\dsh-plugin-agent-browser-1.5.8.tgz"
+plugin_manager install_bundle target="D:\...\dist\dsh-plugin-agent-browser\dsh-plugin-agent-browser-1.5.9.tgz"
 plugin_manager list_plugins   # 目标行：include:agent-browser-panel / enabled true / fiberPhase active
 ```
 

@@ -205,7 +205,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 | `browser_snapshot` | 读当前页面的无障碍树（带 `[ref=eN]`；能算出稳定路径时紧跟 `[loc="css:…"]`）+ 一张截图；`includeImage:false` 可省掉截图；被字符预算截断时返回 `cursor`，带 `cursor` 再调用可续读下一段（页面变了会返回 `stale_cursor`） |
 | `browser_wait` | 等某个 CSS 选择器或页面文字出现（`gone:true` 等它消失），超时返回 `timedOut`；纯读、无需确认，异步加载先等再快照（默认等 10s，最长 15s） |
 | `browser_click` | 点某个 `ref`；ref 过期时传快照里的 `loc="css:…"`（跨快照有效），没有可用地址时传 CSS `selector`（命中测试失败会分型报告 `not_found` / `multiple` / `occluded` / `disabled`）；canvas 与跨域 iframe 才用坐标（`x`/`y`，CSS 像素）。`target=_blank` 会被改成同视图导航 |
-| `browser_scroll` | 滚动页面或某个容器（`dy` 像素 / `to:"top"|"bottom"` / `container` 选择器），返回位置与 `atBottom`；懒加载列表靠它触发 |
+| `browser_scroll` | 滚动页面或某个容器（`dy` 像素 / `to:"top"|"bottom"` / `container` 选择器），或按 `ref` / `loc` / `selector` 把某个元素滚进视口（返回元素 `rect`、`visible` / `fullyVisible`）；返回位置与 `atBottom`，懒加载列表靠它触发 |
 | `browser_hover` | 把指针移到元素上但不按（`ref` / `loc` / `selector` / `x`,`y`），返回落点与 `grew`；叠卡、悬浮菜单这类"悬停才展开"的控件要先 hover 再点 |
 | `browser_zoom` | 缩放页面（25%–300%）：`factor` 绝对值 / `delta` 步进 / `reset:true` 回 100%。缩小会给页面更宽的排版视口，桌面站才塞得进窄侧栏；面板顶部的 `− 100% ＋` 是同一个开关 |
 | `browser_screenshot` | 把页面存成 PNG 文件到工作区 `screenshots/`（返回路径、尺寸、sha256）。默认**长页拼接成整页图**（自动滚动、重叠裁缝、临时隐藏 fixed/sticky 元素），`mode:"viewport"` 只存当前屏。重名加 `-1`，不覆盖 |

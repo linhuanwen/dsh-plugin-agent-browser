@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>browser_scroll 寻址滚动夹具</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; }
+    .row { padding: 6px 0; border-bottom: 1px solid #eee; }
+    #deep { margin-top: 24px; }
+  </style>
+</head>
+<body>
+  <h1>browser_scroll 寻址滚动夹具（TICKET-048）</h1>
+  <p>
+    页面顶部有按钮，目标元素在第 80 行之后。用
+    <code>browser_scroll { loc: "css:#deep" }</code>
+    把远端元素滚进视口，返回它的 rect 与 visible / fullyVisible。
+  </p>
+  <button id="top">顶部按钮</button>
+  <a id="topLink" href="#deep">跳到远端</a>
+  <div id="rows"></div>
+  <button id="deep">远端按钮 deep</button>
+  <input id="deepInput" name="deepInput" placeholder="远端输入框" />
+  <p id="deepNote">这一行在 80 行列表之后，从顶部看它不在视口里。</p>
+  <script>
+    var rows = document.getElementById('rows')
+    for (var index = 1; index <= 80; index += 1) {
+      var row = document.createElement('div')
+      row.className = 'row'
+      row.textContent = 'row ' + String(index).padStart(3, '0') + ' — 这一行用来把目标元素推到视口之外。'
+      rows.appendChild(row)
+    }
+  </script>
+</body>
+</html>

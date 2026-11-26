@@ -1133,14 +1133,19 @@ export function browserScrollTool(bridge) {
   return {
     name: 'browser_scroll',
     description:
-      'Scroll the page in the browser panel. Pass dy (CSS pixels, default 600) to move down or up, or to:"top"/'
-      + '"bottom" to jump to an end. Pass container (CSS selector) to scroll one scrollable box instead of the page. '
-      + 'Returns the resulting position plus atBottom (true when the page can go no further). Use it to trigger lazy '
-      + 'loading before snapshotting again.',
+      'Scroll the page in the browser panel. Pass ref/loc/selector to bring one element into view (best when a '
+      + 'long page hides the thing you need), or dy (CSS pixels, default 600) to move down/up, or to:"top"/"bottom" '
+      + 'to jump to an end; container (CSS selector) scrolls one scrollable box instead of the page. Addressed scroll '
+      + 'returns the element rect plus visible/fullyVisible; unaddressed scroll returns the resulting position and '
+      + 'atBottom (true when the page can go no further). Use it to trigger lazy loading before snapshotting again.',
     parameters: {
       type: 'object',
       properties: {
-        dy: { type: 'integer', description: 'Pixels to move: positive goes down, negative goes up. Ignored when `to` is given. Defaults to 600.' },
+        ref: { type: 'string', description: 'Element ref from the latest browser_snapshot (e1, f1e2 …). Scrolls it into view.' },
+        loc: { type: 'string', description: 'Stable loc copied from a snapshot (`css:…`); use it when the ref may have gone stale.' },
+        selector: { type: 'string', description: 'CSS selector for the element to scroll into view (alternative to ref/loc).' },
+        strict: { type: 'boolean', description: 'With selector: refuse when it matches more than one element. Defaults to false (first match).' },
+        dy: { type: 'integer', description: 'Pixels to move: positive goes down, negative goes up. Ignored when `to` or an address is given. Defaults to 600.' },
         to: { type: 'string', enum: ['top', 'bottom'], description: 'Jump to the top or the bottom instead of moving by dy.' },
         container: { type: 'string', description: 'CSS selector of a scrollable element to scroll instead of the page.' },
         waitMs: { type: 'integer', description: 'Milliseconds to wait for lazy loading after the scroll. Defaults to 150; raise it for slow sites (max 2000).' },
@@ -1151,16 +1156,51 @@ export function browserScrollTool(bridge) {
       schema: {
         type: 'object',
         properties: {
+          mode: { type: 'string', enum: ['into-view', 'by-dy', 'to-edge'] },
           x: { type: 'integer' },
           y: { type: 'integer' },
           scrollHeight: { type: 'integer' },
           viewportHeight: { type: 'integer' },
           atBottom: { type: 'boolean' },
+          matched: { type: 'boolean' },
+          visible: { type: 'boolean' },
+          fullyVisible: { type: 'boolean' },
+          rect: {
+            type: 'object',
+            properties: {
+              x: { type: 'integer' },
+              y: { type: 'integer' },
+              width: { type: 'integer' },
+              height: { type: 'integer' },
+            },
+          },
+          info: {
+            type: 'object',
+            properties: {
+              tag: { type: 'string' },
+              role: { type: 'string' },
+              name: { type: 'string' },
+            },
+          },
+          frame: { type: 'string' },
           blockedNewWindow: { type: 'string' },
         },
         required: ['y', 'atBottom'],
       },
       render(_args, value) {
+        if (value?.matched === true) {
+          const what = value?.info !== null && typeof value?.info === 'object'
+            ? `${value.info.role ?? value.info.tag ?? 'element'} "${value.info.name ?? ''}"`.trim()
+            : 'element'
+          const spot = `at (${value?.rect?.x ?? 0}, ${value?.rect?.y ?? 0}) ${value?.rect?.width ?? 0}×${value?.rect?.height ?? 0}`
+          const visibility = value?.fullyVisible === true
+            ? 'fully in view'
+            : value?.visible === true ? 'partly in view' : 'still outside the viewport'
+          return [{
+            type: 'text',
+            text: `Scrolled ${what} into view ${spot} — ${visibility}. Snapshot again to see it in context.`,
+          }]
+        }
         const end = value?.atBottom === true ? ' (at the bottom)' : ''
         const lines = [`Scrolled to y=${value?.y ?? 0} of ${value?.scrollHeight ?? 0}${end}. Snapshot again to see what has loaded.`]
         if (typeof value?.blockedNewWindow === 'string' && value.blockedNewWindow !== '') {
@@ -1178,6 +1218,15 @@ export function browserScrollTool(bridge) {
       if (to !== undefined && to !== 'top' && to !== 'bottom') {
         throw new Error(`to must be "top" or "bottom", got ${JSON.stringify(String(to))}`)
       }
+      const loc = typeof args?.loc === 'string' && args.loc.trim() !== '' ? args.loc.trim() : undefined
+      const rawSelector = typeof args?.selector === 'string' && args.selector.trim() !== '' ? args.selector.trim() : undefined
+      const hasRef = typeof args?.ref === 'string' && args.ref.trim() !== ''
+      const addresses = [loc !== undefined, rawSelector !== undefined, hasRef].filter(Boolean).length
+      if (addresses > 1) throw new Error('pass exactly one of ref, loc or selector')
+      const addressed = addresses === 1
+      if (addressed && (to !== undefined || args?.dy !== undefined || args?.container !== undefined)) {
+        throw new Error('ref/loc/selector scroll the element into view; do not combine it with dy, to or container')
+      }
       const dy = args?.dy === undefined ? undefined : Number(args.dy)
       if (dy !== undefined && !Number.isFinite(dy)) throw new Error('dy must be an integer number of pixels')
       const container = typeof args?.container === 'string' && args.container.trim() !== '' ? args.container.trim() : undefined
@@ -1185,16 +1234,38 @@ export function browserScrollTool(bridge) {
       const result = await bridge.request(
         sessionId,
         'scroll',
-        { dy: dy === undefined ? undefined : Math.round(dy), to: to ?? undefined, container, waitMs, source: actionSource() },
+        {
+          ...(addressed
+            ? { ref: hasRef ? args.ref.trim() : undefined, loc, selector: rawSelector, strict: args?.strict === true }
+            : { dy: dy === undefined ? undefined : Math.round(dy), to: to ?? undefined, container }),
+          waitMs,
+          source: actionSource(),
+        },
         20_000,
       )
       if (result?.ok !== true) throw actionFailure(result, 'scroll')
       return {
+        mode: result.mode === 'into-view' ? 'into-view' : result.to !== undefined ? 'to-edge' : 'by-dy',
         x: Math.round(result.x ?? 0),
         y: Math.round(result.y ?? 0),
         scrollHeight: Math.round(result.scrollHeight ?? 0),
         viewportHeight: Math.round(result.viewportHeight ?? 0),
         atBottom: result.atBottom === true,
+        ...(result.matched === true
+          ? {
+              matched: true,
+              visible: result.visible === true,
+              fullyVisible: result.fullyVisible === true,
+              rect: {
+                x: Math.round(result.rect?.x ?? 0),
+                y: Math.round(result.rect?.y ?? 0),
+                width: Math.round(result.rect?.width ?? 0),
+                height: Math.round(result.rect?.height ?? 0),
+              },
+              ...(result.info !== null && typeof result.info === 'object' ? { info: result.info } : {}),
+              ...(typeof result.frame === 'string' && result.frame !== '' ? { frame: result.frame } : {}),
+            }
+          : {}),
         ...(Array.isArray(result.blockedNewWindow) && result.blockedNewWindow.length > 0
           ? { blockedNewWindow: result.blockedNewWindow.map((url) => String(url)).join(' ') }
           : {}),
@@ -1204,7 +1275,7 @@ export function browserScrollTool(bridge) {
       return false
     },
     presentCall(args) {
-      const what = args?.to ? `to ${args.to}` : `${args?.dy ?? 600}px`
+      const what = args?.loc ? `to ${args.loc}` : args?.selector ? `to ${args.selector}` : args?.ref ? `to ${args.ref}` : args?.to ? `to ${args.to}` : `${args?.dy ?? 600}px`
       return { card: 'generic', title: `Scroll ${what}`, kind: 'edit', rawInput: args }
     },
     presentResult() {

@@ -320,6 +320,19 @@ test('a read never takes the wheel back from the human', async () => {
   }
 })
 
+// --- TICKET-048: `scroll` stays an input-ish read (SPEC-004 B1) ---------------
+
+test('a scroll is refused on a verification wall and leaves the phase alone', async () => {
+  const { bridge } = await listening()
+  try {
+    bridge.setPhase('s1', 'needs_human', { reason: 'human verification on screen' })
+    await assert.rejects(bridge.request('s1', 'scroll', { loc: 'css:#deep' }, 150), /needs_human:/)
+    assert.equal(bridge.stateOf('s1').phase, 'needs_human', 'a refused scroll must not take the wheel')
+  } finally {
+    await bridge.close()
+  }
+})
+
 // --- TICKET-044: `wait` is a read (SPEC-004 B5) ------------------------------
 
 test('a wait runs under needs_human and does not flip the phase', async () => {

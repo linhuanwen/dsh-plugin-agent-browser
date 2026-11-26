@@ -59,6 +59,7 @@
 | TICKET-044 `browser_wait` 等待条件 | ✅ 2026-11-27 实现并真机通过（1.5.5，阶段 B1 第一个能力）：新工具 `browser_wait({selector?,text?,gone?,timeoutMs?})`——恰好传一个 selector/text，`gone` 反转，`timeoutMs` 默认 10000（夹到 100–15000）；页面侧 `inject/wait.js` 单次同步判定（selector 非法按「没找到」），轮询放在面板（150ms 间隔、可取消），超时是正常结果（`matched:false, timedOut:true`）不是错误码；`bridge.js` 的 `READ_TYPES` 加 `wait`（不抢相位，`needs_human`/`taken_over` 下可用、零审批）；`CLIENT_REV` 51、工具总数 11→12（check-docs 期望数同步）、`test/wait.test.mjs` 16 例 + bridge 2 例 → 全量 259→**277**；真机验收已完成（`demo/wait.html`；四种情形全过，证据见 `docs/cases/018`） |
 | TICKET-045 快照稳定定位符 `loc=` | ✅ 2026-11-27 实现（1.5.6，阶段 B2 观察增强）：快照为每个带 `ref` 的交互节点追加 `[loc="css:…"]`（`#id`/`[data-testid]`/`tag[name]` 锚点 + `nth-of-type` 位置路径，`querySelector` 自校验，iframe 内带 `f1:` 前缀，>120 字符省略）；`browser_click`/`browser_hover`/`browser_type` 支持按 `loc` 寻址（与 `selector`、坐标点击互斥；`type` 的 `ref`/`loc` 二选一），审批门的提交类判断与密码框早退对 `loc` 同样生效；新增 `bad_loc`/`stale_loc` 错误分型（`effect:'none'`，重试安全）；`CLIENT_REV` 52；新增 `test/snapshot-loc.test.mjs` 3 例、actions +6、gate +2 → 全量 277→**288**；真机证据 `docs/cases/019` |
 | TICKET-047 `browser_upload` 文件上传 | ✅ 2026-11-27 实现并真机通过（1.5.8，阶段 B1 操作补全）：第 13 个工具 `browser_upload({ref?,loc?,selector?,strict?,files})`——宿主读工作区文件（`realpathSync` 后必须落在工作区内；单文件 2 MiB / 合计 4 MiB / 最多 5 个）→ base64 走桥 → 页面 `DataTransfer`+`File` 合成并赋给 `input.files`、派发 `input`/`change`（不走 CDP、不开原生选择器）；新增不可逆写 `actionClass:'upload'`（首次站点确认，文案只含站点与文件名）、第 19 个错误码 `upload_rejected`（`retryable:false`，路径越界/缺失/超限/非 file input 都在读字节与弹条前拒绝）、`effect` 三态照常（已下发丢回执 → `action_unknown`）；`CLIENT_REV` 53→54，工具数 12→13；`test/upload.test.mjs` 10 例 + gate 3 例 → 全量 296→**309**；真机 7 项 + 三个验收期缺陷（inspect 丢 `acceptsFiles`、漏传 `source`、注定失败列表先弹条）记录在 `docs/cases/021-browser-upload-cases.md` |
+| TICKET-048 `browser_scroll` 寻址滚动 | ✅ 2026-11-27 实现并真机通过（1.5.9，阶段 B1 操作补全）：`browser_scroll({ref?,loc?,selector?})` 把元素滚进视口（地址与动作工具同一套：`loc > selector > ref`，三者互斥，且不能与 `dy`/`to`/`container` 混用）；页面侧 `scrollIntoView({block:"center",inline:"center"})`，回执新增 `mode:"into-view"`、元素 `rect`、`visible`、`fullyVisible`、`info`、`frame`，旧 `dy`/`to` 行为不变（`mode:"by-dy"`/`"to-edge"`）；纯读零审批，但仍属 `INPUT_TYPES`（人工相位下被拒且不改变相位，不新增例外），地址失效复用 `stale_loc`/`bad_loc`；无新错误码、`CLIENT_REV` 不变；`test/scroll.test.mjs` 8 例 + bridge 1 例 → 全量 309→**318**；真机 `demo/scroll.html`（按 loc 滚到远端按钮 fully in view、按 ref 滚回、dy 旧行为、stale_loc、地址与 dy 混用被拒），证据 `docs/cases/022` |
 | TICKET-046 快照 `cursor` 续读 | ✅ 2026-11-27 实现并真机通过（1.5.7，阶段 B2 观察增强）：`browser_snapshot` 被字符预算截断时返回 `cursor`（`<stamp>@<offset>`，stamp = URL FNV-1a 指纹 + 总行数 + 引用数 + 字符数），带 `cursor` 再调用只取下一段并插 `- continued from line N of M` 抬头；页面在两次快照之间变化 → 第 18 个错误码 `stale_cursor`（`retryable:true`，hint 重拍整棵树）；续读默认不附图（`CLIENT_REV` 53）；新增 `plugin/test/snapshot-cursor.test.mjs` 7 例 → 全量 289→**296**；真机 `demo/long.html`（截断 16/132→续读不重复、追加 10 行后旧 cursor → `stale_cursor`、续读默认不附图 291.5 KB→584 B），证据 `docs/cases/020` |
 
 ## 一句话结论
@@ -111,8 +112,9 @@ docs/cases/
   shots/                           取证截图（`baidu-earth-hangzhou.png` 地球/卫星视图下的杭州（V12 主案例）、`guangzhou-terrain.png` 广州地势图、`baidu-guangzhou-14z.png` 坐标点击到 14z、`baidu-earth-guangzhou.png` 同视图下的广州（历史））
 dist/
   dsh-plugin-agent-browser/         发布产物（扁平结构，纯 JS 无构建）
-    dsh-plugin-agent-browser-1.5.8.tgz 336,112 B / 28 文件，现役版本，`plugin_manager install_bundle` 直接装（sha256 `9ED041CB3CEA104A46A83D1E19BF7CF94C5521915E928892563F5CB58558DD91`；相对 1.5.7：TICKET-047 `browser_upload` 文件上传——第 13 个工具，把工作区文件合成 `File` 放进 `<input type=file>`，新增不可逆写审批类 `upload` 与第 19 个码 `upload_rejected`，`CLIENT_REV` 54；工具数 12→13、配置字段仍 21；真机证据 `docs/cases/021`）
-    dsh-plugin-agent-browser-1.5.7.tgz 330,413 B / 28 文件，上一个版本（sha256 `1EF93A55DADBF4783BD32BDCE78DE4EBC8ED935BC2554CE31964210C70613D3E`；TICKET-046 快照 `cursor` 续读）
+    dsh-plugin-agent-browser-1.5.9.tgz 337,820 B / 28 文件，现役版本，`plugin_manager install_bundle` 直接装（sha256 `707FC466A4D5EC08D8BE6C0C9E70AE226A1D07D9D04A3C3FE42C06C912B6A0DC`；相对 1.5.8：TICKET-048 `browser_scroll` 寻址滚动——新增 `ref`/`loc`/`selector` 三个可选参数把元素滚进视口，回执含 `rect`/`visible`/`fullyVisible`/`info`/`frame`，纯读零审批、地址失效复用 `stale_loc`/`bad_loc`；工具数仍 13、配置字段仍 21，无新错误码、`CLIENT_REV` 不变；真机证据 `docs/cases/022`）
+    dsh-plugin-agent-browser-1.5.8.tgz 336,112 B / 28 文件，上一个版本，`plugin_manager install_bundle` 直接装（sha256 `9ED041CB3CEA104A46A83D1E19BF7CF94C5521915E928892563F5CB58558DD91`；相对 1.5.7：TICKET-047 `browser_upload` 文件上传——第 13 个工具，把工作区文件合成 `File` 放进 `<input type=file>`，新增不可逆写审批类 `upload` 与第 19 个码 `upload_rejected`，`CLIENT_REV` 54；工具数 12→13、配置字段仍 21；真机证据 `docs/cases/021`）
+    （历史）dsh-plugin-agent-browser-1.5.7.tgz 330,413 B / 28 文件，被 1.5.8 取代（sha256 `1EF93A55DADBF4783BD32BDCE78DE4EBC8ED935BC2554CE31964210C70613D3E`；TICKET-046 快照 `cursor` 续读）
 
 dash-plugin-agent-browser-1.5.6.tgz 328,742 B / 28 文件，上一个版本，`plugin_manager install_bundle` 直接装（sha256 `1D2933C768F2BAB28CF708F103323B5A94F0F20B57530B4C8B946701A5E4DA22`；相对 1.5.5：TICKET-045 阶段 B2 观察增强——快照为带 ref 的交互节点追加 `[loc="css:…"]`（`#id`/`[data-testid]`/`tag[name]` 锚点 + `nth-of-type` 位置路径，`querySelector` 自校验，iframe 内带 `f1:` 前缀，>120 字符省略），`browser_click`/`browser_hover`/`browser_type` 支持 `loc` 寻址（与 selector、坐标互斥；type 的 ref/loc 二选一），`bad_loc`/`stale_loc` 分型且无法解析的地址不弹确认；`CLIENT_REV` 52；工具数仍 12、配置字段仍 21，工具 schema 只新增可选 `loc`；真机证据 `docs/cases/019`）
     （历史）dsh-plugin-agent-browser-1.5.5.tgz 325,936 B / 28 文件，被 1.5.6 取代（sha256 `F75E76AE347F2BAC0FB392DA9F6DF4B70AB145189DD31A27D99791157757C38A`；TICKET-044 `browser_wait` 见上方 ticket 行）
@@ -154,7 +156,7 @@ plugin/                             开发期插件源码（纯 JS，**无 packa
   test/approvals.test.mjs           首次写动作确认纯逻辑单测（18 例：归一化/分类/指纹/授权本/敏感站/决定解析）
   test/policy-extra.test.mjs        策略接缝单测（6 例：scheme/扩展名黑名单/输出预算/会话名单/guard 先于工具体）
   test/lifecycle.test.mjs           生命周期单测（5 例：单 effect、逆序清理、单步失败不中断、AggregateError、display policy 透传）
-  test/bridge.test.mjs              桥单测（19 例：关闭快速 reject、关闭后拒新、幂等；审批流 approve/decision/timeout/不可见/接管/page 回读；人工相位优先于审批提示、读命令不抢相位；`wait` 在 needs_human/taken_over 下可用）
+  test/bridge.test.mjs              桥单测（20 例：关闭快速 reject、关闭后拒新、幂等；审批流 approve/decision/timeout/不可见/接管/page 回读；人工相位优先于审批提示、读命令不抢相位；`wait` 在 needs_human/taken_over 下可用；`scroll` 在 needs_human 下被拒且不改变相位）
   test/errors.test.mjs              错误码单测（8 例：码表/前缀/toJSON/旧前缀/面板文案映射）
   test/cancel.test.mjs              取消单测（7 例：预取消不入队、摘队列留 cancel 帧、迟到回包 ignored、三码区分、不影响其他会话、监听器不泄漏、工具层零调用）
   test/tooldefs.test.mjs            工具定义契约单测（7 例：register 硬要求、参数/输出 schema 子集、render lossless、budget 夹取）
@@ -171,12 +173,13 @@ plugin/                             开发期插件源码（纯 JS，**无 packa
   test/snapshot-loc.test.mjs        快照 loc 单测（3 例：#id 锚点 / 位置路径 / 快照打印的 loc 交给 inspect 对拍）
 test/snapshot-cursor.test.mjs     快照续读单测（7 例：cursor 透传与截图抑制 / 字段映射 / stale → stale_cursor / 超长 cursor 拒绝 / render 续读文案）
   test/guards.test.mjs             接管守护单测（12 例：安装标记/不重装、`_blank`→`_self`、嵌套节点、命名 target + form submit、agent 拦 `window.open`、human 同视图导航 + TICKET-041 弹窗 5 例：alert/confirm/prompt 记录与返回值、off 调原生、20 条/300 字上限）
-test/png.test.mjs                 PNG 编解码单测（3 例：按标记切出出厂代码，编码→解码逐像素对拍）——全量 **309 例**
+test/png.test.mjs                 PNG 编解码单测（3 例：按标记切出出厂代码，编码→解码逐像素对拍）——全量 **318 例**
 test/upload.test.mjs              browser_upload 单测（10 例：路径/限额/审批前置/inspect 阈值/页面侧合成 File）
+test/scroll.test.mjs              browser_scroll 寻址滚动单测（8 例：工具层 dy/loc 映射、地址互斥与零请求、stale_loc 透传；页面层 scrollIntoView 一次、rect/visible/fullyVisible、stale loc 不动页面、bad_loc）
 test/gate.test.mjs                审批接缝单测（11 例：type/提交点击先 inspect 再问、密码框不问、普通链接与坐标点击不问、站点授权只问一次、mode off、宿主不能问时退回 1.4 行为、下载与拒绝路径、eval 先 inspect 拿页面 origin）
   test/smoke-download.mjs           真实下载冒烟脚本（不进包；`node plugin/test/smoke-download.mjs`）
 screenshots/                         `browser_screenshot` 的落盘目录（整页拼接 PNG，重名加 `-1`/`-2` 绝不覆盖）
-demo/                               静态服务的验收页（`index.html` + `a.css` + `data.json` + `img/b.png` + `ticket-009.html` 动作面夹具 + `approval-form.html` / `approval.txt` 首次写动作确认夹具 + `dialogs.html` JS 弹窗夹具 + `wait.html` 等待条件夹具）
+demo/                               静态服务的验收页（`index.html` + `a.css` + `data.json` + `img/b.png` + `ticket-009.html` 动作面夹具 + `approval-form.html` / `approval.txt` 首次写动作确认夹具 + `dialogs.html` JS 弹窗夹具 + `wait.html` 等待条件夹具 + `long.html` 快照续读夹具 + `scroll.html` 寻址滚动夹具）
 tools/probe/                              探针实现（已卸载，保留作证据；`shot-*.png` 是 U6 截图）
 tools/
   pack.mjs                          把 plugin/ 复制源文件进 dist/ 再 `npm pack`，打印体积与安装命令
@@ -261,3 +264,4 @@ docs/tickets/
 
 - 进度（2026-11-27，夜）：**阶段 B 第四个能力 `browser_upload` 文件上传（TICKET-047）已实现并真机通过**——宿主读工作区文件（realpath 校验 + 2 MiB/4 MiB/5 个限额）→ base64 走桥 → 页面 `DataTransfer`+`File` 赋给 `input.files` 并派发 `input`/`change`；新增不可逆写审批类 `upload` 与第 19 个码 `upload_rejected`，`effect` 三态照常；单测 296→309，1.5.8 已装机，真机证据 `docs/cases/021`。
 - 进度（2026-11-27，夜）：**阶段 B 第三个能力 `cursor` 快照续读（TICKET-046）已实现**——`browser_snapshot` 被预算截断时返回 `cursor`（`<stamp>@<offset>`，stamp=URL 指纹+总行数+引用数+字符数），带 `cursor` 再调用只取下一段并插续读抬头，页面变了返回第 18 个码 `stale_cursor`；续读默认不附图（`CLIENT_REV` 53），单测 289→296；1.5.7 已装机，真机证据见 `docs/cases/020`。
+- 进度（2026-11-27，夜）：**阶段 B 第五个能力 `browser_scroll` 寻址滚动（TICKET-048）已实现并真机通过**——`browser_scroll({ref?,loc?,selector?})` 把元素滚进视口（与 `dy`/`to`/`container` 互斥），页面侧 `scrollIntoView`，回执含 `rect`/`visible`/`fullyVisible`/`info`/`frame`；纯读零审批（仍属 `INPUT_TYPES`，人工相位下被拒且不改变相位），地址失效复用 `stale_loc`/`bad_loc`；无新错误码、`CLIENT_REV` 不变；单测 309→318，1.5.9 已装机，真机证据 `docs/cases/022`。

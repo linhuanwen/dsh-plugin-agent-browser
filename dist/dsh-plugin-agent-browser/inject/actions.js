@@ -465,6 +465,88 @@ function dshAction(op, params) {
 
   /** Scroll the page (or a container) and report where it landed. */
   function doScroll() {
+    // Addressed scroll: bring one element into view instead of moving the page
+    // by a fixed amount. It uses the same ref / loc / selector addresses the
+    // action verbs use, so a snapshot's loc keeps working after refs renumber.
+    var addressed = (typeof input.loc === 'string' && input.loc !== '')
+      || (typeof input.selector === 'string' && input.selector !== '')
+      || (typeof input.ref === 'string' && input.ref !== '')
+    if (addressed) {
+      var target = null
+      var targetDoc = document
+      var targetFrame = ''
+      if (typeof input.loc === 'string' && input.loc !== '') {
+        var targetAnchor = resolveLoc(input.loc)
+        if (targetAnchor.error) {
+          var locExtra = { loc: String(input.loc || '') }
+          if (targetAnchor.frame) locExtra.frame = targetAnchor.frame
+          return fail(targetAnchor.error, locExtra)
+        }
+        target = targetAnchor.element
+        targetDoc = targetAnchor.doc
+        targetFrame = targetAnchor.frame
+      } else if (typeof input.selector === 'string' && input.selector !== '') {
+        var targetPick = pickSelector(input.selector, input.strict)
+        if (targetPick.error) {
+          if (targetPick.error === 'multiple') return fail(targetPick.error, { matched: targetPick.matched, selector: targetPick.selector, candidates: targetPick.candidates })
+          var selectorExtra = { matched: targetPick.matched, selector: targetPick.selector }
+          if (typeof targetPick.message === 'string') selectorExtra.message = targetPick.message
+          return fail(targetPick.error, selectorExtra)
+        }
+        target = targetPick.element
+      } else {
+        var targetFound = resolve(input.ref)
+        if (targetFound.error) return fail(targetFound.error, { ref: String(input.ref || '') })
+        target = targetFound.element
+        targetDoc = targetFound.doc
+        targetFrame = targetFound.frame
+      }
+
+      try {
+        target.scrollIntoView({ block: 'center', inline: 'center' })
+      } catch (error) {
+        // Best effort, same as the action verbs: a detached element still has a rect.
+      }
+
+      var pageBox = document.scrollingElement || document.documentElement
+      var pageViewport = window.innerHeight
+      var pageWidth = window.innerWidth
+      var targetRect = target.getBoundingClientRect()
+      // `right` / `bottom` are always present on a real DOMRect, but computing
+      // them keeps the answer honest for stubs and hand-built rects too.
+      var rectLeft = Number(targetRect.left) || 0
+      var rectTop = Number(targetRect.top) || 0
+      var rectRight = targetRect.right === undefined ? rectLeft + (Number(targetRect.width) || 0) : targetRect.right
+      var rectBottom = targetRect.bottom === undefined ? rectTop + (Number(targetRect.height) || 0) : targetRect.bottom
+      var inViewport = rectBottom > 0 && rectTop < pageViewport && rectRight > 0 && rectLeft < pageWidth
+      var fullyInViewport = rectTop >= 0 && rectBottom <= pageViewport && rectLeft >= 0 && rectRight <= pageWidth
+      var pageMax = Math.max(0, (pageBox.scrollHeight || 0) - pageViewport)
+      var pageY = pageBox.scrollTop || 0
+      return JSON.stringify({
+        ok: true,
+        matched: true,
+        mode: 'into-view',
+        x: Math.round(pageBox.scrollLeft || 0),
+        y: Math.round(pageY),
+        scrollHeight: Math.round(pageBox.scrollHeight || 0),
+        viewportHeight: Math.round(pageViewport),
+        viewportWidth: Math.round(pageWidth),
+        atBottom: pageY >= pageMax - 1,
+        rect: {
+          x: Math.round(targetRect.left),
+          y: Math.round(targetRect.top),
+          width: Math.round(targetRect.width),
+          height: Math.round(targetRect.height),
+        },
+        visible: inViewport,
+        fullyVisible: fullyInViewport,
+        info: describe(target, targetDoc),
+        frame: targetFrame,
+        loc: typeof input.loc === 'string' ? input.loc : '',
+        blockedNewWindow: takeBlocked(),
+      })
+    }
+
     var box = null
     var selector = input.container ? String(input.container) : ''
     if (selector !== '') {
