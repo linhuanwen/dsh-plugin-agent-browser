@@ -447,6 +447,8 @@ export function browserSnapshotTool(ctx, bridge, options = {}) {
       + 'lines (a page that changed under the cursor answers stale_cursor; take a fresh snapshot). '
       + 'When the page logged or threw since the last snapshot, the tail of its console is appended '
       + '(last 10 entries; the guards drain it on each snapshot, so nothing repeats). '
+      + 'Failed requests the page itself sent with fetch/XHR are appended the same way '
+      + '(status or transport error, last 10, with the total request count); successes are only counted. '
       + 'Use it once the panel already holds the page (opened by browser_open, or by the user); for a public '
       + 'static page that `web_fetch` can read, that call is cheaper and needs no panel.',
     parameters: {
@@ -502,6 +504,22 @@ export function browserSnapshotTool(ctx, bridge, options = {}) {
               required: ['level', 'text'],
             },
           },
+          network: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                kind: { type: 'string' },
+                method: { type: 'string' },
+                url: { type: 'string' },
+                status: { type: 'integer' },
+                ms: { type: 'integer' },
+                error: { type: 'string' },
+              },
+              required: ['kind', 'method', 'url', 'status', 'ms'],
+            },
+          },
+          networkTotal: { type: 'integer' },
           digest: { type: 'string' },
           image: {
             type: 'object',
@@ -532,7 +550,8 @@ export function browserSnapshotTool(ctx, bridge, options = {}) {
           : ''
         const dialogs = dialogNote(value)
         const consoled = consoleNote(value)
-        const blocks = [{ type: 'text', text: `${header}\n${value?.text ?? ''}${footer}${warned}${dialogs}${consoled}${digestLine(String(value?.digest ?? ''))}` }]
+        const networked = networkNote(value)
+        const blocks = [{ type: 'text', text: `${header}\n${value?.text ?? ''}${footer}${warned}${dialogs}${networked}${consoled}${digestLine(String(value?.digest ?? ''))}` }]
         if (value?.image) blocks.push({ type: 'image', attachment: value.image })
         return blocks
       },
@@ -588,6 +607,20 @@ export function browserSnapshotTool(ctx, bridge, options = {}) {
           .map((entry) => ({ level: String(entry?.level ?? 'log'), text: String(entry?.text ?? '') }))
           .slice(0, 40)
       }
+      if (Array.isArray(result?.network) && result.network.length > 0) {
+        value.network = result.network
+          .filter((entry) => entry !== null && typeof entry === 'object')
+          .map((entry) => ({
+            kind: String(entry?.kind ?? 'fetch'),
+            method: String(entry?.method ?? 'GET'),
+            url: String(entry?.url ?? ''),
+            status: Number.isInteger(entry?.status) ? entry.status : 0,
+            ms: Number.isInteger(entry?.ms) ? entry.ms : 0,
+            ...(typeof entry?.error === 'string' && entry.error !== '' ? { error: entry.error } : {}),
+          }))
+          .slice(0, 40)
+      }
+      if (Number.isInteger(result?.networkTotal) && result.networkTotal > 0) value.networkTotal = result.networkTotal
       if (typeof result?.image === 'string' && result.image !== '') {
         const image = await saveScreenshot(ctx, result.image)
         if (image) return { ...value, image }
@@ -901,6 +934,31 @@ function consoleNote(value) {
   const hidden = list.length - shown.length
   const more = hidden > 0 ? `\n… ${hidden} earlier entries not shown` : ''
   return `\n\npage console (${list.length} ${list.length === 1 ? 'entry' : 'entries'}):\n${lines.join('\n')}${more}`
+}
+
+/**
+ * Render the tail of the page's failed network requests (TICKET-051).
+ *
+ * The page's own script may swallow a failed fetch, leaving only a console
+ * trace that never appears. These lines say which request failed and how, so a
+ * click that "did nothing" can be explained without opening DevTools. Only
+ * failures are listed; the denominator is the total request count so a quiet
+ * page is not mistaken for a broken one.
+ */
+function networkNote(value) {
+  const list = Array.isArray(value?.network) ? value.network : []
+  if (list.length === 0) return ''
+  const shown = list.slice(-10)
+  const total = Number.isInteger(value?.networkTotal) && value.networkTotal > 0 ? value.networkTotal : list.length
+  const lines = shown.map((entry) => {
+    const status = Number.isInteger(entry?.status) && entry.status > 0 ? String(entry.status) : 'failed'
+    const ms = Number.isInteger(entry?.ms) && entry.ms > 0 ? `, ${entry.ms}ms` : ''
+    const note = typeof entry?.error === 'string' && entry.error !== '' ? ` — ${entry.error}` : ''
+    return `- [${String(entry?.kind ?? 'fetch')}] ${String(entry?.method ?? 'GET')} ${String(entry?.url ?? '')} → ${status}${ms}${note}`
+  })
+  const hidden = list.length - shown.length
+  const more = hidden > 0 ? `\n… ${hidden} earlier failures not shown` : ''
+  return `\n\npage network (${list.length} failed of ${total} request(s)):\n${lines.join('\n')}${more}`
 }
 
 /**

@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
      * The renderer caches `client.js` aggressively, and a stale half looks
      * exactly like a bug in the host half.
      */
-    const CLIENT_REV = 56
+    const CLIENT_REV = 57
     /** The panel talks to the host half over loopback; both sides carry this mark. */
     const BRIDGE_PREFIX = '/dsh-agent-browser'
     const BRIDGE_MARK = 'dsh-plugin-agent-browser/1'
@@ -771,6 +771,14 @@ window.__ModuleLoader__.load({
           if (consoleEntries.length > 0) {
             result = result !== null && typeof result === 'object' ? { ...result, console: consoleEntries } : { console: consoleEntries }
           }
+          // TICKET-051: failed page requests since the last snapshot, plus the
+          // total request count so the tail can say "M failed of N".
+          const network = await guest.readNetwork()
+          if (network.entries.length > 0 || network.total > 0) {
+            const withNetwork = { ...(result !== null && typeof result === 'object' ? result : {}), network: network.entries }
+            if (network.total > 0) withNetwork.networkTotal = network.total
+            result = withNetwork
+          }
         } else if (command.type === 'click') {
           result = await guest.click(command.params)
         } else if (command.type === 'inspect') {
@@ -1215,6 +1223,40 @@ window.__ModuleLoader__.load({
           return []
         }
       }
+
+      /**
+       * Drain the page's failed-request buffer (TICKET-051).
+       *
+       * The guards wrap `fetch`/XHR and keep the last 40 failures plus a total
+       * request count. Draining on every snapshot keeps the panel's copy small
+       * and lets the agent see failures that happened since the last look.
+       * @returns {Promise<{ entries: Array<{kind: string, method: string, url: string, status: number, ms: number, error?: string}>, total: number }>}
+       */
+      async readNetwork() {
+        if (this.element === null || this.detached) return { entries: [], total: 0 }
+        try {
+          // Return the object itself: evaluate() JSON-decodes string results.
+          const raw = await this.evaluate('(() => { const list = window.__dshNetwork ?? []; '
+            + 'window.__dshNetwork = []; '
+            + 'const total = typeof window.__dshNetCount === "number" ? window.__dshNetCount : 0; '
+            + 'window.__dshNetCount = 0; return { list: list.slice(-20), total } })()')
+          const list = Array.isArray(raw?.list) ? raw.list : []
+          const entries = list
+            .filter((entry) => entry !== null && typeof entry === 'object')
+            .map((entry) => ({
+              kind: String(entry.kind ?? 'fetch'),
+              method: String(entry.method ?? 'GET'),
+              url: String(entry.url ?? ''),
+              status: Number.isInteger(entry.status) ? entry.status : 0,
+              ms: Number.isFinite(entry.ms) ? Math.max(0, Math.round(entry.ms)) : 0,
+              ...(typeof entry.error === 'string' && entry.error !== '' ? { error: entry.error } : {}),
+            }))
+          return { entries, total: Number.isInteger(raw?.total) && raw.total > 0 ? raw.total : 0 }
+        } catch (error) {
+          return { entries: [], total: 0 }
+        }
+      }
+
 
       /**
        * Report where we are in the session history, so the toolbar can enable

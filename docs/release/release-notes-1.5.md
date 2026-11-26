@@ -34,28 +34,30 @@
 >
 > **1.5.12 是阶段 B 的第七个能力（TICKET-050，面板标签页 tabs）**：此前面板只有一页，`browser_open` 总在同一个 webview 里导航，开 B 就要丢掉 A 的滚动、表单与 SPA 路由。现在面板顶部多了一条标签条：`browser_open({ ..., newTab:true })` 在**新标签**里打开页面（当前页留在后面继续活着），新工具 `browser_tabs({ action:"list" / "switch" / "close", tab })` 列出、切换、关闭标签。`switch` 只换屏幕前的页，每张标签保有自己的滚动、输入与页面状态；`close` 关闭不存在的 id 报 `tab_not_found` 且什么都不关；关闭最后一个标签会先建一张空白页再销毁旧的（面板永远有页）；上限 `MAX_TABS = 6`，超了报 `tab_limit`。实现上每个标签是**一个真实 webview + 一份独立租约**（同一 workspace 复用同一 partition，所以登录态跨标签共享），`Guest` 增加 `tabId`/`onTitle`，让标题与导航回滚按标签记。桥把 `tabs` 加进 `READ_TYPES`（列标签不抢相位），但 `switch`/`close` 在 `taken_over`/`needs_human` 下被拒（用户正在看的那页不能被 agent 换走、验证墙也不能被藏起来）；`tabs` 不进 `WRITE_TYPES`（没有页内 effect，超时即「没执行」）。错误码 19→21，工具 13→14，`CLIENT_REV` 55→56。验收期修掉两处只有真机才看得见的问题：`list` 显示的 URL 是建标签时的缓存（改为回答前按需 `refreshUrls()` 读 `getURL()`）、空白页标题被 Electron 的 `getTitle()` 污染成 `about:blank#…`（`noteTitle` 过滤 + 快照兜底为「新标签页」）。单测新增 `tabs.test.mjs` 8 例并把工具计数改到 14，327→**335**；真机证据见 `docs/cases/024`。**注意**：1.5.11 是内部构建（未发布）；1.5.12 安装后若面板还是旧行为（标签条没出现、标题还是旧的），说明客户端 bundle 被 web shell 缓存了，完整重启一次 DSH 即可（本轮验收即如此）。
 
-> 日期：2026-11-24（1.5.1 验收于 2026-11-25，1.5.2 同日晚收口，1.5.3 与 1.5.4 于 2026-11-26，1.5.5–1.5.10 于 2026-11-27，1.5.11 为内部构建、1.5.12 于 2026-11-27 收口）。适用对象：DSH **Desktop**，宿主实测 `0.2.2-rc.5`。上一版基线：1.4.24。
+> **1.5.13 是阶段 B 的第八个能力（TICKET-051，页面 network 失败尾巴）**：点了按钮页面没反应的另一个大头是页面自己的请求失败——`fetch('/api/list')` 拿到 401/500、XHR 404、请求根本没发出去（`TypeError: Failed to fetch`），前端 catch 后 DOM 没有变化、console 里也常常不打印。现在 `browser_snapshot` 末尾会附上两次快照之间**页面自己发出**的 `fetch`/`XMLHttpRequest` 失败（最近 10 条，形如 `- [fetch] GET /api/list → 500, 12ms`、`- [fetch] GET http://… → failed — TypeError: Failed to fetch`），抬头 `page network (M failed of N request(s)):` 写清失败条数与请求总数（成功请求只进分母），**每次快照清空**。实现上不新增工具、不新增错误码：guards 注入 rev 4→5 包装 `fetch` 与 `XMLHttpRequest`（仍调用原实现，页面的 Promise/XHR 语义不变；`no-cors` 的 opaque 响应读不到状态，不算失败只计数），环形缓冲 40 条、只记失败、同源 URL 缩成 `path+query` 并截 200 字；面板 `readNetwork()` 读出即清空（`CLIENT_REV` 56→57）。不记录响应体/请求头/cookie/WebSocket/dom-ready 之前的请求。单测 guards 16→22 例 + 新增 `network.test.mjs` 4 例，335→**345**；真机证据见 `docs/cases/025`。
+>
+> 日期：2026-11-24（1.5.1 验收于 2026-11-25，1.5.2 同日晚收口，1.5.3 与 1.5.4 于 2026-11-26，1.5.5–1.5.10 于 2026-11-27，1.5.11 为内部构建、1.5.12 于 2026-11-27 收口，1.5.13 同日晚收口）。适用对象：DSH **Desktop**，宿主实测 `0.2.2-rc.5`。上一版基线：1.4.24。
 > 相关：用户侧文档 `dist/dsh-plugin-agent-browser/README.md`；契约 `docs/spec/003-first-touch-approval-spec.md`；决策 `docs/decisions/010-first-touch-approval.md`；夹具 `docs/cases/015-first-touch-cases.md`。
 
 ## 1. 发布物
 
 | 项 | 值 |
 |---|---|
-| 包名 / 版本 | `dsh-plugin-agent-browser` @ **1.5.12**（1.5.0 + 两轮验收期修正 + TICKET-041 JS 弹窗 + TICKET-042 写动作回执三态 + TICKET-044 `browser_wait` + TICKET-045 快照 `loc=` + TICKET-046 快照 `cursor` + TICKET-047 `browser_upload` + TICKET-048 `browser_scroll` 寻址滚动 + TICKET-049 页面 console 尾巴 + TICKET-050 面板标签页（tabs），见开头；1.5.11 为内部构建、未发布） |
-| 产物 | `dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.12.tgz`，346,051 B / 28 文件；sha256 `4BAD7FA1CE8A3D029E7E6F98BA1FC8528BFBB34548AFD30B5535D4CB493BF0F5`（历史 1.5.10 = 339,454 B / `0E1E4FFE…`、1.5.9 = 337,820 B / `707FC466…`、1.5.8 = 336,112 B / `9ED041CB…`、1.5.7 = 330,413 B / `1EF93A55…`、1.5.6 = 328,742 B / `1D2933C7…`、1.5.5 = 325,936 B / `F75E76AE…`、1.5.4 = 322,516 B / `A757E17C…`） |
+| 包名 / 版本 | `dsh-plugin-agent-browser` @ **1.5.13**（1.5.0 + 两轮验收期修正 + TICKET-041 JS 弹窗 + TICKET-042 写动作回执三态 + TICKET-044 `browser_wait` + TICKET-045 快照 `loc=` + TICKET-046 快照 `cursor` + TICKET-047 `browser_upload` + TICKET-048 `browser_scroll` 寻址滚动 + TICKET-049 页面 console 尾巴 + TICKET-050 面板标签页（tabs） + TICKET-051 页面 network 失败尾巴，见开头；1.5.11 为内部构建、未发布） |
+| 产物 | `dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.13.tgz`，348,861 B / 28 文件；sha256 `1ADC4DFF24A33080372FD6078CC708724F4B235200CC53B89AFBCC270C1AB12B`（历史 1.5.12 = 346,051 B / `4BAD7FA1…`、1.5.10 = 339,454 B / `0E1E4FFE…`、1.5.9 = 337,820 B / `707FC466…`、1.5.8 = 336,112 B / `9ED041CB…`、1.5.7 = 330,413 B / `1EF93A55…`、1.5.6 = 328,742 B / `1D2933C7…`、1.5.5 = 325,936 B / `F75E76AE…`、1.5.4 = 322,516 B / `A757E17C…`） |
 | 许可 / 元数据 | `license: MIT`、`private: false`、`engines.dsh: ">=0.2.2-rc.3 <0.3.0"`、peer+dev `@deepseek-ai/schemastery ^3.19.0` |
-| 新增源文件 | `plugin/approvals.js`（1.5.0 起，纯逻辑）；`inject/guards.js` rev 3（1.5.3 起含弹窗守卫）；`plugin/inject/wait.js`（1.5.5 起，等待探针）；`plugin/inject/snapshot.js` 的 `cssPathOf` + `plugin/inject/actions.js` 的 `resolveLoc`（1.5.6 起，快照 `loc=` 生成与嗅探）；`plugin/inject/snapshot.js` 的 `cursor` 分页与 `stamp` 指纹（1.5.7 起，快照续读）；`inject/actions.js` 的 `isFileInput`/`base64ToBytes` 与 `upload` 分支、`plugin/tools.js` 的 `browserUploadTool`/`readUploadFile`（1.5.8 起，文件上传）；`plugin/client.js` 的 `TabStore`/`runTabCommand` 与 `plugin/tools.js` 的 `browserTabsTool`（1.5.12 起，面板标签页） |
-| 单测 | `335 / 335` 通过（`node --test plugin/test/*.test.mjs`；`tabs.test.mjs` 8 例、`console.test.mjs` 4 例、`scroll.test.mjs` 8 例、`upload.test.mjs` 10 例、`snapshot-cursor.test.mjs` 7 例、`snapshot-loc.test.mjs` 3 例、`wait.test.mjs` 16 例、`effect.test.mjs` 8 例、`guards.test.mjs` 16 例、`config.test.mjs` 12 例、`approvals.test.mjs` 18 例、`gate.test.mjs` 17 例） |
+| 新增源文件 | `plugin/approvals.js`（1.5.0 起，纯逻辑）；`inject/guards.js` rev 3（1.5.3 起含弹窗守卫）；`plugin/inject/wait.js`（1.5.5 起，等待探针）；`plugin/inject/snapshot.js` 的 `cssPathOf` + `plugin/inject/actions.js` 的 `resolveLoc`（1.5.6 起，快照 `loc=` 生成与嗅探）；`plugin/inject/snapshot.js` 的 `cursor` 分页与 `stamp` 指纹（1.5.7 起，快照续读）；`inject/actions.js` 的 `isFileInput`/`base64ToBytes` 与 `upload` 分支、`plugin/tools.js` 的 `browserUploadTool`/`readUploadFile`（1.5.8 起，文件上传）；`plugin/client.js` 的 `TabStore`/`runTabCommand` 与 `plugin/tools.js` 的 `browserTabsTool`（1.5.12 起，面板标签页）；`plugin/inject/guards.js` rev 5 的 `fetch`/XHR 包装、`plugin/client.js` 的 `Guest.readNetwork` 与 `plugin/tools.js` 的 `networkNote`（1.5.13 起，页面 network 失败尾巴） |
+| 单测 | `345 / 345` 通过（`node --test plugin/test/*.test.mjs`；`network.test.mjs` 4 例、`tabs.test.mjs` 8 例、`console.test.mjs` 4 例、`scroll.test.mjs` 8 例、`upload.test.mjs` 10 例、`snapshot-cursor.test.mjs` 7 例、`snapshot-loc.test.mjs` 3 例、`wait.test.mjs` 16 例、`effect.test.mjs` 8 例、`guards.test.mjs` 22 例、`config.test.mjs` 12 例、`approvals.test.mjs` 18 例、`gate.test.mjs` 17 例） |
 | 文档一致性 | `node tools/check-docs.mjs` 六项全绿（配置字段 21、工具 14、YAML 13 顶层字段、decisions 10、B11、file:line 12） |
 
 ## 2. 安装 / 升级 / 卸载
 
 ```powershell
-plugin_manager install_bundle target="D:\...\dist\dsh-plugin-agent-browser\dsh-plugin-agent-browser-1.5.12.tgz"
+plugin_manager install_bundle target="D:\...\dist\dsh-plugin-agent-browser\dsh-plugin-agent-browser-1.5.13.tgz"
 plugin_manager list_plugins   # 目标行：include:agent-browser-panel / enabled true / fiberPhase active
 ```
 
-- 装完**刷新一次 DSH 页面**：本次 `CLIENT_REV` 48→…→56（弹窗结果回传、二次解码修复、`wait` 命令分发、`cursor`/`console` 读取、标签页都属于客户端 bundle），不刷新看不到。
+- 装完**刷新一次 DSH 页面**：本次 `CLIENT_REV` 48→…→57（弹窗结果回传、二次解码修复、`wait` 命令分发、`cursor`/`console`/`network` 读取、标签页都属于客户端 bundle），不刷新看不到。
 - **客户端 bundle 有缓存**：同版本重装、或只 touch 安装目录里的 `client.js`，web shell 会复用已执行过的 factory，面板重挂但跑的还是旧代码。装完若标签条没出现/标题还是旧的，**完整重启一次 DSH**（本轮验收即如此，1.5.12 首次安装后面板一度整轮无响应，重启恢复）。
 - **`plugin/apply.js`、`bridge.js`、`tools.js` 属于宿主半**：本机实测 1.5.1 重装后新工具代码即时生效（`browser_type` 打密码框从「弹确认条等 30 秒」变成页面侧当场硬拒）；若装完行为没变，先重启 DSH 再看。同版本重装需 `remove_bundle` 再 `install_bundle`（同版本会被「already installed」挡回）。
 - 升级保留 profile 里的 `config` 行；没写 `approvals` 的 profile 走默认值（`first-touch`，即**默认开启**）。
@@ -93,6 +95,7 @@ plugin_manager list_plugins   # 目标行：include:agent-browser-panel / enable
 - **F7/F8 已于 2026-11-26 真机验收通过（1.5.4）**：F7（`sensitiveSites` 每次必问）——同一 origin 第一次「允许一次」成功后，第二次写动作仍弹条，拒绝后未写入；F8（`mode:'off'` 逐字回退）——type/eval/提交点击全部直接执行，无确认条、无 `approval_*` 错误码。验收走「改配置 → 完全重启 DSH → 一次性验完」的安全路径（不热重载、不启停 bundle），证据见 `docs/cases/015` §5 与 `docs/tickets/043`。仍在契约层锁住的有：`plugin/test/config.test.mjs`、`plugin/test/approvals.test.mjs`、`plugin/test/gate.test.mjs`。U1 窗口隐藏时 `visibilityState` 的真实取值已由 F5 间接证实（面板不可见时 `<1s` 返回 `approval_required`）；U2（提交判定对 `form.submit()`/`requestSubmit()`/`fetch` 的覆盖）与 U4（30s 默认值）仍待更多真机样本。
 - **面板 `/page` 遥测在本机宿主未落地**：不影响判定（写动作的 origin 来自页面侧 `inspect`），只影响遥测与未来的提示文案；已记入 TICKET-037 的后续项。
 - **标签页的已知边界**：面板重建（切 session / 插件重载 / 重启 DSH）后标签不恢复；页面 `window.open` 不自动建标签；缩放按 session 共享；上限 6 个（`tab_limit`）；真机只验收了夹具页，真实登录站点的多标签行为未逐站取样。
+- **network 尾巴的边界**：只覆盖 guards 注入之后页面自己发出的 `fetch`/XHR；不记录响应体、请求头、cookie、Service Worker 内部请求、WebSocket/EventSource 帧，也不记录 dom-ready 之前的请求；成功的请求只进分母、不出现在尾巴里。
 - **真实验证墙**只回归过 `nopecha.com/demo/cloudflare` 一页（needs_human → eval 被拒 → 人工过墙后恢复，均通过）；其他厂商墙未取样。
 
 ## 6. 回滚

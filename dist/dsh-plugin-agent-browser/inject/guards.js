@@ -31,12 +31,19 @@
  * null) so the page keeps running and the agent can see what the page wanted.
  * `dialogs: 'off'` calls the original function instead (native behaviour).
  *
+ * Network failures (TICKET-051) are recorded here for the same reason: the
+ * page's own `fetch`/XHR failures are usually swallowed by the app, so a click
+ * that "did nothing" can be an API call that returned 500 and a console that
+ * never said so. The wrappers always call the original function; only failed
+ * requests (non-2xx, transport error, XHR status 0) are remembered, and only
+ * the counts are kept for successes.
+ *
  * @param {'agent' | 'human'} driver - who is driving right now
  * @param {{ dialogs?: 'record' | 'off' }} [options] - dialog policy
  * @returns {{ rev: number, driver: string }} what was installed
  */
 function dshGuards(driver, options) {
-  var REV = 4
+  var REV = 5
   var NAV_TARGETS = { _self: true, _top: true, _parent: true }
   var input = options || {}
   if (input.dialogs === 'off' || input.dialogs === 'record') window.__dshDialogsMode = input.dialogs
@@ -202,6 +209,163 @@ function dshGuards(driver, options) {
     }
   }
 
+  /**
+   * Record one failed page request and keep the last few, newest last
+   * (TICKET-051).
+   *
+   * The panel drains this on every snapshot. Only failures are stored so a
+   * chatty page cannot flood the model with transport traffic; the total count
+   * is kept separately so the tail can say "3 failed of 12 requests".
+   */
+  function rememberNet(entry) {
+    try {
+      if (Array.isArray(window.__dshNetwork) === false) window.__dshNetwork = []
+      window.__dshNetwork.push(entry)
+      if (window.__dshNetwork.length > 40) window.__dshNetwork.splice(0, window.__dshNetwork.length - 40)
+    } catch (error) {
+      // A page that froze the array keeps its own behaviour.
+    }
+  }
+
+  function bumpNetTotal() {
+    try {
+      var total = typeof window.__dshNetCount === 'number' ? window.__dshNetCount : 0
+      window.__dshNetCount = total + 1
+    } catch (error) {
+      // Counting is a courtesy; the request itself must not be affected.
+    }
+  }
+
+  /**
+   * Turn a request target into something short and readable.
+   *
+   * A full URL with its query string is often what tells two API calls apart,
+   * but it can be long; same-origin targets lose the origin because the page is
+   * already the context.
+   */
+  function netUrl(value) {
+    var text
+    try {
+      text = String(value === undefined || value === null ? '' : value)
+    } catch (error) {
+      return '[unprintable]'
+    }
+    try {
+      var base = window.location && typeof window.location.href === 'string' ? window.location.href : undefined
+      var parsed = new URL(text, base)
+      if (window.location && parsed.origin === window.location.origin) text = parsed.pathname + parsed.search
+      else text = parsed.href
+    } catch (error) {
+      // A relative or opaque target: keep the page's own spelling.
+    }
+    return text.slice(0, 200)
+  }
+
+  function netErrorText(error) {
+    try {
+      if (error instanceof Error) return (String(error.name || 'Error') + ': ' + String(error.message || '')).slice(0, 200)
+      return String(error).slice(0, 200)
+    } catch (inner) {
+      return '[unprintable]'
+    }
+  }
+
+  /**
+   * Wrap `fetch` and `XMLHttpRequest` to record failed requests (TICKET-051).
+   *
+   * Both wrappers call the original implementation, so the page keeps its own
+   * semantics (`fetch` still returns the same promise, XHR still fires its
+   * events). `no-cors` responses are opaque — the status is unreadable — and
+   * are counted as success rather than reported as a failure.
+   */
+  function installNetwork() {
+    if (window.__dshNetworkInstalled === true) return
+    try {
+      window.__dshNetworkInstalled = true
+      window.__dshNetwork = Array.isArray(window.__dshNetwork) ? window.__dshNetwork : []
+      window.__dshNetCount = typeof window.__dshNetCount === 'number' ? window.__dshNetCount : 0
+      var nativeFetch = window.fetch
+      if (typeof nativeFetch === 'function') {
+        window.fetch = function (input, init) {
+          var method = 'GET'
+          try {
+            if (init && typeof init === 'object' && init.method) method = String(init.method).toUpperCase()
+            else if (input && typeof input === 'object' && input.method) method = String(input.method).toUpperCase()
+          } catch (error) {
+            // A frozen Request object keeps the default method label.
+          }
+          var started = Date.now()
+          var pending = nativeFetch.apply(this, arguments)
+          return pending.then(function (response) {
+            bumpNetTotal()
+            try {
+              var opaque = response && (response.type === 'opaque' || response.type === 'opaqueredirect')
+              if (opaque !== true && response && response.ok === false) {
+                var status = typeof response.status === 'number' ? response.status : 0
+                rememberNet({ kind: 'fetch', method: method, url: netUrl(input), status: status, ms: Date.now() - started })
+              }
+            } catch (error) {
+              // Recording is a courtesy; the page keeps its response.
+            }
+            return response
+          }, function (error) {
+            bumpNetTotal()
+            try {
+              rememberNet({ kind: 'fetch', method: method, url: netUrl(input), status: 0, ms: Date.now() - started, error: netErrorText(error) })
+            } catch (inner) {
+              // Recording is a courtesy; the rejection still propagates.
+            }
+            throw error
+          })
+        }
+      }
+      var proto = window.XMLHttpRequest && window.XMLHttpRequest.prototype
+      if (proto && proto.__dshNet !== true) {
+        var originalOpen = proto.open
+        var originalSend = proto.send
+        proto.open = function (method, url) {
+          try {
+            this.__dshNetRequest = {
+              method: String(method === undefined || method === null ? 'GET' : method).toUpperCase(),
+              url: url,
+              started: Date.now(),
+            }
+          } catch (error) {
+            // The request still opens; only the label is lost.
+          }
+          return originalOpen.apply(this, arguments)
+        }
+        proto.send = function () {
+          var request = this.__dshNetRequest
+          if (request) {
+            var target = this
+            try {
+              target.addEventListener('loadend', function () {
+                bumpNetTotal()
+                try {
+                  var status = typeof target.status === 'number' ? target.status : 0
+                  if (status >= 400 || status === 0) {
+                    var entry = { kind: 'xhr', method: request.method, url: netUrl(request.url), status: status, ms: Date.now() - request.started }
+                    if (status === 0) entry.error = 'request failed or aborted'
+                    rememberNet(entry)
+                  }
+                } catch (error) {
+                  // Recording is a courtesy; the page keeps its events.
+                }
+              })
+            } catch (error) {
+              // No listener surface: the request still sends.
+            }
+          }
+          return originalSend.apply(this, arguments)
+        }
+        proto.__dshNet = true
+      }
+    } catch (error) {
+      // No fetch/XHR surface to patch: the page keeps its own network behaviour.
+    }
+  }
+
   function rewriteTarget(node) {
     try {
       if (node === null || node === undefined || typeof node.getAttribute !== 'function') return
@@ -243,6 +407,7 @@ function dshGuards(driver, options) {
     }
     installDialogs()
     installConsole()
+    installNetwork()
     // 1688's search button calls `form.submit()` directly, which fires no
     // `submit` event. Patching the method is the only way to catch that path.
     try {

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>页面 network 观测夹具</title>
+  <style>
+    body { font: 15px/1.5 system-ui, sans-serif; margin: 24px; color: #1f2328; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    p { margin: 6px 0 16px; color: #57606a; }
+    button { font: inherit; margin: 0 8px 8px 0; padding: 6px 12px; cursor: pointer; }
+    #status { margin-top: 12px; padding: 10px 12px; background: #f6f8fa; border-radius: 6px; min-height: 22px; }
+  </style>
+</head>
+<body>
+  <h1>页面 network 观测夹具</h1>
+  <p>点按钮让页面自己发请求。只有<b>失败</b>的 fetch/XHR 会出现在下一次快照的尾巴里（成功的也算进总数）。</p>
+  <button id="fetch-ok">fetch 成功</button>
+  <button id="fetch-404">fetch 404</button>
+  <button id="fetch-down">fetch 传输失败</button>
+  <button id="xhr-404">XHR 404</button>
+  <div id="status">点击次数：0 最近一次：无</div>
+  <script>
+    var clicks = 0
+    var statusBox = document.getElementById('status')
+    function note(text) {
+      clicks += 1
+      statusBox.textContent = '点击次数：' + clicks + ' 最近一次：' + text
+    }
+    document.getElementById('fetch-ok').addEventListener('click', function () {
+      fetch(location.href).then(function (response) {
+        note('fetch 成功 ' + response.status)
+      })
+    })
+    document.getElementById('fetch-404').addEventListener('click', function () {
+      fetch('missing-after-fetch-404.json').then(function (response) {
+        note('fetch 完成 ' + response.status)
+      })
+    })
+    document.getElementById('fetch-down').addEventListener('click', function () {
+      fetch('http://127.0.0.1:1/network-down').catch(function (error) {
+        note('fetch 传输失败 ' + (error && error.name ? error.name : error))
+      })
+    })
+    document.getElementById('xhr-404').addEventListener('click', function () {
+      var xhr = new XMLHttpRequest()
+      xhr.open('GET', 'missing-after-xhr-404.json')
+      xhr.addEventListener('loadend', function () {
+        note('XHR 完成 ' + xhr.status)
+      })
+      xhr.send()
+    })
+  </script>
+</body>
+</html>

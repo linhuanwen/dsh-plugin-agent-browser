@@ -52,17 +52,49 @@ function dom(init = {}) {
       listeners.set(type, list)
     },
   }
+  /** A fetch/XHR stand-in: the guards wrap both but call through (TICKET-051). */
+  class FakeXhr {
+    constructor() {
+      this.listeners = new Map()
+      this.status = 0
+      this.method = ''
+      this.url = ''
+    }
+
+    open(method, url) {
+      this.method = method
+      this.url = url
+    }
+
+    send() {}
+
+    addEventListener(type, handler) {
+      const list = this.listeners.get(type) ?? []
+      list.push(handler)
+      this.listeners.set(type, list)
+    }
+
+    fire(type) {
+      for (const handler of this.listeners.get(type) ?? []) handler({ type, target: this })
+    }
+  }
   const win = {
-    location: init.location ?? { assign: (url) => assigned.push(url) },
+    location: init.location ?? {
+      href: 'https://app.example.com/page',
+      origin: 'https://app.example.com',
+      assign: (url) => assigned.push(url),
+    },
     open: init.open ?? (() => 'popup'),
     console: init.console ?? consoleStub,
+    fetch: init.fetch ?? (async () => ({ ok: true, status: 200, type: 'basic' })),
+    XMLHttpRequest: init.XMLHttpRequest ?? FakeXhr,
     addEventListener: (type, handler) => {
       const list = winListeners.get(type) ?? []
       list.push(handler)
       winListeners.set(type, list)
     },
   }
-  return { doc, win, listeners, winListeners, assigned, consoleCalls: calls }
+  return { doc, win, listeners, winListeners, assigned, consoleCalls: calls, FakeXhr }
 }
 
 /** Fire every window listener of one type with a stub event. */
@@ -108,11 +140,25 @@ function withGlobals(stub, fn) {
   }
 }
 
+/** Await a promise while the stub globals stay installed (fetch is async). */
+async function withGlobalsAsync(stub, fn) {
+  const previousDocument = globalThis.document
+  const previousWindow = globalThis.window
+  globalThis.document = stub.doc
+  globalThis.window = stub.win
+  try {
+    return await fn()
+  } finally {
+    globalThis.document = previousDocument
+    globalThis.window = previousWindow
+  }
+}
+
 test('install: one set of listeners, revision stamped, driver recorded', () => {
   const stub = dom()
   const result = install(stub, 'human')
-  assert.deepEqual(result, { rev: 4, driver: 'human' })
-  assert.equal(stub.win.__dshGuardRev, 4)
+  assert.deepEqual(result, { rev: 5, driver: 'human' })
+  assert.equal(stub.win.__dshGuardRev, 5)
   assert.equal(stub.win.__dshGuardInstalled, true)
   assert.equal(stub.listeners.get('click').length, 1)
   assert.equal(stub.listeners.get('submit').length, 1)
@@ -291,4 +337,87 @@ test('console: a page that replaced the buffer still gets a working one', () => 
   assert.ok(Array.isArray(stub.win.__dshConsole))
   assert.equal(stub.win.__dshConsole.length, 1)
   assert.equal(stub.win.__dshConsole[0].text, 'still works')
+})
+
+test('network: a successful fetch is only counted, never recorded', async () => {
+  const stub = dom({ fetch: async () => ({ ok: true, status: 204, type: 'basic' }) })
+  install(stub, 'agent')
+  const response = await withGlobalsAsync(stub, () => stub.win.fetch('/api/ok'))
+  assert.equal(response.status, 204)
+  assert.equal(stub.win.__dshNetCount, 1)
+  assert.deepEqual(stub.win.__dshNetwork, [])
+})
+
+test('network: an HTTP error is recorded with method, url and status', async () => {
+  const stub = dom({ fetch: async () => ({ ok: false, status: 500, type: 'basic' }) })
+  install(stub, 'agent')
+  await withGlobalsAsync(stub, () => stub.win.fetch('/api/items?page=2', { method: 'post' }))
+  const entry = stub.win.__dshNetwork[0]
+  assert.equal(entry.kind, 'fetch')
+  assert.equal(entry.method, 'POST')
+  assert.equal(entry.url, '/api/items?page=2')
+  assert.equal(entry.status, 500)
+  assert.ok(typeof entry.ms === 'number' && entry.ms >= 0)
+})
+
+test('network: a transport failure is recorded and still rejects', async () => {
+  const stub = dom({
+    fetch: async () => {
+      throw new TypeError('Failed to fetch')
+    },
+  })
+  install(stub, 'agent')
+  await assert.rejects(
+    withGlobalsAsync(stub, () => stub.win.fetch('https://down.example.com/x')),
+    /Failed to fetch/,
+  )
+  const entry = stub.win.__dshNetwork[0]
+  assert.equal(entry.status, 0)
+  assert.equal(entry.url, 'https://down.example.com/x')
+  assert.equal(entry.error, 'TypeError: Failed to fetch')
+})
+
+test('network: an opaque no-cors response is not a failure', async () => {
+  const stub = dom({ fetch: async () => ({ ok: false, status: 0, type: 'opaque' }) })
+  install(stub, 'agent')
+  await withGlobalsAsync(stub, () => stub.win.fetch('https://cdn.example.com/pixel'))
+  assert.equal(stub.win.__dshNetCount, 1)
+  assert.deepEqual(stub.win.__dshNetwork, [])
+})
+
+test('network: XHR records HTTP errors and transport failures', () => {
+  const stub = dom()
+  install(stub, 'agent')
+  withGlobals(stub, () => {
+    const failed = new stub.win.XMLHttpRequest()
+    failed.open('POST', '/api/xhr')
+    failed.send()
+    failed.status = 500
+    failed.fire('loadend')
+    const dead = new stub.win.XMLHttpRequest()
+    dead.open('GET', '/api/gone')
+    dead.send()
+    dead.status = 0
+    dead.fire('loadend')
+  })
+  assert.equal(stub.win.__dshNetCount, 2)
+  assert.deepEqual(stub.win.__dshNetwork.map((entry) => [entry.kind, entry.method, entry.status]), [
+    ['xhr', 'POST', 500],
+    ['xhr', 'GET', 0],
+  ])
+  assert.equal(stub.win.__dshNetwork[1].error, 'request failed or aborted')
+})
+
+test('network: the buffer keeps the last 40 and trims long URLs', async () => {
+  const stub = dom({ fetch: async () => ({ ok: false, status: 500, type: 'basic' }) })
+  install(stub, 'agent')
+  await withGlobalsAsync(stub, async () => {
+    for (let index = 0; index < 45; index += 1) {
+      await stub.win.fetch('/api/' + 'x'.repeat(300) + '/' + index)
+    }
+  })
+  const entries = stub.win.__dshNetwork
+  assert.equal(entries.length, 40)
+  assert.equal(entries[0].url.length, 200)
+  assert.equal(stub.win.__dshNetCount, 45)
 })
