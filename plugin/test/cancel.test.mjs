@@ -93,7 +93,7 @@ test('aborting a queued command removes it and queues a cancel frame', async () 
   }
 })
 
-test('a result that arrives after the cancel is ignored, not an error', async () => {
+test('cancelling a command the panel already pulled reports an unknown effect', async () => {
   const bridge = silent()
   try {
     const controller = new AbortController()
@@ -101,9 +101,13 @@ test('a result that arrives after the cancel is ignored, not an error', async ()
     // The panel pulls (and starts executing) the click...
     const [command] = await pull(bridge)
     assert.equal(command.type, 'click')
-    // ...then the caller gives up.
+    // ...then the caller gives up. A pulled click may have landed, so the call
+    // ends in the honest middle state, not in `cancelled` (TICKET-042).
     controller.abort()
-    await assert.rejects(pending, /cancelled:/)
+    await assert.rejects(pending, (error) => error.code === 'action_unknown'
+      && error.retryable === false
+      && error.details?.effect === 'unknown'
+      && error.details?.delivered === true)
     const settled = await call(bridge, '/settle', {
       method: 'POST',
       body: { id: command.id, ok: true, result: { clicked: true } },

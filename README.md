@@ -9,10 +9,10 @@
 `dsh-plugin-agent-browser` · DSH 桌面端插件
 
 <p>
-  <img alt="version 1.5.3" src="https://img.shields.io/badge/version-1.5.3-2563eb?style=flat-square" />
+  <img alt="version 1.5.4" src="https://img.shields.io/badge/version-1.5.4-2563eb?style=flat-square" />
   <img alt="DSH 0.2.2 - 0.3.0" src="https://img.shields.io/badge/DSH-0.2.2%20~%200.3.0-1d4ed8?style=flat-square" />
   <img alt="11 tools" src="https://img.shields.io/badge/tools-11-0f766e?style=flat-square" />
-  <img alt="251 tests passed" src="https://img.shields.io/badge/tests-251%20passed-16a34a?style=flat-square" />
+  <img alt="259 tests passed" src="https://img.shields.io/badge/tests-259%20passed-16a34a?style=flat-square" />
   <img alt="platform Windows and macOS" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-475569?style=flat-square" />
   <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-0284c7?style=flat-square" />
 </p>
@@ -62,7 +62,7 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 | 留下整页证据、把附件下载回来 | | | ✅ 手动 | ✅ 带 sha256 |
 | 遇到人机验证 | | | ✅ | 检测到就交给你 |
 
-浏览器本身不缺，缺的是**给 Agent 用的那一层**：可寻址的元素（`ref`）、可回放的错误（16 个稳定错误码）、可交还的控制权（顶部那条接管按钮）。这三样才是这个插件的正文。
+浏览器本身不缺，缺的是**给 Agent 用的那一层**：可寻址的元素（`ref`）、可回放的错误（17 个稳定错误码）、可交还的控制权（顶部那条接管按钮）。这三样才是这个插件的正文。
 
 判据、计费与边界讨论见 [`docs/design/web-tools-and-agent-browser.md`](docs/design/web-tools-and-agent-browser.md)。
 
@@ -78,7 +78,7 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 | **失败不毁现场** | 导航失败自动退回上一页，错误里带 `nav_dns` / `nav_cert` / `nav_blocked` 等具体原因；错误页上不会返回空树假成功 |
 | **过程看得见** | Web 端为截图 / 打开 / 下载各出一张工具卡片，模型调了什么、页面长什么样，一眼可查 |
 | **设置就在 DSH 里** | 装好后「设置」左侧多一页 **浏览器面板**：行为、预算、下载、搜索兜底、会话白名单、本地文件服务六组表单，改完保存即可，不用手改 YAML |
-| **工程化底座** | 动态端口 + 每进程令牌、16 个稳定错误码、取消、策略接缝、251 个单测 |
+| **工程化底座** | 动态端口 + 每进程令牌、17 个稳定错误码、取消、策略接缝、259 个单测 |
 
 ## 快速开始
 
@@ -97,7 +97,7 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 
 ```text
 plugin_manager action: install_bundle
-                target: dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.3.tgz
+                target: dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.4.tgz
 ```
 
 ### 3. 打开面板
@@ -239,6 +239,8 @@ client 半 · 侧栏 tab / 四态徽章 / 三张工具卡片 / <webview>
 
 页面里的 JS 弹窗（`alert` / `confirm` / `prompt`）默认由注入守卫拦截并记录，不会冻结页面、也不会擅自点「确定」；内容会出现在随后那次操作的结果里（`blocked dialogs`），可用 `dialogs.mode` 切回原生行为（[`docs/tickets/041`](docs/tickets/041-js-dialogs.md)）。
 
+写动作的结果带三态 `effect`：成功是 `committed`；在命令离开宿主前失败（参数、审批、策略、人工相位）是 `none`，重试是安全的；面板已经把命令拉走却丢了回执（超时、取消、被接管、插件停止）是 `unknown`，此时工具报 `action_unknown`（不可重试），hint 会要求先 `browser_snapshot` 核对页面再决定——**不要重发同一动作**。这条规则对 `submit` / `download` / `eval` 尤其重要（[`docs/spec/004`](docs/spec/004-capability-admission-spec.md) §4 B4、[`docs/tickets/042`](docs/tickets/042-action-effect-tri-state.md)）。
+
 ## 已知限制
 
 - **仅桌面端**。Web 版 profile 没有 `<webview>` 与浏览器租约，启用后面板不出现、工具返回明确的 `unavailable` / `panel_not_open`，不会静默超时。
@@ -250,7 +252,7 @@ client 半 · 侧栏 tab / 四态徽章 / 三张工具卡片 / <webview>
 - **只覆盖四类写动作**：输入、会提交表单的点击/Enter、下载、脚本。非表单按钮的副作用（比如「删除」按钮发 `fetch`）按读处理，不会被拦。
 - **`browser_download` 走宿主侧 `fetch`，不带页面 Cookie**：需要登录态才能下载的链接会拿到登录页而不是文件。
 - **`target=_blank` 的附件是黑洞**：点了既不导航也不落盘，附件一律用 `browser_download({ url })`。
-- **取消只保证"不再等、不再下发新命令"**，已经发到页面里的动作不会撤销。
+- **取消只保证"不再等、不再下发新命令"**，已经发到页面里的动作不会撤销；写动作若已被面板拉走，取消后返回 `action_unknown`（可能已执行，先 snapshot 核对）。
 - **整页拼接有上限**：默认 10000 CSS 像素、最多 16000 设备像素行，超了会停下并在结果里标 `truncated`。
 - **JS 弹窗只覆盖页面脚本期**：守卫在 `dom-ready` 后注入，内联脚本在解析期弹的窗、以及 `beforeunload` 的「页面留人」仍未处理（前者需 preload 探针，后者需宿主 `will-prevent-unload`）；普通 `alert/confirm/prompt` 已拦截并记录。
 
@@ -287,7 +289,7 @@ screenshots/    运行截图 —— 案例证据与复跑留档
 仓库是纯 JS，**没有构建步骤**；插件源码在 `plugin/`，发布产物在 `dist/`。
 
 ```bash
-# 单测（251 例）
+# 单测（259 例）
 node --test --test-timeout=60000 plugin/test/*.test.mjs
 
 # 打包 tgz

@@ -22,7 +22,7 @@
  * as `'local'` and keeps the code inside the message, where the model reads it.
  */
 
-/** @typedef {'panel_not_open'|'panel_taken_over'|'needs_human'|'bridge_timeout'|'bridge_closed'|'cancelled'|'unauthorized'|'scheme_rejected'|'eval_disabled'|'session_not_allowed'|'navigation_failed'|'download_rejected'|'budget_exceeded'|'approval_required'|'approval_timeout'|'approval_denied'} AgentBrowserErrorCode */
+/** @typedef {'panel_not_open'|'panel_taken_over'|'needs_human'|'bridge_timeout'|'bridge_closed'|'cancelled'|'unauthorized'|'scheme_rejected'|'eval_disabled'|'session_not_allowed'|'navigation_failed'|'download_rejected'|'budget_exceeded'|'approval_required'|'approval_timeout'|'approval_denied'|'action_unknown'} AgentBrowserErrorCode */
 
 /**
  * The contract a caller can branch on: every code, whether trying again can
@@ -94,6 +94,10 @@ export const ERROR_CODES = {
   approval_denied: {
     retryable: false,
     hint: 'the user refused this write action (or took the panel over); nothing was sent to the page. Ask what they want done instead.',
+  },
+  action_unknown: {
+    retryable: false,
+    hint: 'the action may already have reached the page but its result was lost. Take a browser_snapshot and check the page state before deciding; do NOT resend the same action.',
   },
 }
 

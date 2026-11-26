@@ -16,24 +16,26 @@
 >
 > **1.5.3 是阶段 A 的第一件能力补口（TICKET-041，JS 弹窗）**：页面里的 `alert/confirm/prompt` 过去完全没处理——渲染进程会被原生弹窗冻结，所有工具一起卡到超时。现在注入守卫（`inject/guards.js` rev 3）拦截并记录它们：`alert` 返回 `undefined`、`confirm` 返回 `false`、`prompt` 返回 `null`（保守答案，不替人点确定），内容以 `blocked dialogs` 段落出现在触发它的工具结果里；下一次 `snapshot` 也会带出迟到的弹窗。新增 `dialogs.mode`（`record` 默认 / `off` 恢复原生，会冻结页面直到人点掉）。冒烟期抓到一个只会在真机出现的 bug：`Guest.readDialogs()` 把数组 `JSON.stringify` 后交给会先 JSON 解码一次的 `evaluate`，二次解析失败被静默吞掉——改成直接返回数组（`CLIENT_REV` 49→50）。真机证据在 `docs/cases/016`；`off` 模式真机对照待 TICKET-040（白屏根因）结案后补。单测 245→251。
 >
-> 日期：2026-11-24（1.5.1 验收于 2026-11-25，1.5.2 同日晚收口，1.5.3 于 2026-11-26）。适用对象：DSH **Desktop**，宿主实测 `0.2.2-rc.5`。上一版基线：1.4.24。
+> **1.5.4 是阶段 A 的第二件（TICKET-042，写动作回执三态）**：写动作过去只有「成功 / 抛错」两种结局，无法回答「这次到底发出去了没有」。现在：成功结果带 `effect:'committed'`；没发出（参数/审批/策略/相位/入队前失败）带 `details.effect:'none'`；**已下发但回执丢失**（超时/断线/取消/接管/关闭）返回新错误码 `action_unknown`（`retryable:false`，hint 明确「先 `browser_snapshot` 核对，不要重发」）。`browser_eval` 的页面侧抛错也改报 `action_unknown`（脚本到过页面）。`bridge_timeout` 语义不变（未发出）。单测新增 `effect.test.mjs` 8 例、`cancel.test.mjs` 改断言，251→259；真机两条 unknown（eval 页面抛错、接管中断），见 `docs/cases/017`。已知边界：已下发后页面回报 `ok:false` 仍统一按 `none`（`browser_eval` 抛错除外），`type` 中途失败边界尚未细拆。
+>
+> 日期：2026-11-24（1.5.1 验收于 2026-11-25，1.5.2 同日晚收口，1.5.3 与 1.5.4 于 2026-11-26）。适用对象：DSH **Desktop**，宿主实测 `0.2.2-rc.5`。上一版基线：1.4.24。
 > 相关：用户侧文档 `dist/dsh-plugin-agent-browser/README.md`；契约 `docs/spec/003-first-touch-approval-spec.md`；决策 `docs/decisions/010-first-touch-approval.md`；夹具 `docs/cases/015-first-touch-cases.md`。
 
 ## 1. 发布物
 
 | 项 | 值 |
 |---|---|
-| 包名 / 版本 | `dsh-plugin-agent-browser` @ **1.5.3**（1.5.0 + 两轮验收期修正 + TICKET-041 JS 弹窗，见开头） |
-| 产物 | `dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.3.tgz`，320,316 B / 27 文件；sha256 `8F6C19AE570CADB33B791DDD86CD505F7B87A73D02FC67D58AFFEA7876E5FFAF` |
+| 包名 / 版本 | `dsh-plugin-agent-browser` @ **1.5.4**（1.5.0 + 两轮验收期修正 + TICKET-041 JS 弹窗 + TICKET-042 写动作回执三态，见开头） |
+| 产物 | `dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.4.tgz`，322,516 B / 27 文件；sha256 `A757E17C36DEEE479686B05867F4B4E1103FA76C9B9B539DF9333F5B0EE2F405`（历史 1.5.3 = 320,316 B / `8F6C19AE…`） |
 | 许可 / 元数据 | `license: MIT`、`private: false`、`engines.dsh: ">=0.2.2-rc.3 <0.3.0"`、peer+dev `@deepseek-ai/schemastery ^3.19.0` |
 | 新增源文件 | `plugin/approvals.js`（1.5.0 起，纯逻辑）；`inject/guards.js` rev 3（1.5.3 起含弹窗守卫） |
-| 单测 | `251 / 251` 通过（`node --test plugin/test/*.test.mjs`；`guards.test.mjs` 12 例、`config.test.mjs` 12 例、`approvals.test.mjs` 18 例、`gate.test.mjs` 11 例） |
+| 单测 | `259 / 259` 通过（`node --test plugin/test/*.test.mjs`；`effect.test.mjs` 8 例、`guards.test.mjs` 12 例、`config.test.mjs` 12 例、`approvals.test.mjs` 18 例、`gate.test.mjs` 11 例） |
 | 文档一致性 | `node tools/check-docs.mjs` 六项全绿（配置字段 21、工具 11、YAML 13 顶层字段、decisions 10、B11、file:line 12） |
 
 ## 2. 安装 / 升级 / 卸载
 
 ```powershell
-plugin_manager install_bundle target="D:\...\dist\dsh-plugin-agent-browser\dsh-plugin-agent-browser-1.5.3.tgz"
+plugin_manager install_bundle target="D:\...\dist\dsh-plugin-agent-browser\dsh-plugin-agent-browser-1.5.4.tgz"
 plugin_manager list_plugins   # 目标行：include:agent-browser-panel / enabled true / fiberPhase active
 ```
 

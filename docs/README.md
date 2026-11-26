@@ -35,6 +35,7 @@
 | [014-practical-cases.md](cases/014-practical-cases.md) | S1–S6 实用案例（取表、下载、隔离、故障处置） |
 | [015-first-touch-cases.md](cases/015-first-touch-cases.md) | F1–F12 首次写动作确认夹具（读动作零打扰、首次确认、拒绝/超时/不可见、站点豁免、敏感站、off 回退、提交分类、接管作废） |
 | [016-js-dialogs-cases.md](cases/016-js-dialogs-cases.md) | JS 弹窗夹具：alert/confirm/prompt 保守拦截与记录、迟到的弹窗进入下一次结果、页面不冻结（record 模式；off 对照待 TICKET-040） |
+| [017-action-effect-cases.md](cases/017-action-effect-cases.md) | 写动作回执三态：`effect: none/committed/unknown` + `action_unknown`；真机两条 unknown（eval 页面抛错、接管中断）与已知边界 |
 | [cases/shots/](cases/shots/) | 案例截图原图 |
 | [cases/outputs/](cases/outputs/) | 案例执行产物：R4/R8/S1–S6 的记录、素材与报告 |
 

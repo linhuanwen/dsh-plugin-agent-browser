@@ -62,6 +62,20 @@ const INPUT_TYPES = new Set(['open', 'click', 'scroll', 'hover', 'zoom', 'screen
  */
 const READ_TYPES = new Set(['snapshot', 'inspect'])
 
+/**
+ * Commands whose effect cannot be proven absent once the panel pulled them.
+ *
+ * `#drain()` means the panel took the command: it is now sitting in the
+ * renderer's queue, possibly already executing, and a lost result (timeout,
+ * cancel, takeover, shutdown) no longer justifies "nothing was sent". These are
+ * the commands that back `browser_click` / `browser_type` / `browser_press` /
+ * `browser_eval`; the tool layer turns the resulting `action_unknown` error into
+ * `effect: 'unknown'` (SPEC-004 B4, TICKET-042). `open`/`snapshot`/`scroll` are
+ * deliberately absent: a navigation that did not report back is re-observable
+ * and is not a write against the site.
+ */
+const WRITE_TYPES = new Set(['click', 'type', 'press', 'eval'])
+
 /** A session that has not acted for this long reads as `idle` instead of `agent`. */
 const IDLE_MS = 45_000
 
@@ -508,7 +522,11 @@ export class Bridge {
       if (entry.sessionId !== sessionId) continue
       this.#waiting.delete(id)
       clearTimeout(entry.timer)
-      entry.reject(new AgentBrowserError('panel_taken_over', reason))
+      // The human taking the wheel must not let a delivered write claim "nothing
+      // happened": its effect stays unknown until the page is re-read.
+      entry.reject(entry.delivered && WRITE_TYPES.has(entry.type)
+        ? unknownOutcome(entry.type, 'the user took the panel over while it was executing')
+        : new AgentBrowserError('panel_taken_over', reason))
     }
   }
 
@@ -546,8 +564,8 @@ export class Bridge {
     const started = Date.now()
 
     return new Promise((resolve, reject) => {
-      /** @type {{ sessionId: string, resolve: (v: any) => void, reject: (e: Error) => void, timer: any, onAbort?: () => void }} */
-      const entry = { sessionId, resolve, reject, timer: null }
+      /** @type {{ sessionId: string, type: string, delivered: boolean, resolve: (v: any) => void, reject: (e: Error) => void, timer: any, onAbort?: () => void }} */
+      const entry = { sessionId, type, delivered: false, resolve, reject, timer: null }
       const finish = (error, value) => {
         clearTimeout(entry.timer)
         if (entry.onAbort !== undefined && signal !== undefined) {
@@ -567,11 +585,16 @@ export class Bridge {
 
       entry.timer = setTimeout(() => {
         this.#abandon(sessionId, id)
-        finish(new AgentBrowserError(
-          'bridge_timeout',
-          `browser panel did not answer ${id} (${type}) within ${timeoutMs}ms. `
-          + 'Open the right sidebar browser tab for this session and retry.',
-        ))
+        // A write the panel already pulled may have run: report the middle state
+        // instead of a retryable timeout (SPEC-004 B4, TICKET-042). Everything
+        // else keeps the old `bridge_timeout` meaning: nothing reached the page.
+        finish(entry.delivered && WRITE_TYPES.has(type)
+          ? unknownOutcome(type, `the panel did not answer within ${timeoutMs}ms`)
+          : new AgentBrowserError(
+            'bridge_timeout',
+            `browser panel did not answer ${id} (${type}) within ${timeoutMs}ms. `
+            + 'Open the right sidebar browser tab for this session and retry.',
+          ))
       }, timeoutMs)
       entry.timer.unref?.()
 
@@ -629,7 +652,9 @@ export class Bridge {
     this.#queues.set(sessionId, queue)
     this.#wake()
     this.#logger(`cancel ${id}`)
-    entry.reject(cancelledError(id))
+    entry.reject(entry.delivered && WRITE_TYPES.has(entry.type)
+      ? unknownOutcome(entry.type, 'the caller cancelled while the panel was executing it')
+      : cancelledError(id))
   }
 
   /** Drop a command that timed out so a late panel does not execute it. */
@@ -653,7 +678,13 @@ export class Bridge {
     let total = 0
     for (const [sessionId, queue] of this.#queues) {
       if (queue.length === 0) continue
-      sessions[sessionId] = queue.map(({ id, type, params, show, fit }) => ({ id, type, params, show, fit }))
+      sessions[sessionId] = queue.map(({ id, type, params, show, fit }) => {
+        // From here on the panel owns the command: a lost result is no longer
+        // evidence that nothing happened (TICKET-042).
+        const entry = this.#waiting.get(id)
+        if (entry !== undefined) entry.delivered = true
+        return { id, type, params, show, fit }
+      })
       total += queue.length
       this.#seen.add(sessionId)
     }
@@ -737,7 +768,9 @@ export class Bridge {
   async close() {
     this.#closed = true
     for (const [id, entry] of this.#waiting) {
-      entry.reject(new AgentBrowserError('bridge_closed', `the bridge stopped before ${id} settled`))
+      entry.reject(entry.delivered && WRITE_TYPES.has(entry.type)
+        ? unknownOutcome(entry.type, 'the plugin stopped while the panel was executing it')
+        : new AgentBrowserError('bridge_closed', `the bridge stopped before ${id} settled`))
     }
     for (const [sessionId, approval] of [...this.#approvals]) {
       this.#approvals.delete(sessionId)
@@ -768,7 +801,9 @@ export class Bridge {
   dispose() {
     this.#closed = true
     for (const [id, entry] of this.#waiting) {
-      entry.reject(new AgentBrowserError('bridge_closed', `the bridge stopped before ${id} settled`))
+      entry.reject(entry.delivered && WRITE_TYPES.has(entry.type)
+        ? unknownOutcome(entry.type, 'the plugin stopped while the panel was executing it')
+        : new AgentBrowserError('bridge_closed', `the bridge stopped before ${id} settled`))
     }
     for (const [sessionId, approval] of [...this.#approvals]) {
       this.#approvals.delete(sessionId)
@@ -1128,6 +1163,27 @@ function cancelledError(id = '') {  const which = id === '' ? 'this call' : `${i
     'cancelled',
     `the caller stopped ${which} before the panel finished it. `
     + 'Nothing already sent to the page can be undone, so re-read the page before acting again.',
+  )
+}
+
+/**
+ * The result of a write that the panel already pulled and then stopped reporting.
+ *
+ * This is the honest middle state (SPEC-004 B4): the command left the queue, so
+ * "nothing happened" is no longer provable and the tool card must not invite a
+ * retry. `delivered: true` and the original reason stay in `details` so a
+ * support run can tell a timeout from a cancel from a takeover.
+ * @param {string} type - command type (`click`, `type`, `press`, `eval`).
+ * @param {string} reason - what interrupted the wait, in the caller's words.
+ * @returns {AgentBrowserError} an `action_unknown` error, never retryable.
+ */
+function unknownOutcome(type, reason) {
+  return new AgentBrowserError(
+    'action_unknown',
+    `the ${type} command was already pulled by the panel, so the page may have executed it; `
+    + `its result was lost (${reason}). Take a browser_snapshot and check the page before deciding; `
+    + 'do not resend the same action.',
+    { details: { effect: 'unknown', delivered: true, type, reason } },
   )
 }
 

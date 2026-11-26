@@ -645,6 +645,14 @@ const ACTION_OUTPUT = {
     role: { type: 'string' },
     name: { type: 'string' },
     dialogs: { type: 'array', items: { type: 'string' } },
+    // SPEC-004 B4 / TICKET-042: a write result must say whether the page took
+    // the action. `none` / `unknown` mostly travel as errors, but the field is
+    // declared here so a success card and an error card are read the same way.
+    effect: {
+      type: 'string',
+      enum: ['none', 'committed', 'unknown'],
+      description: 'committed = the page acknowledged the write. Errors carry effect in their details: none = nothing was sent, unknown = it may have run.',
+    },
   },
 }
 
@@ -668,6 +676,37 @@ function dialogNote(value) {
   const list = Array.isArray(value?.dialogs) ? value.dialogs : []
   if (list.length === 0) return ''
   return `\n\nblocked dialogs (answered conservatively; the page kept running):\n${list.map((line) => `- ${line}`).join('\n')}`
+}
+
+/**
+ * Stamp a write result with the only success state the tri-state has.
+ *
+ * The page acknowledged the action, so `committed` is exact. `none` and
+ * `unknown` are produced on the error path instead: `none` for anything that
+ * failed before the command reached the page, `unknown` when `bridge.js` reports
+ * `action_unknown` (SPEC-004 B4, TICKET-042).
+ * @template {object} T
+ * @param {T} value - tool value being returned.
+ * @returns {T & { effect: 'committed' }} the same value with the stamp.
+ */
+function committed(value) {
+  return { ...value, effect: 'committed' }
+}
+
+/**
+ * Record "nothing was sent" on a thrown write error.
+ *
+ * The effect cannot change the message the model reads (the code already says
+ * it), but it keeps the structured error honest for the panel, logs and tests,
+ * and it is the field `action_unknown` sets to `unknown` on the other side.
+ * @param {unknown} error - whatever the tool threw.
+ * @returns {unknown} the same error, with `details.effect = 'none'`.
+ */
+function notSent(error) {
+  if (error === null || typeof error !== 'object') return error
+  if (error.code === 'action_unknown') return error
+  error.details = { ...(error.details ?? {}), effect: 'none' }
+  return error
 }
 
 /**
@@ -758,7 +797,7 @@ export function browserClickTool(bridge) {
         20_000,
       )
       if (result?.ok !== true) throw actionFailure(result)
-      return withDialogs({
+      return committed(withDialogs({
         ...(result.info ?? {}),
         x: result.x ?? 0,
         y: result.y ?? 0,
@@ -770,7 +809,7 @@ export function browserClickTool(bridge) {
         ...(typeof result.looksDisabled === 'string' && result.looksDisabled !== ''
           ? { looksDisabled: result.looksDisabled }
           : {}),
-      }, result)
+      }, result))
     },
     isConcurrencySafe() {
       return false
@@ -1024,7 +1063,7 @@ export function browserTypeTool(bridge) {
         20_000,
       )
       if (result?.ok !== true) throw actionFailure({ ...result, ref })
-      return withDialogs({ ...(result.info ?? {}), length: result.length ?? 0, submitted: result.submitted === true }, result)
+      return committed(withDialogs({ ...(result.info ?? {}), length: result.length ?? 0, submitted: result.submitted === true }, result))
     },
     isConcurrencySafe() {
       return false
@@ -1067,6 +1106,7 @@ export function browserPressTool(bridge) {
           handled: { type: 'string' },
           from: { type: 'string' },
           to: { type: 'string' },
+          effect: { type: 'string', enum: ['none', 'committed', 'unknown'] },
         },
         required: ['key'],
       },
@@ -1093,7 +1133,7 @@ export function browserPressTool(bridge) {
         value.from = String(result.from ?? '')
         value.to = String(result.to ?? '')
       }
-      return withDialogs(value, result)
+      return committed(withDialogs(value, result))
     },
     isConcurrencySafe() {
       return false
@@ -1149,6 +1189,7 @@ export function browserEvalTool(bridge, options = {}) {
           result: { type: 'string' },
           truncated: { type: 'boolean' },
           pending: { type: 'boolean' },
+          effect: { type: 'string', enum: ['none', 'committed', 'unknown'] },
         },
         required: ['result'],
       },
@@ -1171,12 +1212,22 @@ export function browserEvalTool(bridge, options = {}) {
         { script: args.script, awaitPromise: args?.awaitPromise !== false, maxChars },
         30_000,
       )
-      if (result?.ok !== true) throw new Error(`the script threw: ${String(result?.error ?? 'unknown error')}`)
-      return withDialogs({
+      if (result?.ok !== true) {
+        // The script reached the page and threw: statements before the throw may
+        // already have run, so this is the middle state, not a clean failure
+        // (SPEC-004 B4). Never invite a retry.
+        throw new AgentBrowserError(
+          'action_unknown',
+          `the script reached the page and threw: ${String(result?.error ?? 'unknown error')}. `
+          + 'The page may have partially changed — take a browser_snapshot and check before retrying.',
+          { details: { effect: 'unknown', delivered: true, type: 'eval' } },
+        )
+      }
+      return committed(withDialogs({
         result: String(result.serialized ?? ''),
         truncated: result.truncated === true,
         pending: result.pending === true,
-      }, result)
+      }, result))
     },
     isConcurrencySafe() {
       return false
@@ -1567,6 +1618,7 @@ export function browserDownloadTool(ctx, gate, options = {}) {
           sha256: { type: 'string' },
           mime: { type: 'string' },
           finalUrl: { type: 'string' },
+          effect: { type: 'string', enum: ['none', 'committed', 'unknown'] },
           download_failed: {
             type: 'object',
             properties: {
@@ -1620,7 +1672,7 @@ export function browserDownloadTool(ctx, gate, options = {}) {
       // Running it before the fetch is what makes "nothing was sent" true.
       await gate?.requestApproval?.(sessionOf(exec), { actionClass: 'download', url: args.url.trim() })
       try {
-        return await downloadTo(root, {
+        return committed(await downloadTo(root, {
           url: args.url.trim(),
           dir,
           ...(maxBytes === undefined ? {} : { maxBytes }),
@@ -1629,16 +1681,16 @@ export function browserDownloadTool(ctx, gate, options = {}) {
           // The policy sees the final name and byte count, which is the only
           // point where the extension blacklist and size ceiling are truthful.
           checkTarget: ({ filename, bytes }) => rules.checkDownload(filename, bytes),
-        })
+        }))
       } catch (error) {
         if (error instanceof DownloadError) {
           const where = error.url ?? error.finalUrl
           const failed = { code: 'download_rejected', stage: error.stage, reason: error.message }
           if (typeof where === 'string') failed.url = where
-          return { download_failed: failed }
+          return { download_failed: failed, effect: 'none' }
         }
         if (error instanceof AgentBrowserError && error.code === 'download_rejected') {
-          return { download_failed: { code: 'download_rejected', stage: 'policy', reason: error.message } }
+          return { download_failed: { code: 'download_rejected', stage: 'policy', reason: error.message }, effect: 'none' }
         }
         throw error
       }
@@ -2026,12 +2078,30 @@ export function createTools(ctx, bridge, sites, policy = {}) {
   // `exec.signal` is per call and the gate is shared, so the signal is carried in
   // async context instead of every tool parameter list. One wrapper here covers
   // all eleven tools, which is also why no call site can forget it.
-  return tools.map((tool) => {
+  const wrapped = tools.map((tool) => {
     const execute = tool.execute
     if (typeof execute !== 'function') return tool
     return {
       ...tool,
       execute: (args, exec) => execSignals.run({ signal: exec?.signal }, () => execute(args, exec)),
+    }
+  })
+  // Every write tool gets `effect` on both paths (SPEC-004 B4, TICKET-042):
+  // success results stamp `committed` themselves; anything thrown before the
+  // command left the host is `none`; `action_unknown` already carries `unknown`.
+  const writes = new Set(['browser_click', 'browser_type', 'browser_press', 'browser_eval', 'browser_download'])
+  return wrapped.map((tool) => {
+    if (writes.has(tool.name) === false) return tool
+    const execute = tool.execute
+    return {
+      ...tool,
+      async execute(args, exec) {
+        try {
+          return await execute(args, exec)
+        } catch (error) {
+          throw notSent(error)
+        }
+      },
     }
   })
 }

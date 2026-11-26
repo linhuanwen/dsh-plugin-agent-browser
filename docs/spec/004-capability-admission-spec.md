@@ -74,7 +74,7 @@
 
 1. **单测**：新增纯逻辑要有独立 `.test.mjs`；碰 bridge 协议要有 bridge 流测试；页面注入逻辑要能像 `detect.test.mjs` 那样用 stub DOM 跑。
 2. **真机 case**：至少一条在真实 DSH 面板上的验收记录，写进 `docs/cases/`（编号续 016 起），并注明宿主版本与插件版本。
-3. **错误码与 hint**：新失败模式要么复用既有 16 码，要么新增码并同时更新 `plugin/errors.js`、用户 README 故障排查表、SPEC-003 的码表表述（check-docs 会校验部分）。
+3. **错误码与 hint**：新失败模式要么复用既有码（1.5.4 起 17 个），要么新增码并同时更新 `plugin/errors.js`、用户 README 故障排查表、SPEC-003 的码表表述（check-docs 会校验部分）。
 4. **文档三处同步**：用户 README（工具表 / 配置表 / 已知限制）、`docs/README.md` 索引、`PROGRESS.md` 的目录树与「下一步」；新增配置字段还要同步 `plugin/config.js`、`plugin/index.js`、`dist/.../README.md`（check-docs 的三处校验）。
 
 ### B4 失败语义：写动作必须能回答「未执行 / 已执行 / 未知」
@@ -87,7 +87,7 @@
 | `committed` | 页面确认动作已执行 | 不再重放；需要时重读页面核对 |
 | `unknown` | 已交给页面但回执丢失（超时/通道断开） | 只允许 `browser_snapshot` 等读动作核对，禁止自动重发 |
 
-实现见 TICKET-042：为写工具回执加 `effect` 字段，并新增 `action_unknown` 错误码（`retryable:false`，hint「先 snapshot 核对，不要重发」）。**在 TICKET-042 落地前，禁止新增任何不可逆写动作**。
+实现见 TICKET-042（2026-11-26 已落地，单测 `plugin/test/effect.test.mjs`）：为写工具回执加 `effect` 字段，并新增 `action_unknown` 错误码（`retryable:false`，hint「先 snapshot 核对，不要重发」）。**该条落地后，新增不可逆写动作才可通过 B1 准入**。
 
 ### B5 人工优先级不变
 
@@ -115,7 +115,7 @@ headless、远程控制、多浏览器后端、CDP 第二后端、跨 harness CL
 
 1. **工具名不变**：阶段 A 期间工具表仍是 11 个；阶段 B 新增动词只加不改（`browser_*` 命名不变），既有参数语义不变。
 2. **配置向后兼容**：新增配置字段一律有默认值；`approvals.mode:'off'` 必须保持 1.4.x 行为（SPEC-003 C12）。
-3. **错误码只增不改**：新码必须 `retryable` 显式声明；既有 16 码的语义不动。
+3. **错误码只增不改**：新码必须 `retryable` 显式声明；既有 16 码的语义不动（1.5.4 新增 `action_unknown` = 第 17 码）。
 4. **宿主版本窗口不变**：`engines.dsh >=0.2.2-rc.3 <0.3.0`。
 5. **CLIENT_REV**：任何 `plugin/client.js` 行为变化都要 bump，并在 PROGRESS 开发循环第 8 条里记录。
 
