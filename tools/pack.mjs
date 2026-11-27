@@ -49,6 +49,7 @@ const COPY = [
   'inject/guards.js',
   'inject/wait.js',
   'inject/pick.js',
+  'inject/feedback.js',
 ]
 
 /** Files that live only under dist/ and must already be there. */

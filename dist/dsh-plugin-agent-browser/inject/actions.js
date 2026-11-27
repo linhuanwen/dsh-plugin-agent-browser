@@ -1163,6 +1163,7 @@ function dshAction(op, params) {
     return JSON.stringify({
       ok: true,
       info: info,
+      rect: rectOf(element),
       inserted: inserted,
       length: text.length,
       focused: doc.activeElement === element,

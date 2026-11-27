@@ -13,6 +13,7 @@
  *   4. docs/decisions/README.md 索引 ↔ docs/decisions/NNN-*.md 文件（双向）
  *   5. 仓库 README 与用户 README 都引用 docs/design/web-tools-and-agent-browser.md（SPEC-002 B11 验收项）
  *   6. docs/design/browser-use-contract.md 里引用的仓库内 file:line 仍存在（行号超界即失败）
+ *   7. plugin/inject/*.js ↔ tools/pack.mjs 的 COPY 清单（漏列 = 装机缺文件）
  *
  * 不做什么：不校验 asar 内部路径（那是宿主的代码，仓库里没有对应文件），只跳过并计数。
  */
@@ -299,6 +300,31 @@ function checkLineReferences() {
   ok(`file:line 引用：仓库内 ${checked} 条仍在范围内（跳过 ${skipped} 条 asar 内部路径）`)
 }
 
+// --- 7. 注入脚本 ↔ 打包清单 ------------------------------------------------
+//
+// TICKET-055 的验收期事故：`plugin/inject/feedback.js` 写好了、单测也过了，
+// 但 `tools/pack.mjs` 的 COPY 是显式清单，漏掉它 → 装机包里没有这个文件 →
+// 宿主 `/source?name=feedback` 500 → 面板静默不画痕迹。这类「开发时能跑、
+// 装机后缺文件」的回归只能在装机前用一条静态检查挡住。
+
+function checkPackCopy() {
+  const pack = read('tools/pack.mjs')
+  const start = pack.indexOf('const COPY = [')
+  if (start < 0) throw new Error('tools/pack.mjs: cannot find `const COPY = [`')
+  const end = pack.indexOf(']', start)
+  if (end < 0) throw new Error('tools/pack.mjs: COPY list is not closed')
+  const listed = new Set()
+  for (const match of pack.slice(start, end).matchAll(/'([^']+)'/g)) listed.add(match[1])
+
+  const injectDir = path.join(ROOT, 'plugin/inject')
+  const shipped = fs.readdirSync(injectDir).filter((name) => name.endsWith('.js'))
+  const missing = shipped.filter((name) => !listed.has(`inject/${name}`))
+  const extra = [...listed].filter((name) => name.startsWith('inject/') && !shipped.includes(name.slice('inject/'.length)))
+  if (missing.length) fail(`打包清单：plugin/inject 里有、tools/pack.mjs COPY 没列 → ${missing.join(', ')}`)
+  if (extra.length) fail(`打包清单：COPY 列了、plugin/inject 里没有 → ${extra.join(', ')}`)
+  if (!missing.length && !extra.length) ok(`打包清单：${shipped.length} 个 inject 脚本都已列入 COPY`)
+}
+
 // --- 入口 -------------------------------------------------------------------
 
 const label = (name) => `${name}: `
@@ -311,6 +337,7 @@ try {
   checkDecisions()
   checkDocReferences()
   checkLineReferences()
+  checkPackCopy()
 } catch (error) {
   fail(`${label('check')}${error.message}`)
 }

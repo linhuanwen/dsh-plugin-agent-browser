@@ -62,6 +62,14 @@ export const DEFAULTS = Object.freeze({
     // renderer until a person clicks).
     mode: 'record',
   }),
+  feedback: Object.freeze({
+    // In-page marks after an agent action (TICKET-055): a cursor dot, a click
+    // ripple, an element highlight or a drag line drawn in a pointer-transparent
+    // overlay. Presentation only — the page never receives an event, so this can
+    // be turned off without changing any action's behaviour.
+    enabled: true,
+    durationMs: 900,
+  }),
   searchFallback: Object.freeze({
     // Off by default: on this host a search is billed per call, so a failed open
     // must never silently spend the operator's money (TICKET-027).
@@ -152,7 +160,7 @@ function oneOf(value, fallback, allowed, name) {
  * than coerced. The schema normally catches those first — this is the second
  * line of defence for a config assembled by hand in a test or a probe.
  * @param {object} [config] - the loader row's `config`.
- * @returns {{ bridge: object, limits: object, downloads: object, static: object, sessions: object, searchFallback: object }}
+ * @returns {{ bridge: object, limits: object, downloads: object, static: object, sessions: object, searchFallback: object, approvals: object, dialogs: object, feedback: object }}
  */
 export function normalizeConfig(config = {}) {
   const row = config ?? {}
@@ -196,6 +204,10 @@ export function normalizeConfig(config = {}) {
     },
     dialogs: {
       mode: oneOf(readField(row.dialogs?.mode, DEFAULTS.dialogs.mode), DEFAULTS.dialogs.mode, ['record', 'off'], 'dialogs.mode'),
+    },
+    feedback: {
+      enabled: flag(readField(row.feedback?.enabled, DEFAULTS.feedback.enabled), DEFAULTS.feedback.enabled, 'feedback.enabled'),
+      durationMs: Math.min(5000, Math.max(100, natural(row.feedback?.durationMs, DEFAULTS.feedback.durationMs, 'feedback.durationMs'))),
     },
   }
 }

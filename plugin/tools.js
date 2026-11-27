@@ -1147,6 +1147,17 @@ export function pickSource() {
 }
 
 /**
+ * Source of the in-page feedback painter (TICKET-055).
+ *
+ * The panel draws marks on its own initiative after an action, so it asks for
+ * this file through `GET /source?name=feedback` instead of carrying a copy.
+ * @returns {string} the source of `dshFeedback`.
+ */
+export function feedbackSource() {
+  return readFileSync(new URL('./inject/feedback.js', import.meta.url), 'utf8')
+}
+
+/**
  * `browser_pick` — ask the person in front of the panel to point at the page.
  *
  * Two modes. `element` (default) asks them to click one element — the fast,

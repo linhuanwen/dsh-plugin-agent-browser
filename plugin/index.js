@@ -155,6 +155,19 @@ export const Config = z.object({
   })
     .default({})
     .description('How the injected guards handle alert/confirm/prompt (TICKET-041).'),
+
+  feedback: z.object({
+    // Presentation only (TICKET-055): marks are drawn in a pointer-transparent
+    // overlay and never change what an action does, so turning them off is safe.
+    enabled: z.boolean()
+      .default(DEFAULTS.feedback.enabled)
+      .description('Draw a short in-page mark (cursor dot, click ripple, element highlight, drag line) after each agent action, so the person can see where it acted. The page never receives an event.'),
+    durationMs: z.natural()
+      .default(DEFAULTS.feedback.durationMs)
+      .description('How long an in-page mark stays visible, 100–5000ms (clamped).'),
+  })
+    .default({})
+    .description('In-page visual feedback for agent actions (TICKET-055).'),
 })
 
 /**

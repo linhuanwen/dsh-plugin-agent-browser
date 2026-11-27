@@ -84,6 +84,9 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
       sensitiveSites: []
     dialogs:
       mode: record
+    feedback:
+      enabled: true
+      durationMs: 900
 ```
 
 ### 完整字段表
@@ -111,6 +114,8 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 | `approvals.timeoutMs` | 整数 | `30000` | 改后重载 | 面板确认条等你作答的上限（2s–120s）；超时按拒绝处理，动作不会发出 |
 | `approvals.sensitiveSites` | 字符串数组 | `[]` | 改后重载 | 每次都问的站点（主机名或 URL）；即使本会话已允许该站点也照问 |
 | `dialogs.mode` | `record` \| `off` | `record` | 改后重载 | 页面调用 `alert` / `confirm` / `prompt` 时怎么办。`record` = 拦截并保守作答（`confirm` 答 false、`prompt` 答 null），把弹窗内容列在工具结果里，页面不会卡死；`off` = 原生弹窗（会冻结页面直到人去点）。见下文「JS 弹窗」 |
+| `feedback.enabled` | boolean | `true` | 改后重载 | 每个动作结束后在页面上画一笔落点痕迹（点击涟漪 + 点、悬停光标点、滚动/输入的元素高亮、拖拽连线），让人看得见 agent 刚才碰到哪儿。纯覆盖层：`pointer-events:none`、不派发事件、不改页面状态；关掉即完全静默，动作本身不受影响 |
+| `feedback.durationMs` | 整数 | `900` | 改后重载 | 痕迹停留时长（100–5000ms，超界夹取） |
 
 要点：
 
@@ -192,6 +197,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 | 搜索兜底 | `searchFallback.enabled`、`searchFallback.maxResults` | 同上 |
 | 会话白名单 | `sessions.allowlist` | 同上 |
 | 本地文件服务 | `static.maxBytes` | 同上 |
+| 可见反馈 | `feedback.enabled`、`feedback.durationMs` | 同上 |
 
 页面顶部直接显示现况：桥的 origin 与端口、已注册几个工具、当前几个会话持有浏览器。保存时只提交改动过的顶层字段；"需要重启"的那几组会明确提示插件正在重新加载。写配置走的是 DSH 自己的 config editor（和你在「插件」里改 YAML 是同一个通道），所以 `cordis.patch.yml` 永远不会被本插件改写。
 

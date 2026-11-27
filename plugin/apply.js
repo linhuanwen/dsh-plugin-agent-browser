@@ -19,10 +19,10 @@ import { DEFAULT_ROUTING } from './config.js'
 import { ERROR_CODES, HARNESS_ERROR_BASE } from './errors.js'
 import { createPolicy } from './policy.js'
 import { StaticSites } from './static.js'
-import { createTools, guardsSource, snapshotSource } from './tools.js'
+import { createTools, feedbackSource, guardsSource, snapshotSource } from './tools.js'
 
 /** Bumped whenever the host half changes, so a reload can be told apart from a cache. */
-export const HOST_REV = 37
+export const HOST_REV = 38
 
 /**
  * Fields the settings page may edit, and whether saving one reloads the plugin.
@@ -46,6 +46,7 @@ export const CONFIG_FIELDS = Object.freeze({
   static: 'restart',
   approvals: 'restart',
   dialogs: 'restart',
+  feedback: 'restart',
 })
 
 /**
@@ -117,6 +118,10 @@ export function snapshotConfig(config, settings) {
       sensitiveSites: [...(settings.approvals?.sensitiveSites ?? [])],
     },
     dialogs: { mode: readField(config?.dialogs?.mode, settings.dialogs?.mode) },
+    feedback: {
+      enabled: readField(config?.feedback?.enabled, settings.feedback?.enabled) !== false,
+      durationMs: settings.feedback?.durationMs,
+    },
   }
 }
 
@@ -522,7 +527,7 @@ export function applyAgentBrowser(ctx, config = {}, overrides = {}) {
     // The panel may need page-side code outside a tool call (the digest it shows
     // the agent when the human hands control back). Serving it from here keeps a
     // single copy of each in-page script, owned by the half that also ships it.
-    sources: { snapshot: snapshotSource, guards: guardsSource },
+    sources: { snapshot: snapshotSource, guards: guardsSource, feedback: feedbackSource },
   })
   bridge.note(`host half applied (rev ${HOST_REV})`, { activation, config: configChannel !== null })
   // Published so the settings page's save failures can be told apart: a missing

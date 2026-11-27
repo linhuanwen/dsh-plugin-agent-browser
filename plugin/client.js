@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
      * The renderer caches `client.js` aggressively, and a stale half looks
      * exactly like a bug in the host half.
      */
-    const CLIENT_REV = 61
+    const CLIENT_REV = 64
     /** The panel talks to the host half over loopback; both sides carry this mark. */
     const BRIDGE_PREFIX = '/dsh-agent-browser'
     const BRIDGE_MARK = 'dsh-plugin-agent-browser/1'
@@ -543,6 +543,51 @@ window.__ModuleLoader__.load({
     /** `dialogs.mode` from the host config, fetched once (`record` / `off`). @type {string} */
     let dialogsModeCache = ''
 
+    /** `inject/feedback.js` source, fetched once (TICKET-055). @type {string} */
+    let feedbackSourceCache = ''
+
+    /** In-page feedback policy from the host config, fetched once (TICKET-055). @type {null | { enabled: boolean, durationMs: number }} */
+    let feedbackConfigCache = null
+
+    /**
+     * Read the in-page feedback policy (TICKET-055).
+     *
+     * Same source as the dialog policy: the host's snapshot of the row config.
+     * Unreadable config means "on" with the default duration, because a missing
+     * mark must never look like a broken panel.
+     * @returns {Promise<{ enabled: boolean, durationMs: number }>} resolved policy.
+     */
+    async function feedbackConfig() {
+      if (feedbackConfigCache !== null) return feedbackConfigCache
+      try {
+        const response = await callHost('/config')
+        const enabled = response?.values?.feedback?.enabled !== false
+        const raw = Number(response?.values?.feedback?.durationMs)
+        const durationMs = Number.isFinite(raw) ? Math.min(5000, Math.max(100, Math.floor(raw))) : 900
+        feedbackConfigCache = { enabled, durationMs }
+      } catch (error) {
+        feedbackConfigCache = { enabled: true, durationMs: 900 }
+      }
+      return feedbackConfigCache
+    }
+
+    /**
+     * Fetch the in-page feedback source (TICKET-055), once per panel.
+     * @returns {Promise<string>} the single function expression, or '' if unavailable.
+     */
+    async function feedbackSource() {
+      if (feedbackSourceCache !== '') return feedbackSourceCache
+      try {
+        const response = await callHost('/source?name=feedback')
+        feedbackSourceCache = String(response?.source ?? '')
+      } catch (error) {
+        feedbackSourceCache = ''
+      }
+      return feedbackSourceCache
+    }
+
+
+
     /** Command types that can let a page show a JS dialog (TICKET-041). */
     const DIALOG_TYPES = new Set(['open', 'snapshot', 'wait', 'click', 'drag', 'type', 'press', 'eval'])
 
@@ -830,6 +875,9 @@ window.__ModuleLoader__.load({
         } else {
           throw new Error(`unknown command type "${command.type}"`)
         }
+        // TICKET-055: draw a short in-page mark where this action acted. Fire and
+        // forget — a missing mark must never delay the answer or fail the action.
+        guest.beaconFor(command.type, result)
         // TICKET-041: the page may have called alert/confirm/prompt while it
         // handled this command; the guards answered conservatively and recorded
         // it. Attach what happened so the tool card can show it.
@@ -1188,6 +1236,96 @@ window.__ModuleLoader__.load({
           // A page without listeners is the old behaviour, not a broken panel:
           // report it and retry on the next navigation.
           report('guards inject failed', { error: String(error?.message ?? error) })
+        }
+      }
+
+      /**
+       * Draw the in-page mark for a command that just finished (TICKET-055).
+       *
+       * Reads only what the page already returned (point/rect/from/to), so no
+       * extra page call is needed to locate the action. Fire-and-forget: the
+       * caller must never wait on this, and a missing mark is not an error.
+       * @param {string} type - the command type that just finished.
+       * @param {unknown} result - its page-side answer.
+       */
+      beaconFor(type, result) {
+        const answer = result !== null && typeof result === 'object' ? result : {}
+        let mark = null
+        if (type === 'click' || type === 'hover') {
+          // `click`/`hover` answer with the point as `x`/`y` (the point object
+          // is the page-side shape); accept both so the mark survives either.
+          const point = answer.point ?? (Number.isFinite(answer.x) && Number.isFinite(answer.y) ? { x: answer.x, y: answer.y } : null)
+          if (point !== null && Number.isFinite(point.x) && Number.isFinite(point.y)) {
+            mark = { kind: type === 'click' ? 'click' : 'cursor', x: point.x, y: point.y }
+          }
+        } else if (type === 'scroll') {
+          const rect = answer.rect
+          if (rect !== null && typeof rect === 'object' && Number.isFinite(rect.left ?? rect.x)) mark = { kind: 'highlight', rect }
+        } else if (type === 'drag') {
+          if (answer.from !== null && typeof answer.from === 'object' && answer.to !== null && typeof answer.to === 'object') {
+            mark = { kind: 'drag', from: answer.from, to: answer.to }
+          }
+        } else if (type === 'type') {
+          const rect = answer.rect
+          if (rect !== null && typeof rect === 'object' && Number.isFinite(rect.left ?? rect.x)) mark = { kind: 'highlight', rect }
+        }
+        if (mark === null) {
+          // TICKET-055 diagnostic: remember why nothing was drawn so the page can
+          // be inspected with browser_eval without reading the panel console.
+          void this.beaconDiag({ step: 'no-mark', type, keys: Object.keys(answer).slice(0, 12) })
+          return
+        }
+        void this.beacon(mark)
+      }
+
+      /**
+       * Record the last feedback attempt inside the page (TICKET-055 diagnostics).
+       *
+       * Best effort and never throws: it exists so a missing mark can be explained
+       * with `browser_eval "window.__dshFeedbackDiag"` instead of guesswork.
+       * @param {object} value - small JSON-safe record.
+       * @returns {Promise<void>}
+       */
+      async beaconDiag(value) {
+        if (this.element === null || this.detached) return
+        try {
+          const json = JSON.stringify(value)
+          await this.evaluate(`(() => {
+            const log = Array.isArray(window.__dshFeedbackLog) ? window.__dshFeedbackLog : []
+            log.push(${json})
+            window.__dshFeedbackLog = log.slice(-20)
+            window.__dshFeedbackDiag = ${json}
+            return true
+          })()`)
+        } catch {
+          // The page may be mid-navigation; a lost diagnostic is not worth a retry.
+        }
+      }
+
+      /**
+       * Draw one in-page mark when the config allows it (TICKET-055).
+       *
+       * Runs as an injected page call, so it costs one round trip on the next
+       * tick rather than inside the action's latency. Never throws.
+       * @param {object} mark - `{kind, x?, y?, rect?, from?, to?}`.
+       * @returns {Promise<void>}
+       */
+      async beacon(mark) {
+        if (this.element === null || this.detached) return
+        void this.beaconDiag({ step: 'start', kind: mark.kind })
+        try {
+          const config = await feedbackConfig()
+          void this.beaconDiag({ step: 'config', enabled: config.enabled, durationMs: config.durationMs })
+          if (config.enabled !== true) return
+          const source = await feedbackSource()
+          void this.beaconDiag({ step: 'source', length: source.length })
+          if (source === '') return
+          const payload = { ...mark, durationMs: config.durationMs }
+          const answer = await this.evaluate(`(${source})(${JSON.stringify(payload)})`)
+          void this.beaconDiag({ step: 'drawn', answer: typeof answer === 'string' ? answer.slice(0, 160) : answer })
+        } catch (error) {
+          report('feedback mark skipped', { error: String(error?.message ?? error) })
+          void this.beaconDiag({ step: 'error', error: String(error?.message ?? error) })
         }
       }
 
@@ -1974,6 +2112,7 @@ window.__ModuleLoader__.load({
         return {
           ok: true,
           info: action.info,
+          rect: action.rect,
           length: action.length ?? 0,
           inserted: action.inserted === true,
           submitted,
@@ -3852,6 +3991,14 @@ window.__ModuleLoader__.load({
         hint: '留空表示所有会话都能驱动浏览器；填了就只允许列出的会话 id。',
         fields: [
           { path: ['sessions', 'allowlist'], label: '允许的会话 id', kind: 'list' },
+        ],
+      },
+      {
+        title: '可见反馈',
+        hint: '动作结束后在页面上画一笔落点痕迹（点击涟漪、悬停光标、元素高亮、拖拽连线）；纯覆盖层，不改页面。保存后插件会重新加载一次。',
+        fields: [
+          { path: ['feedback', 'enabled'], label: '动作后在页面上画落点痕迹', kind: 'bool' },
+          { path: ['feedback', 'durationMs'], label: '痕迹停留时长（毫秒，100–5000）', kind: 'number', min: 100, step: 100 },
         ],
       },
       {

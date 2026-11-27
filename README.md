@@ -9,10 +9,10 @@
 `dsh-plugin-agent-browser` · DSH 桌面端插件
 
 <p>
-  <img alt="version 1.5.16" src="https://img.shields.io/badge/version-1.5.16-2563eb?style=flat-square" />
+  <img alt="version 1.5.22" src="https://img.shields.io/badge/version-1.5.22-2563eb?style=flat-square" />
   <img alt="DSH 0.2.2 - 0.3.0" src="https://img.shields.io/badge/DSH-0.2.2%20~%200.3.0-1d4ed8?style=flat-square" />
   <img alt="14 tools" src="https://img.shields.io/badge/tools-14-0f766e?style=flat-square" />
-  <img alt="386 tests passed" src="https://img.shields.io/badge/tests-386%20passed-16a34a?style=flat-square" />
+  <img alt="394 tests passed" src="https://img.shields.io/badge/tests-394%20passed-16a34a?style=flat-square" />
   <img alt="platform Windows and macOS" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-475569?style=flat-square" />
   <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-0284c7?style=flat-square" />
 </p>
@@ -73,12 +73,13 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 | **侧栏里的真浏览器** | Electron `<webview>`，不是截图流、也不是无头浏览器。登录态、Cookie、JS 渲染、跨域 iframe 都是真的，页面就在你眼前 |
 | **快照带 `ref`** | `browser_snapshot` 把无障碍树 + 一张截图一起给模型，可交互元素都带 `[ref=eN]`，能算出稳定路径时还带 `[loc="css:…"]`；点击、输入、悬停直接用 ref/loc，不用猜坐标。树被预算截断时返回 `cursor`，下次带 `cursor` 续读下一段；页面在两次快照之间打印的 console 与未捕获错误会附在末尾（最多 10 条），页面自己发出的 fetch/XHR 失败也会附上（写清失败数与请求总数） |
 | **十六个工具** | 打开 / 快照 / 点选 / 标签页 / 等待 / 点击 / 拖拽 / 滚动 / 悬停 / 缩放 / 截图 / 输入 / 按键 / 上传 / 求值 / 下载，覆盖一个正常人会用浏览器做的事 |
+| **看得见的动作** | 每个动作后页面里补画一笔落点痕迹（点击涟漪、悬停光标点、元素高亮、拖拽连线），独立覆盖层、页面收不到事件；`feedback.enabled` 可关闭 |
 | **验证墙不硬闯** | 检测到 Cloudflare、reCAPTCHA、滑块这类验证页就停下，把控制权交给你；你过完再交还，Agent 会收到一段「你不在时发生了什么」的摘要 |
 | **证据落盘** | 截图默认拼接整页，下载件落盘，两者都带尺寸 / 字节数 / sha256，能直接当报告附件 |
 | **失败不毁现场** | 导航失败自动退回上一页，错误里带 `nav_dns` / `nav_cert` / `nav_blocked` 等具体原因；错误页上不会返回空树假成功 |
 | **过程看得见** | Web 端为截图 / 打开 / 下载各出一张工具卡片，模型调了什么、页面长什么样，一眼可查 |
 | **设置就在 DSH 里** | 装好后「设置」左侧多一页 **浏览器面板**：行为、预算、下载、搜索兜底、会话白名单、本地文件服务六组表单，改完保存即可，不用手改 YAML |
-| **工程化底座** | 动态端口 + 每进程令牌、21 个稳定错误码、取消、策略接缝、386 个单测 |
+| **工程化底座** | 动态端口 + 每进程令牌、21 个稳定错误码、取消、策略接缝、394 个单测 |
 
 ## 快速开始
 
@@ -97,7 +98,7 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 
 ```text
 plugin_manager action: install_bundle
-                target: dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.16.tgz
+                target: dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.22.tgz
 ```
 
 ### 3. 打开面板
@@ -237,10 +238,11 @@ client 半 · 侧栏 tab / 四态徽章 / 三张工具卡片 / <webview>
 | `approvals.timeoutMs` | `30000` | 确认条等待时长，超时按「拒绝」处理，不执行 |
 | `approvals.sensitiveSites` | `[]` | 这些站点每次都问，即使选过「本会话允许本站」 |
 | `dialogs.mode` | `record` | 页面 `alert/confirm/prompt` 默认被拦截并记录（`confirm` 答否、`prompt` 答取消），页面不冻结；`off` 恢复原生弹窗（会冻结到人点掉） |
+| `feedback.enabled` | `true` | 每个动作后在页面上画一笔落点痕迹（点击涟漪、元素高亮、拖拽连线），纯展示层、页面收不到事件，关掉即静默 |
 
 ## 写动作确认（`approvals`，默认开启）
 
-读动作从不打扰：`open`、`snapshot`、`scroll`、`hover`、`screenshot`、普通链接近导航都直接执行。五类写动作会在一处**站点 × 会话**粒度上问一次：输入文字（type）、会提交表单的点击/Enter（submit）、下载（download）、页面脚本（eval）、上传文件（upload）。确认条长在面板顶部，三个按钮「允许一次 / 本会话允许本站 / 拒绝」，Enter 等于拒绝；面板不可见时立即失败而不是干等 30 秒；你点「我来接管」的那一瞬，待确认的写动作自动作废。
+读动作从不打扰：`open`、`snapshot`、`scroll`、`hover`、`screenshot`、普通链接近导航都直接执行。六类写动作会在一处**站点 × 会话**粒度上问一次：输入文字（type）、会提交表单的点击/Enter（submit）、下载（download）、页面脚本（eval）、上传文件（upload）、拖拽（drag，无法从元素判断是否改状态，一律按写处理）。确认条长在面板顶部，三个按钮「允许一次 / 本会话允许本站 / 拒绝」，Enter 等于拒绝；面板不可见时立即失败而不是干等 30 秒；你点「我来接管」的那一瞬，待确认的写动作自动作废。
 
 页面里的 JS 弹窗（`alert` / `confirm` / `prompt`）默认由注入守卫拦截并记录，不会冻结页面、也不会擅自点「确定」；内容会出现在随后那次操作的结果里（`blocked dialogs`），可用 `dialogs.mode` 切回原生行为（[`docs/tickets/041`](docs/tickets/041-js-dialogs.md)）。
 
@@ -254,7 +256,7 @@ client 半 · 侧栏 tab / 四态徽章 / 三张工具卡片 / <webview>
 - **跨域 iframe 只能给占位**，里面的元素必须用坐标点；canvas 同理。
 - **验证墙可能漏报**。检测器按 URL / 标题 / DOM / 文案判断；1.5.x 补上了「正在进行安全验证 / 验证您是人类」这类文案、`challenge-platform` iframe 与打开后 2 秒内的二次复检，并已在 `nopecha.com/demo/cloudflare` 真站回归通过（`needs_human` → 脚本被拒 → 人工过墙后恢复，[`docs/tickets/033`](docs/tickets/033-challenge-detection-gap.md)）；其他厂商的墙尚未取样，上线仍按「检测可能不触发，请人工接管」使用。
 - **写动作确认按站点判断，不按登录态**：面板读不到 HttpOnly Cookie，所以无法区分「登录后的页面」；只好用「站点首次写动作」这个可观测信号代替（[`docs/spec/003`](docs/spec/003-first-touch-approval-spec.md)）。
-- **只覆盖五类写动作**：输入、会提交表单的点击/Enter、下载、脚本、上传。非表单按钮的副作用（比如「删除」按钮发 `fetch`）按读处理，不会被拦。
+- **只覆盖六类写动作**：输入、会提交表单的点击/Enter、下载、脚本、上传、拖拽。非表单按钮的副作用（比如「删除」按钮发 `fetch`）按读处理，不会被拦。
 - **`browser_download` 走宿主侧 `fetch`，不带页面 Cookie**：需要登录态才能下载的链接会拿到登录页而不是文件。
 - **`target=_blank` 的附件是黑洞**：点了既不导航也不落盘，附件一律用 `browser_download({ url })`。
 - **取消只保证"不再等、不再下发新命令"**，已经发到页面里的动作不会撤销；写动作若已被面板拉走，取消后返回 `action_unknown`（可能已执行，先 snapshot 核对）。
@@ -294,7 +296,7 @@ screenshots/    运行截图 —— 案例证据与复跑留档
 仓库是纯 JS，**没有构建步骤**；插件源码在 `plugin/`，发布产物在 `dist/`。
 
 ```bash
-# 单测（386 例）
+# 单测（394 例）
 node --test --test-timeout=60000 plugin/test/*.test.mjs
 
 # 打包 tgz

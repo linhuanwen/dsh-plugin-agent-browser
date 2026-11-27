@@ -29,6 +29,8 @@ test('an empty row resolves to the 1.1.x behaviour', () => {
     approvals: { mode: 'first-touch', timeoutMs: 30_000, sensitiveSites: [] },
     // TICKET-041: JS dialogs are intercepted and recorded by the guards.
     dialogs: { mode: 'record' },
+    // TICKET-055: in-page marks are drawn for agent actions unless turned off.
+    feedback: { enabled: true, durationMs: 900 },
   })
   assert.deepEqual(settings.bridge, DEFAULTS.bridge)
 })
@@ -118,6 +120,9 @@ test('a value of the wrong shape is refused, not coerced', () => {
     [{ searchFallback: { maxResults: -1 } }, /searchFallback\.maxResults/],
     [{ searchFallback: { maxResults: 2.5 } }, /searchFallback\.maxResults/],
     [{ static: { maxBytes: null } }, undefined],
+    [{ feedback: { enabled: 'yes' } }, /feedback\.enabled/],
+    [{ feedback: { durationMs: -1 } }, /feedback\.durationMs/],
+    [{ feedback: { durationMs: 2.5 } }, /feedback\.durationMs/],
   ]
   for (const [row, pattern] of cases) {
     if (pattern === undefined) {
@@ -126,6 +131,15 @@ test('a value of the wrong shape is refused, not coerced', () => {
     }
     assert.throws(() => normalizeConfig(row), pattern, `row ${JSON.stringify(row)}`)
   }
+})
+
+test('TICKET-055 group: in-page feedback defaults on and clamps its duration', () => {
+  const defaults = normalizeConfig({})
+  assert.deepEqual(defaults.feedback, { enabled: true, durationMs: 900 })
+  assert.equal(normalizeConfig({ feedback: { enabled: false } }).feedback.enabled, false)
+  assert.equal(normalizeConfig({ feedback: { durationMs: 5000 } }).feedback.durationMs, 5000)
+  assert.equal(normalizeConfig({ feedback: { durationMs: 6000 } }).feedback.durationMs, 5000)
+  assert.equal(normalizeConfig({ feedback: { durationMs: 10 } }).feedback.durationMs, 100)
 })
 
 test('readField unwraps a volatile reader and falls back when empty', () => {
