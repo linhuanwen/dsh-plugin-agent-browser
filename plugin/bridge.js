@@ -64,8 +64,14 @@ const INPUT_TYPES = new Set(['open', 'click', 'drag', 'scroll', 'hover', 'zoom',
  * switching between them must not steal control either. The mutating half
  * (`switch` / `close`) is still refused while a human is at the wheel — see
  * `#assert`, which gets the command's params for exactly this reason.
+ *
+ * `pick` (TICKET-053) never touches the page either, but it does ask the human
+ * to click: it is a read type so it does not steal the phase, and `#assert`
+ * refuses it under `taken_over` (the human already owns the panel) while
+ * allowing it under `needs_human` (pointing at an element on a challenge page
+ * is exactly when pointing helps).
  */
-const READ_TYPES = new Set(['snapshot', 'inspect', 'wait', 'tabs'])
+const READ_TYPES = new Set(['snapshot', 'inspect', 'wait', 'tabs', 'pick'])
 
 /**
  * Commands whose effect cannot be proven absent once the panel pulled them.
@@ -343,6 +349,16 @@ export class Bridge {
     const { phase } = this.stateOf(sessionId)
     const tabAction = type === 'tabs' ? params.action : ''
     const input = INPUT_TYPES.has(type) || (type === 'tabs' && tabAction !== 'list')
+    // TICKET-053: picking is read-only, but it asks the human to click. Under
+    // `taken_over` that contradicts "the user is driving", so it is refused with
+    // the same code as an input; under `needs_human` it stays available.
+    if (type === 'pick' && phase === 'taken_over') {
+      throw new AgentBrowserError(
+        'panel_taken_over',
+        '用户已接管，请等待交还。The user is driving the panel right now, so it cannot ask them to '
+        + 'point at an element; wait until they hand it back, then pick again.',
+      )
+    }
     if (phase === 'taken_over' && input) {
       throw new AgentBrowserError(
         'panel_taken_over',

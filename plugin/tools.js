@@ -1135,6 +1135,173 @@ export function browserWaitTool(bridge) {
 }
 
 /**
+ * The in-page element picker, read on every call like the other page scripts.
+ *
+ * TICKET-053: pointing is a small state machine (`start` / `poll` / `stop`)
+ * driven by the panel; shipping the source with the command keeps the page half
+ * and the host half from drifting apart.
+ * @returns {string} the source of `dshPick`.
+ */
+export function pickSource() {
+  return readFileSync(new URL('./inject/pick.js', import.meta.url), 'utf8')
+}
+
+/**
+ * `browser_pick` — ask the person in front of the panel to click one element.
+ *
+ * The fast, accurate answer to "which element?" when a snapshot cannot tell
+ * targets apart (icon-only buttons, repeated rows, canvas controls). Picking is
+ * read-only: the page never sees the click and nothing is submitted; the answer
+ * is a stable `loc` (plus role/name/rect/point) that the agent then uses with
+ * the normal action tools. A timeout or Esc is a normal answer, not an error.
+ * TICKET-053 / SPEC-004 stage B4.
+ * @param {import('./bridge.js').Bridge} bridge - host half of the channel.
+ */
+export function browserPickTool(bridge) {
+  const DEFAULT_TIMEOUT_MS = 60_000
+  const MAX_TIMEOUT_MS = 120_000
+  return {
+    name: 'browser_pick',
+    description:
+      'Ask the person in front of the panel to click one element in the page, then return what they picked: '
+      + 'a stable loc, a readable role/name, its rect and a viewport point. Use it when a snapshot cannot tell '
+      + 'targets apart (icon-only buttons, ten identical "delete" rows, canvas controls) or when you would only '
+      + 'be guessing coordinates. Picking is read-only: the page never receives the click, so nothing is '
+      + 'submitted or navigated — follow it with browser_click { loc } / browser_type { loc } to actually act. '
+      + 'No approval is needed. Returns picked:false with timedOut:true when the person does not click in time '
+      + '(default 60000ms, max 120000) or cancelled:true when they pressed Esc or took the panel over; the page '
+      + 'was not touched in either case.',
+    parameters: {
+      type: 'object',
+      properties: {
+        timeoutMs: {
+          type: 'integer',
+          description: `How long to wait for the person to click, in milliseconds. Defaults to ${DEFAULT_TIMEOUT_MS}; max ${MAX_TIMEOUT_MS}.`,
+        },
+      },
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          picked: { type: 'boolean' },
+          timedOut: { type: 'boolean' },
+          cancelled: { type: 'boolean' },
+          loc: { type: 'string' },
+          info: {
+            type: 'object',
+            properties: { tag: { type: 'string' }, role: { type: 'string' }, name: { type: 'string' } },
+            required: ['tag', 'role', 'name'],
+          },
+          rect: {
+            type: 'object',
+            properties: {
+              x: { type: 'integer' },
+              y: { type: 'integer' },
+              width: { type: 'integer' },
+              height: { type: 'integer' },
+            },
+            required: ['x', 'y', 'width', 'height'],
+          },
+          point: {
+            type: 'object',
+            properties: { x: { type: 'integer' }, y: { type: 'integer' } },
+            required: ['x', 'y'],
+          },
+          waitedMs: { type: 'integer' },
+          url: { type: 'string' },
+        },
+        required: ['picked', 'waitedMs'],
+      },
+      render(_args, value) {
+        if (value?.picked !== true) {
+          const reason = value?.timedOut === true
+            ? 'The person did not click an element within the time budget'
+            : 'Picking was cancelled (Esc or the panel was taken over)'
+          return [{
+            type: 'text',
+            text: `${reason}; the page was not touched. Make sure the browser panel is visible, then ask again — `
+              + 'or fall back to browser_snapshot and a ref/loc.',
+          }]
+        }
+        const info = value.info && typeof value.info === 'object' ? value.info : {}
+        const name = String(info.name ?? '').trim()
+        const role = String(info.role ?? '').trim() !== '' ? String(info.role) : String(info.tag ?? 'element')
+        const where = typeof value.loc === 'string' && value.loc !== ''
+          ? `loc: ${value.loc}`
+          : `point: (${Math.round(Number(value.point?.x) || 0)}, ${Math.round(Number(value.point?.y) || 0)})`
+        const how = typeof value.loc === 'string' && value.loc !== ''
+          ? `Use it with browser_click { loc: ${JSON.stringify(value.loc)} } or browser_type { loc: … }`
+          : 'No stable path was found; act quickly with the point coordinates before the page scrolls or re-renders'
+        return [{
+          type: 'text',
+          text: `The person picked ${role}${name === '' ? '' : ` "${name}"`} (${where}). ${how}. `
+            + 'Picking itself did not click the page, and the page state is unchanged.',
+        }]
+      },
+    },
+    async execute(args, exec) {
+      const sessionId = sessionOf(exec)
+      let timeoutMs = DEFAULT_TIMEOUT_MS
+      if (args?.timeoutMs !== undefined) {
+        const raw = Number(args.timeoutMs)
+        if (!Number.isFinite(raw) || !Number.isInteger(raw)) throw new Error('timeoutMs must be an integer number of milliseconds')
+        timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(3_000, raw))
+      }
+      const result = await bridge.request(sessionId, 'pick', { timeoutMs, source: pickSource() }, timeoutMs + 8_000)
+      if (result?.ok !== true) throw actionFailure(result, 'pick')
+      const waitedMs = Math.round(Number(result?.waitedMs) || 0)
+      if (result?.picked === true) {
+        const info = result.info !== null && typeof result.info === 'object' ? result.info : {}
+        const rect = result.rect !== null && typeof result.rect === 'object' ? result.rect : {}
+        const point = result.point !== null && typeof result.point === 'object' ? result.point : {}
+        return {
+          picked: true,
+          ...(typeof result.loc === 'string' && result.loc !== '' ? { loc: result.loc } : {}),
+          info: {
+            tag: String(info.tag ?? ''),
+            role: String(info.role ?? ''),
+            name: String(info.name ?? ''),
+          },
+          rect: {
+            x: Math.round(Number(rect.x) || 0),
+            y: Math.round(Number(rect.y) || 0),
+            width: Math.round(Number(rect.width) || 0),
+            height: Math.round(Number(rect.height) || 0),
+          },
+          point: {
+            x: Math.round(Number(point.x) || 0),
+            y: Math.round(Number(point.y) || 0),
+          },
+          waitedMs,
+          ...(typeof result.url === 'string' && result.url !== '' ? { url: result.url } : {}),
+        }
+      }
+      return {
+        picked: false,
+        ...(result?.timedOut === true ? { timedOut: true } : {}),
+        ...(result?.cancelled === true ? { cancelled: true } : {}),
+        waitedMs,
+        ...(typeof result?.url === 'string' && result.url !== '' ? { url: result.url } : {}),
+      }
+    },
+    isConcurrencySafe() {
+      return false
+    },
+    presentCall(_args) {
+      return { card: 'generic', title: 'Ask the person to pick an element', kind: 'read' }
+    },
+    presentResult(_args, value) {
+      return {
+        card: 'generic',
+        title: value?.picked === true ? 'Element picked' : 'Nothing picked',
+      }
+    },
+  }
+}
+
+/**
  * `browser_click` — click a ref, a CSS selector, or a viewport coordinate.
  *
  * The coordinate form exists for the things a DOM ref cannot express: canvas
@@ -3124,6 +3291,7 @@ export function createTools(ctx, bridge, sites, policy = {}) {
       fallback,
     }),
     browserSnapshotTool(ctx, gate, { maxChars: limits.snapshotMaxChars, rules }),
+    browserPickTool(gate),
     browserTabsTool(gate),
     browserWaitTool(gate),
     browserClickTool(gate),
@@ -3140,7 +3308,7 @@ export function createTools(ctx, bridge, sites, policy = {}) {
   ]
   // `exec.signal` is per call and the gate is shared, so the signal is carried in
   // async context instead of every tool parameter list. One wrapper here covers
-  // all fifteen tools, which is also why no call site can forget it.
+  // all sixteen tools, which is also why no call site can forget it.
   const wrapped = tools.map((tool) => {
     const execute = tool.execute
     if (typeof execute !== 'function') return tool

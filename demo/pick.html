@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>页内点选夹具</title>
+<style>
+  body { margin: 0; padding: 24px; background: #0f1115; color: #e6e9ef;
+         font: 15px/1.6 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  p.hint { margin: 0 0 18px; color: #9aa4b2; }
+  .bar { display: flex; align-items: center; gap: 8px; background: #161a22;
+         border: 1px solid #2a3140; border-radius: 10px; padding: 10px 12px; margin-bottom: 18px; }
+  .icon { width: 22px; height: 22px; border: 0; border-radius: 6px; background: #2f6feb;
+          color: #fff; font-size: 13px; cursor: pointer; }
+  #rows { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; max-width: 460px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+         background: #161a22; border: 1px solid #2a3140; border-radius: 8px; padding: 8px 10px; }
+  .row button { border: 0; border-radius: 6px; background: #26303f; color: #dbe2ec;
+                padding: 5px 10px; cursor: pointer; }
+  #board { width: 420px; height: 160px; border-radius: 10px; background: #18202b;
+           border: 1px dashed #3b4a5f; display: block; }
+  #board-note { color: #9aa4b2; margin: 6px 0 18px; }
+  #status { background: #161a22; border: 1px solid #2a3140; border-radius: 10px;
+            padding: 12px 14px; font-variant-numeric: tabular-nums; }
+  #status b { color: #7cc4ff; }
+</style>
+</head>
+<body>
+  <h1>页内点选夹具</h1>
+  <p class="hint">图标按钮、重复行、canvas 区域是快照读不出或读不准的目标；用 browser_pick 请人点一个，再 browser_click 那个 loc。
+    页面只统计真正收到的点击：pick 的那一下会被吞掉，所以计数不会动。</p>
+
+  <div class="bar">
+    <button class="icon" id="icon-btn" aria-label="设置">⚙</button>
+    <span>工具栏：只有一个图标，没有文字</span>
+  </div>
+
+  <div id="rows">
+    <div class="row"><span>导出 2025 年 11 月报表</span><button data-row="1" data-testid="row-export">导出</button></div>
+    <div class="row"><span>导出 2025 年 11 月报表</span><button data-row="2" data-testid="row-export">导出</button></div>
+    <div class="row"><span>导出 2025 年 11 月报表</span><button data-row="3" data-testid="row-export">导出</button></div>
+  </div>
+
+  <canvas id="board" width="840" height="320" aria-label="画板"></canvas>
+  <p id="board-note">canvas 里画了三个圆；只有 pick 能点到「画板」这个整体。</p>
+
+  <div id="status">页面收到的点击：<b id="clicks">0</b>　最后一次：<b id="last">（还没有）</b></div>
+
+  <script>
+    let clicks = 0
+    const label = (element) => {
+      if (!element) return '（未知）'
+      const tag = element.tagName ? element.tagName.toLowerCase() : 'node'
+      const name = element.getAttribute?.('aria-label')
+        || element.getAttribute?.('data-testid')
+        || element.getAttribute?.('data-row')
+        || (element.innerText || '').trim().slice(0, 24)
+        || element.id
+        || ''
+      return name ? tag + '「' + name + '」' : tag
+    }
+    document.addEventListener('click', (event) => {
+      clicks += 1
+      document.getElementById('clicks').textContent = String(clicks)
+      document.getElementById('last').textContent = label(event.target)
+    }, true)
+
+    const board = document.getElementById('board')
+    const ctx = board.getContext('2d')
+    ctx.fillStyle = '#0f1115'
+    ctx.fillRect(0, 0, board.width, board.height)
+    const dots = [[140, 160, 46], [420, 160, 62], [700, 160, 32]]
+    for (const [x, y, r] of dots) {
+      ctx.beginPath()
+      ctx.arc(x, y, r, 0, Math.PI * 2)
+      ctx.fillStyle = '#2f6feb'
+      ctx.fill()
+    }
+  </script>
+</body>
+</html>

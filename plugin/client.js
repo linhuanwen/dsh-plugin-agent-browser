@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
      * The renderer caches `client.js` aggressively, and a stale half looks
      * exactly like a bug in the host half.
      */
-    const CLIENT_REV = 58
+    const CLIENT_REV = 60
     /** The panel talks to the host half over loopback; both sides carry this mark. */
     const BRIDGE_PREFIX = '/dsh-agent-browser'
     const BRIDGE_MARK = 'dsh-plugin-agent-browser/1'
@@ -762,6 +762,18 @@ window.__ModuleLoader__.load({
           // TICKET-044: read-only poll; the callback lets a cancel frame stop it
           // between probes instead of after the whole budget.
           result = await guest.wait(command.params, () => cancelledIds.has(command.id))
+        } else if (command.type === 'pick') {
+          // TICKET-053: the person points at one element. Picking is read-only
+          // (the page never sees the click), so a cancel frame or a takeover
+          // just stops it; the overlay is cleaned up either way.
+          // The panel's local phase map is the only honest source here: the
+          // module-level `state` keeps boot-time fields. A takeover cancels the
+          // pick; `needs_human` must NOT, because picking is how the person can
+          // point at the thing that is blocking them.
+          result = await guest.pick(
+            command.params,
+            () => cancelledIds.has(command.id) || (phases.get(sessionId)?.phase ?? 'idle') === 'taken_over',
+          )
         } else if (command.type === 'snapshot') {
           result = await guest.snapshot(command.params)
           const detection = await detectChallenge(sessionId, guest, command.params?.detect)
@@ -2111,6 +2123,88 @@ window.__ModuleLoader__.load({
       }
 
       /**
+       * Let the person point at an element (TICKET-053).
+       *
+       * The page-side picker (`inject/pick.js`) installs a highlight overlay and
+       * consumes the next click; this loop polls it every 150ms, so a cancel
+       * frame or a user takeover can stop picking between probes, and the
+       * overlay is always removed afterwards. Picking never dispatches input:
+       * the answer is "which element", and the caller acts on it afterwards.
+       * @param {{timeoutMs?: number, source?: string}} params
+       * @param {() => boolean} [isCancelled]
+       * @returns {Promise<object>} { ok, picked, loc?, info?, rect?, point?, cancelled?, timedOut?, waitedMs }
+       */
+      async pick(params, isCancelled) {
+        const source = typeof params?.source === 'string' ? params.source : ''
+        if (source === '') throw new Error('pick needs its page-side picker source')
+        const timeoutMs = Number.isFinite(params?.timeoutMs)
+          ? Math.max(3_000, Math.min(120_000, params.timeoutMs))
+          : 60_000
+        const intervalMs = 150
+        const started = Date.now()
+        let installed = false
+        const stop = async () => {
+          try {
+            await this.evaluate(`(${source})({action:'stop'})`)
+          } catch (error) {
+            // The page may be gone; the overlay died with it.
+            report('pick stop failed', { error: String(error?.message ?? error) })
+          }
+          if (installed) setState({ note: 'Ready', picking: false })
+          installed = false
+        }
+        try {
+          const start = await this.evaluate(`(${source})({action:'start'})`)
+          if (start === null || typeof start !== 'object' || start.ok !== true) {
+            throw new Error('the page refused to start picking')
+          }
+          installed = true
+          // The page needs keyboard focus or its `keydown` (Esc) never arrives:
+          // the webview forwards native keys only while it is focused.
+          try {
+            this.element?.focus?.()
+          } catch (error) {
+            // Focus is best effort; the panel button can always cancel instead.
+          }
+          setState({ note: 'Point at an element in the page (Esc, or the cancel button, to stop)', picking: true })
+          for (;;) {
+            const probe = await this.evaluate(`(${source})({action:'poll'})`)
+            const waitedMs = Date.now() - started
+            if (probe?.picked) {
+              const picked = probe.picked
+              await stop()
+              return { ok: true, picked: true, ...picked, waitedMs }
+            }
+            if (probe?.cancelled === true) {
+              await stop()
+              return { ok: true, picked: false, cancelled: true, waitedMs, url: await this.url() }
+            }
+            if (isCancelled !== undefined && isCancelled() === true) {
+              await stop()
+              return { ok: true, picked: false, cancelled: true, waitedMs, url: await this.url() }
+            }
+            if (waitedMs >= timeoutMs) {
+              await stop()
+              return { ok: true, picked: false, timedOut: true, waitedMs, url: await this.url() }
+            }
+            await new Promise((resolve) => setTimeout(resolve, intervalMs))
+          }
+        } finally {
+          if (installed) await stop()
+        }
+      }
+
+      /** Stop an in-flight pick from the panel button (the page keeps its state). */
+      async cancelPick() {
+        try {
+          await this.evaluate('(() => { const state = window.__dshPick; if (state) state.cancelled = true; return true })()')
+        } catch (error) {
+          // The page is gone; the navigation cancels the pick anyway.
+          report('pick cancel failed', { error: String(error?.message ?? error) })
+        }
+      }
+
+      /**
        * Capture the panel as a PNG data URL.
        *
        * `capturePage` measures device pixels, so the scale between them and CSS
@@ -3359,6 +3453,17 @@ window.__ModuleLoader__.load({
             failure ?? (control.phase === 'needs_human'
               ? 'Page is asking for a human: finish it in the panel, then hand it back'
               : view.note)),
+          view.picking === true
+            ? h('button', {
+                type: 'button',
+                style: S.pickCancel,
+                title: '停止点选（也可以按 Esc）',
+                onClick: () => {
+                  const guest = guestNow()
+                  if (guest !== null) void guest.cancelPick()
+                },
+              }, '取消点选')
+            : null,
           h('div', { style: S.zoom },
             h('button', {
               type: 'button',
@@ -3472,6 +3577,7 @@ window.__ModuleLoader__.load({
       zoom: { display: 'flex', gap: 2, alignItems: 'center', flex: '0 0 auto' },
       zoomButton: { width: 22, height: 20, lineHeight: '18px', padding: 0, fontSize: 12, borderRadius: 4, border: '1px solid #d0d5dd', background: '#fff', color: '#344054', cursor: 'pointer' },
       zoomLabel: { minWidth: 40, height: 20, padding: '0 4px', fontSize: 11, borderRadius: 4, border: '1px solid #eaecf0', background: '#f9fafb', color: '#475467', cursor: 'pointer', whiteSpace: 'nowrap' },
+      pickCancel: { height: 20, padding: '0 8px', fontSize: 11, lineHeight: '18px', borderRadius: 4, border: '1px solid #f04438', background: '#fef3f2', color: '#b42318', cursor: 'pointer', whiteSpace: 'nowrap' },
       hostWrap: { position: 'relative', flex: '1 1 auto', minHeight: 0, display: 'flex' },
       host: { position: 'relative', flex: '1 1 auto', minHeight: 0, display: 'flex', background: '#fff' },
       detectNote: { position: 'absolute', right: 8, top: 8, fontSize: 11, padding: '2px 8px', borderRadius: 999, background: '#fffaeb', color: '#b54708', border: '1px solid #fec84b', pointerEvents: 'none' },
