@@ -1148,6 +1148,241 @@ export function browserWaitTool(bridge) {
 }
 
 /**
+ * The in-page text/table reader, read on every call like the other page scripts.
+ *
+ * TICKET-057: reading an article or a table is not an accessibility-tree walk;
+ * shipping the source with the command keeps the page half and the host half
+ * from drifting apart (same convention as `wait`/`pick`).
+ * @returns {string} the source of `dshRead`.
+ */
+export function readSource() {
+  return readFileSync(new URL('./inject/read.js', import.meta.url), 'utf8')
+}
+
+/**
+ * `browser_read` — read the rendered text or table rows under a root.
+ *
+ * The snapshot walks the accessibility tree: great for finding controls, wasteful
+ * for reading a paragraph or a data table. This returns what the page actually
+ * renders (`innerText`, so hidden nodes are skipped) or the cells of every
+ * `<table>` under a root, trimmed to `maxChars` / `maxTables` / `maxRows`.
+ * Reads only — no click, no scroll, no focus, no approval — and it works in the
+ * `needs_human` and `taken_over` phases like `browser_snapshot`.
+ * TICKET-057 / SPEC-004 stage B2.
+ * @param {import('./bridge.js').Bridge} bridge - host half of the channel.
+ */
+export function browserReadTool(bridge) {
+  const DEFAULT_MAX_CHARS = 8_000
+  const MAX_MAX_CHARS = 40_000
+  const DEFAULT_MAX_TABLES = 10
+  const MAX_MAX_TABLES = 20
+  const DEFAULT_MAX_ROWS = 100
+  const MAX_MAX_ROWS = 500
+  // Page-level refusals carry a stable code but the generic click/type message
+  // would say "ref" where a read has a loc/selector; keep the read wording here.
+  const readFailure = (result, args) => {
+    const code = typeof result?.error === 'string' && result.error !== '' ? result.error : 'read_failed'
+    const loc = typeof result?.loc === 'string' && result.loc !== '' ? result.loc : typeof args?.loc === 'string' ? args.loc : ''
+    const selector = typeof result?.selector === 'string' && result.selector !== '' ? result.selector : typeof args?.selector === 'string' ? args.selector : ''
+    const ref = typeof result?.ref === 'string' && result.ref !== '' ? result.ref : typeof args?.ref === 'string' ? args.ref : ''
+    const matched = Number.isFinite(result?.matched) ? result.matched : 0
+    let message
+    switch (code) {
+      case 'stale_loc':
+        message = `loc ${JSON.stringify(loc)} no longer matches anything in the page — it was replaced, removed, or you are on a different page now. Take a new browser_snapshot and use the loc from that snapshot.`
+        break
+      case 'bad_loc':
+        message = `loc ${JSON.stringify(loc)} is not a stable page path. Copy the loc="css:…" value from a browser_snapshot, or pass no address to read the whole page.`
+        break
+      case 'stale_ref':
+        message = `ref "${ref}" is no longer in the page; it was replaced or removed. Take a new browser_snapshot and use a ref from that snapshot.`
+        break
+      case 'bad_ref':
+        message = `"${ref}" is not a ref. Use a ref from the latest browser_snapshot, e.g. e12.`
+        break
+      case 'not_found':
+        message = selector !== ''
+          ? `selector ${JSON.stringify(selector)} matched ${matched} element(s). Use a selector you can see in the page, or omit the address to read the whole page body.`
+          : 'the root element was not found. Pass a loc/selector you can see in a snapshot, or omit the address to read the whole page body.'
+        break
+      case 'multiple':
+        message = `selector ${JSON.stringify(selector)} matched ${matched} element(s). Pass strict:false to read the first match, or narrow the selector.`
+        break
+      case 'bad_selector':
+        message = `selector ${JSON.stringify(selector)} is not a valid CSS selector.`
+        break
+      default:
+        message = `the page could not read that root (${code}).`
+    }
+    const error = new Error(message)
+    error.code = code
+    return error
+  }
+  return {
+    name: 'browser_read',
+    description:
+      'Read the rendered text of a page (or of one element) without walking the accessibility tree, or read '
+      + 'the rows of every table under it. mode "text" (default) returns the visible text, whitespace-normalized '
+      + 'and cut at maxChars (default 8000, max 40000). mode "table" returns up to maxTables tables (default 10) '
+      + 'with caption, headers, rows (up to maxRows each, default 100) and row counts. Point it at a root with '
+      + 'loc (the stable css: path from a snapshot) or selector; no address means the whole page body. Reads only: '
+      + 'nothing is clicked, submitted or scrolled, so no approval is needed and it works in every phase. Use it '
+      + 'instead of browser_snapshot when you want the words on the page, not the controls.',
+    parameters: {
+      type: 'object',
+      properties: {
+        mode: { type: 'string', enum: ['text', 'table'], description: 'What to read. "text" (default) returns the rendered text; "table" returns table rows.' },
+        loc: { type: 'string', description: 'Stable loc of the root element (the `css:…` path from a snapshot). Omit for the whole page body.' },
+        selector: { type: 'string', description: 'CSS selector for the root element, when you know one. Pass at most one of loc / selector / ref.' },
+        ref: { type: 'string', description: 'Ref of the root element from the latest browser_snapshot.' },
+        strict: { type: 'boolean', description: 'With selector: fail with an error instead of using the first of several matches. Defaults to false.' },
+        maxChars: { type: 'integer', description: `Text mode: maximum characters to return. Defaults to ${DEFAULT_MAX_CHARS}; clamped to 200–${MAX_MAX_CHARS}.` },
+        maxTables: { type: 'integer', description: `Table mode: maximum tables to return. Defaults to ${DEFAULT_MAX_TABLES}; clamped to 1–${MAX_MAX_TABLES}.` },
+        maxRows: { type: 'integer', description: `Table mode: maximum rows per table. Defaults to ${DEFAULT_MAX_ROWS}; clamped to 1–${MAX_MAX_ROWS}.` },
+      },
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          mode: { type: 'string' },
+          text: { type: 'string' },
+          chars: { type: 'integer' },
+          totalChars: { type: 'integer' },
+          truncated: { type: 'boolean' },
+          tables: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                caption: { type: 'string' },
+                headers: { type: 'array', items: { type: 'string' } },
+                rows: { type: 'array', items: { type: 'array', items: { type: 'string' } } },
+                rowCount: { type: 'integer' },
+                truncated: { type: 'boolean' },
+              },
+            },
+          },
+          tableCount: { type: 'integer' },
+          root: {
+            type: 'object',
+            properties: {
+              tag: { type: 'string' },
+              role: { type: 'string' },
+              name: { type: 'string' },
+              loc: { type: 'string' },
+            },
+          },
+          url: { type: 'string' },
+          title: { type: 'string' },
+        },
+        required: ['mode'],
+      },
+      render(_args, value) {
+        const rootName = value?.root?.name ? `${value.root.role ?? value.root.tag} "${String(value.root.name).slice(0, 60)}"` : value?.root?.tag ?? 'the page'
+        if (value?.mode === 'table') {
+          const tables = Array.isArray(value?.tables) ? value.tables : []
+          if (tables.length === 0) {
+            return [{ type: 'text', text: `No <table> elements were found under ${rootName}. The page may render its data as divs; use browser_read mode "text" or browser_snapshot instead.` }]
+          }
+          const lines = [`Read ${tables.length} table(s) under ${rootName}.`]
+          tables.forEach((table, index) => {
+            const caption = typeof table?.caption === 'string' && table.caption !== '' ? ` — ${table.caption}` : ''
+            const rowCount = Number(table?.rowCount) || 0
+            lines.push('')
+            lines.push(`Table ${index + 1}${caption} (${rowCount} row(s))`)
+            if (Array.isArray(table?.headers) && table.headers.length > 0) lines.push(`  ${table.headers.join(' | ')}`)
+            const rows = Array.isArray(table?.rows) ? table.rows : []
+            for (const row of rows.slice(0, 50)) lines.push(`  ${(Array.isArray(row) ? row : []).join(' | ')}`)
+            if (table?.truncated === true) lines.push(`  … more rows not shown (raise maxRows)` )
+          })
+          if (value?.truncated === true) lines.push('', `… more tables not shown (raise maxTables).`)
+          return [{ type: 'text', text: lines.join('\n') }]
+        }
+        const chars = Number(value?.chars) || 0
+        const total = Number(value?.totalChars) || chars
+        const header = value?.truncated === true
+          ? `Read ${chars} of ${total} rendered characters from ${rootName} (truncated; narrow it with loc/selector or raise maxChars).`
+          : `Read ${chars} rendered character(s) from ${rootName}.`
+        const text = typeof value?.text === 'string' ? value.text : ''
+        return [{ type: 'text', text: text === '' ? `${header} The root rendered no text.` : `${header}\n\n${text}` }]
+      },
+    },
+    async execute(args, exec) {
+      const sessionId = sessionOf(exec)
+      const mode = args?.mode === undefined ? 'text' : args.mode
+      if (mode !== 'text' && mode !== 'table') throw new Error('mode must be "text" or "table"')
+      const addresses = ['ref', 'loc', 'selector'].filter((key) => typeof args?.[key] === 'string' && args[key].trim() !== '')
+      if (addresses.length > 1) throw new Error('pass at most one of ref, loc or selector')
+      const address = {}
+      if (addresses.length === 1) address[addresses[0]] = String(args[addresses[0]]).trim()
+      if (address.loc !== undefined && address.loc.slice(0, 4) !== 'css:') {
+        throw new Error('loc must start with "css:" (copy the loc="css:…" value from a snapshot)')
+      }
+      const readInt = (name, fallback, low, high) => {
+        if (args?.[name] === undefined) return fallback
+        const raw = Number(args[name])
+        if (!Number.isFinite(raw) || !Number.isInteger(raw)) throw new Error(`${name} must be an integer`)
+        return Math.min(high, Math.max(low, raw))
+      }
+      const maxChars = readInt('maxChars', DEFAULT_MAX_CHARS, 200, MAX_MAX_CHARS)
+      const maxTables = readInt('maxTables', DEFAULT_MAX_TABLES, 1, MAX_MAX_TABLES)
+      const maxRows = readInt('maxRows', DEFAULT_MAX_ROWS, 1, MAX_MAX_ROWS)
+      const result = await bridge.request(
+        sessionId,
+        'read',
+        { mode, ...address, strict: args?.strict === true, maxChars, maxTables, maxRows, source: readSource() },
+        20_000,
+      )
+      if (result?.ok !== true) throw readFailure(result, args)
+      const root = result?.root !== null && typeof result?.root === 'object' ? result.root : undefined
+      const value = {
+        mode: result?.mode === 'table' ? 'table' : 'text',
+        ...(typeof result?.url === 'string' && result.url !== '' ? { url: result.url } : {}),
+        ...(typeof result?.title === 'string' ? { title: result.title } : {}),
+        ...(root === undefined ? {} : { root }),
+      }
+      if (value.mode === 'table') {
+        const tables = Array.isArray(result?.tables) ? result.tables : []
+        value.tables = tables.filter((table) => table !== null && typeof table === 'object').map((table) => ({
+          caption: typeof table.caption === 'string' ? table.caption : '',
+          headers: Array.isArray(table.headers) ? table.headers.map((cell) => String(cell)) : [],
+          rows: Array.isArray(table.rows) ? table.rows.map((row) => (Array.isArray(row) ? row.map((cell) => String(cell)) : [])) : [],
+          rowCount: Number.isInteger(table.rowCount) && table.rowCount >= 0 ? table.rowCount : 0,
+          truncated: table.truncated === true,
+        })).slice(0, 20)
+        value.tableCount = Number.isInteger(result?.tableCount) ? result.tableCount : value.tables.length
+        value.truncated = result?.truncated === true
+        return value
+      }
+      const text = typeof result?.text === 'string' ? result.text : ''
+      value.text = text
+      value.chars = Number.isInteger(result?.chars) ? result.chars : text.length
+      value.totalChars = Number.isInteger(result?.totalChars) ? result.totalChars : value.chars
+      value.truncated = result?.truncated === true
+      return value
+    },
+    isConcurrencySafe() {
+      return false
+    },
+    presentCall(args) {
+      const mode = args?.mode === 'table' ? 'table' : 'text'
+      const target = typeof args?.loc === 'string' ? args.loc : typeof args?.selector === 'string' ? args.selector : 'the page'
+      return { card: 'generic', title: `Read ${mode} from ${String(target).slice(0, 60)}`, kind: 'read', rawInput: args }
+    },
+    presentResult(_args, value) {
+      if (value?.mode === 'table') {
+        const count = Array.isArray(value?.tables) ? value.tables.length : 0
+        return { card: 'generic', title: count === 0 ? 'No tables found' : `Read ${count} table(s)` }
+      }
+      const chars = Number(value?.chars) || 0
+      return { card: 'generic', title: value?.truncated === true ? `Read ${chars} char(s) (truncated)` : `Read ${chars} char(s)` }
+    },
+  }
+}
+
+/**
  * The in-page element picker, read on every call like the other page scripts.
  *
  * TICKET-053: pointing is a small state machine (`start` / `poll` / `stop`)
@@ -3612,6 +3847,7 @@ export function createTools(ctx, bridge, sites, policy = {}) {
       fallback,
     }),
     browserSnapshotTool(ctx, gate, { maxChars: limits.snapshotMaxChars, rules }),
+    browserReadTool(gate),
     browserPickTool(gate),
     browserTabsTool(gate),
     browserWaitTool(gate),
@@ -3630,7 +3866,7 @@ export function createTools(ctx, bridge, sites, policy = {}) {
   ]
   // `exec.signal` is per call and the gate is shared, so the signal is carried in
   // async context instead of every tool parameter list. One wrapper here covers
-  // all sixteen tools, which is also why no call site can forget it.
+  // all eighteen tools, which is also why no call site can forget it.
   const wrapped = tools.map((tool) => {
     const execute = tool.execute
     if (typeof execute !== 'function') return tool

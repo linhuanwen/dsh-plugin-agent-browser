@@ -807,6 +807,10 @@ window.__ModuleLoader__.load({
           // TICKET-044: read-only poll; the callback lets a cancel frame stop it
           // between probes instead of after the whole budget.
           result = await guest.wait(command.params, () => cancelledIds.has(command.id))
+        } else if (command.type === 'read') {
+          // TICKET-057: read the rendered text or table rows in one look. Pure
+          // read, so it is allowed in every phase and never asks for approval.
+          result = await guest.read(command.params)
         } else if (command.type === 'pick') {
           // TICKET-053: the person points at one element. Picking is read-only
           // (the page never sees the click), so a cancel frame or a takeover
@@ -2267,6 +2271,32 @@ window.__ModuleLoader__.load({
           }
           await new Promise((resolve) => setTimeout(resolve, intervalMs))
         }
+      }
+
+      /**
+       * Read rendered text or the rows of tables under a root (TICKET-057).
+       *
+       * One synchronous look through `inject/read.js`; reads only, so it never
+       * asks for approval and is allowed in every phase. The reader source is
+       * handed over in the command params, the same convention as
+       * `wait`/`pick`.
+       * @param {{mode?: 'text'|'table', ref?: string, loc?: string, selector?: string, strict?: boolean, maxChars?: number, maxTables?: number, maxRows?: number, source?: string}} params
+       * @returns {Promise<object>} the page's answer (see `plugin/inject/read.js`)
+       */
+      async read(params) {
+        const source = typeof params?.source === 'string' ? params.source : ''
+        if (source === '') throw new Error('read needs its page-side reader source')
+        const input = {
+          mode: params?.mode === 'table' ? 'table' : 'text',
+          strict: params?.strict === true,
+          ...(typeof params?.ref === 'string' && params.ref !== '' ? { ref: params.ref } : {}),
+          ...(typeof params?.loc === 'string' && params.loc !== '' ? { loc: params.loc } : {}),
+          ...(typeof params?.selector === 'string' && params.selector !== '' ? { selector: params.selector } : {}),
+          ...(Number.isFinite(params?.maxChars) ? { maxChars: params.maxChars } : {}),
+          ...(Number.isFinite(params?.maxTables) ? { maxTables: params.maxTables } : {}),
+          ...(Number.isFinite(params?.maxRows) ? { maxRows: params.maxRows } : {}),
+        }
+        return this.evaluate(`(${source})(${JSON.stringify(input)})`)
       }
 
       /**

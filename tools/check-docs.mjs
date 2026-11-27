@@ -8,7 +8,7 @@
  *
  * 检查项：
  *   1. 用户 README 的「完整字段表」↔ plugin/index.js 的 Config 键（双向差集为空）
- *   2. 用户 README 的「十七个工具」表 ↔ plugin/tools.js 实际注册的工具名（双向差集为空）
+ *   2. 用户 README 的「十八个工具」表 ↔ plugin/tools.js 实际注册的工具名（双向差集为空）
  *   3. 用户 README 的配置示例 YAML ↔ plugin/config.js 的 DEFAULTS（结构与默认值一致）
  *   4. docs/decisions/README.md 索引 ↔ docs/decisions/NNN-*.md 文件（双向）
  *   5. 仓库 README 与用户 README 都引用 docs/design/web-tools-and-agent-browser.md（SPEC-002 B11 验收项）
@@ -117,8 +117,8 @@ function readToolNames() {
 
 function readReadmeToolNames() {
   const source = read('dist/dsh-plugin-agent-browser/README.md')
-  const section = source.split('## 十七个工具')[1]
-  if (!section) throw new Error('用户 README: cannot find `## 十七个工具`')
+  const section = source.split('## 十八个工具')[1]
+  if (!section) throw new Error('用户 README: cannot find `## 十八个工具`')
   const body = section.split('\n## ')[0]
   const names = []
   for (const line of body.split('\n')) {
@@ -137,8 +137,8 @@ function checkTools() {
   if (missing.length) fail(`工具：代码注册了、README 没写 → ${missing.join(', ')}`)
   if (extra.length) fail(`工具：README 写了、代码没有 → ${extra.join(', ')}`)
   if (duplicated.length) fail(`工具：README 重复列出 → ${duplicated.join(', ')}`)
-  if (code.length !== 17) fail(`工具：应为 17 个，实际 ${code.length} 个`)
-  if (!missing.length && !extra.length && !duplicated.length && code.length === 17) {
+  if (code.length !== 18) fail(`工具：应为 18 个，实际 ${code.length} 个`)
+  if (!missing.length && !extra.length && !duplicated.length && code.length === 18) {
     ok(`工具 ${code.length} 个，README 与 plugin/tools.js 双向一致`)
   }
 }

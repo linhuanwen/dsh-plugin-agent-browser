@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>页面阅读夹具</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; margin: 24px; color: #1f2937; background: #fff; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  p.lead { color: #4b5563; margin: 0 0 16px; }
+  #article { max-width: 720px; border: 1px solid #d1d5db; border-radius: 10px; padding: 16px; margin: 0 0 20px; }
+  #article h2 { font-size: 16px; margin: 0 0 8px; }
+  #article p { line-height: 1.7; margin: 0 0 10px; }
+  #article ul { margin: 0 0 10px 20px; line-height: 1.7; }
+  table { border-collapse: collapse; margin: 0 0 20px; min-width: 420px; }
+  caption { text-align: left; font-weight: 600; padding: 0 0 6px; }
+  th, td { border: 1px solid #d1d5db; padding: 6px 10px; text-align: left; font-size: 13px; }
+  th { background: #f3f4f6; }
+  .hidden-text { display: none; }
+</style>
+</head>
+<body>
+  <h1>页面阅读夹具</h1>
+  <p class="lead">验证 <code>browser_read</code>：读渲染出来的文字与表格，而不是无障碍树。页面上另有一段 <code>display:none</code> 的文字，阅读器不应该把它带出来。</p>
+
+  <div id="article">
+    <h2>十一月的发布说明</h2>
+    <p>这个月我们把面板里的动作都画到了页面上：点击会留下一个涟漪，悬停会画一个空心圆，滚动和输入会把目标元素框出来，拖拽会连一条线。所有痕迹都是覆盖层，页面自己收不到这些事件。</p>
+    <p>同时，快照末尾现在会带上页面自己打印的 console 与未捕获错误，以及页面自己发出的 fetch/XHR 失败；失败请求只记状态与耗时，成功请求只进分母。这样 Agent 不必再猜「点了为什么没反应」。</p>
+    <ul>
+      <li>动作时间线记录最近 200 次工具调用，含成败、错误码、截图路径；</li>
+      <li>点选与框选能把「快照说不清的元素」变成稳定的 loc；</li>
+      <li>标签页最多六个，切换只换屏幕，不重载页面。</li>
+    </ul>
+    <p>这次阅读夹具还用来确认一件事：长文按字符预算截断时要明确告诉你「总共多少、给了多少」，表格则要保留表头、行列与总行数。</p>
+    <div class="hidden-text">隐藏文字：这段不该出现在阅读结果里。</div>
+  </div>
+
+  <table id="report">
+    <caption>十一月报表</caption>
+    <thead>
+      <tr><th>日期</th><th>渠道</th><th>金额</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>2025-11-01</td><td>自然搜索</td><td>12.00</td></tr>
+      <tr><td>2025-11-02</td><td>邮件</td><td>18.50</td></tr>
+      <tr><td>2025-11-03</td><td>自然搜索</td><td>31.20</td></tr>
+      <tr><td>2025-11-04</td><td>合作方</td><td>9.90</td></tr>
+    </tbody>
+  </table>
+
+  <table>
+    <tr><td>键</td><td>值</td></tr>
+    <tr><td>窗口</td><td>最近七天</td></tr>
+  </table>
+</body>
+</html>

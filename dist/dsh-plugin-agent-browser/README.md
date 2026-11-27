@@ -203,13 +203,14 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 
 > 如果页面底部显示"这个 profile 不能保存插件配置"，说明宿主没有给它 config editor（多见于只读或内置 profile）——此时表单只读，改配置请用 YAML。
 
-## 十七个工具
+## 十八个工具
 
 | 工具 | 作用 |
 |---|---|
 | `browser_open` | 打开一个 http(s) 地址；或传 `path` 打开工作区里的 HTML（自动起只读本地服务）；`newTab:true` 时在面板里另开一个标签，当前页留在后面不丢 |
 | `browser_tabs` | 列出、切换、关闭面板里的标签页（`action: "list"` / `"switch"` / `"close"`，`tab` 传标签 id）；切换保留每个标签的页面状态，关最后一个会先开一张空白页 |
 | `browser_snapshot` | 读当前页面的无障碍树（带 `[ref=eN]`；能算出稳定路径时紧跟 `[loc="css:…"]`）+ 一张截图；`includeImage:false` 可省掉截图；被字符预算截断时返回 `cursor`，带 `cursor` 再调用可续读下一段（页面变了会返回 `stale_cursor`）；页面自己打印的 console/未捕获错误也会附在末尾（最多 10 条，每次快照清空），页面自己发出的 fetch/XHR 失败同样附在末尾（最多 10 条，带状态/耗时/错误与请求总数） |
+| `browser_read` | 读页面**渲染出来的文字或表格**，不靠无障碍树：`mode: "text"`（默认）返回可见文字并截断到 `maxChars`（默认 8000，最大 40000），`mode: "table"` 返回每张表的 caption、表头与行（`maxTables` 默认 10、`maxRows` 默认 100）；用 `loc`/`selector`/`ref` 指定根元素，不传则是整页 body；纯读、零审批，人工相位下也可用 |
 | `browser_pick` | 请人直接在页面上指路：`mode:"element"`（默认）点一个元素，`mode:"box"` 拉一个框拿走框里每个元素，都变成结构化引用（稳定路径 `loc` + 可读名 + `rect` + 落点坐标；框选还带框的坐标、命中总数与截断标记），之后用 `browser_click {loc}` 等既有工具逐个操作。点选/框选期间页面**收不到**按下、拖动和松手（捕获后吞掉，不派发输入），不需要确认条；`timeoutMs` 默认 60000（夹 3000–120000）、`limit` 默认 20（夹 1–100），超时或 Esc 是正常回执不是错误。图标按钮、重复行、一组复选框、canvas 控件这类快照读不出的目标最适合先 pick；`needs_human` 时可用（人本就在处理页面），`taken_over` 下会被拒绝 |
 | `browser_wait` | 等某个 CSS 选择器或页面文字出现（`gone:true` 等它消失），超时返回 `timedOut`；纯读、无需确认，异步加载先等再快照（默认等 10s，最长 15s） |
 | `browser_click` | 点某个 `ref`；ref 过期时传快照里的 `loc="css:…"`（跨快照有效），没有可用地址时传 CSS `selector`（命中测试失败会分型报告 `not_found` / `multiple` / `occluded` / `disabled`）；canvas 与跨域 iframe 才用坐标（`x`/`y`，CSS 像素）。`target=_blank` 会被改成同视图导航 |
@@ -242,7 +243,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 
 这块浏览器带着你的登录态，Agent 会在你没看的时候往里写字，所以默认姿势是：**读动作从不打扰，写动作每个站点第一次问一次**。
 
-- **不问**（读动作）：`browser_open`、`browser_snapshot`、`browser_pick`、`browser_wait`、`browser_scroll`、`browser_hover`、`browser_zoom`、`browser_screenshot`、`browser_tabs({action:"list"})`，以及点到普通链接/按钮的 `browser_click`。
+- **不问**（读动作）：`browser_open`、`browser_snapshot`、`browser_read`、`browser_pick`、`browser_wait`、`browser_scroll`、`browser_hover`、`browser_zoom`、`browser_screenshot`、`browser_tabs({action:"list"})`，以及点到普通链接/按钮的 `browser_click`。
 - **要问**（写动作）：`browser_type`（密码框本来就一律拒绝）、`browser_click` 命中提交类控件（`button[type=submit]`、`input[type=submit|image]`、表单里没有 `type` 的按钮）、`browser_drag`（拖拽可能是排序/提交滑块，无法预判，一律按写动作）、表单内的 `browser_press` Enter、`browser_eval`、`browser_download`、`browser_upload`。
 - 面板顶部会弹一条黄色确认条：`Agent 想在 example.com 点击「提交」提交表单` + 倒计时 +「允许一次」「本会话允许本站」「拒绝」。**Enter = 拒绝**（反射性按键不该等于同意），快捷键 Alt+1 / Alt+2 / Alt+3。
 - 拒绝或超时（默认 30 秒）：动作**不会发出**，Agent 拿到 `approval_denied` / `approval_timeout`。面板没打开或窗口不可见：`approval_required`，Agent 应当先请你打开面板，而不是干等。
@@ -307,4 +308,6 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 - `browser_screenshot` 的整页拼接有上限：默认 `maxHeight:10000` CSS 像素、最多 16000 设备像素行，超了就停下并在结果里说 `truncated`。`fixed`/`sticky` 元素在拼接期间会被临时隐藏（否则每一帧都会重复印一遍页头），拼完恢复。面板在后台或最小化时截图会超时，和点击一样要把窗口切到前台。
 - 取消（`browser_*` 调用被中断）保证的是"不再等、不再下发新命令"；**已经发到页面里的动作不会撤销**（例如已经按下的点击）。
 - 写动作确认按「站点」判断，不是按「这一页是否登录后」：面板读不到 HttpOnly Cookie，无法判断登录状态，所以规则是"每个站点第一次写动作问一次"（见 SPEC-003 / 决策 010）。
+- `browser_read` 只读渲染后的文字（`innerText`）与真 `<table>`：不读几何/样式/HTML 源码，div 伪表格不猜，跨域 iframe 文本不可读；预算 `maxChars`/`maxTables`/`maxRows` 截断时会明说。
+- `browser_timeline` 与面板「动作 N 条」只活在当前宿主进程：DSH 退出、插件重载/重装即清空，最多 200 条，只记工具调用，不落盘。
 - 确认只覆盖四类已知写动作（输入、提交、下载、执行脚本）。页面自己接住的副作用（例如"加入购物车"这类 AJAX 按钮）按普通点击处理，不触发确认。

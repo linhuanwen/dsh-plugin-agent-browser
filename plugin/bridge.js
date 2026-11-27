@@ -71,7 +71,7 @@ const INPUT_TYPES = new Set(['open', 'click', 'drag', 'scroll', 'hover', 'zoom',
  * allowing it under `needs_human` (pointing at an element on a challenge page
  * is exactly when pointing helps).
  */
-const READ_TYPES = new Set(['snapshot', 'inspect', 'wait', 'tabs', 'pick'])
+const READ_TYPES = new Set(['snapshot', 'inspect', 'wait', 'tabs', 'pick', 'read'])
 
 /**
  * Commands whose effect cannot be proven absent once the panel pulled them.
