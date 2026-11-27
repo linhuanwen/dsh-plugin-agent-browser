@@ -588,6 +588,11 @@ export function applyAgentBrowser(ctx, config = {}, overrides = {}) {
     },
   })
 
+  // TICKET-056: the recorder the tool layer writes into is also what the panel
+  // reads through `GET /timeline`. Handing it over here keeps one source of truth
+  // (and leaves the bridge usable in tests that never create a timeline).
+  bridge.setTimeline?.(tools.timeline ?? null)
+
   // Snapshot before registering: after this point every name above is ours.
   const taken = takenToolNames(ctx, tools.map((tool) => tool.name))
 

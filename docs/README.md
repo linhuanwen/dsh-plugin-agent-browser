@@ -46,6 +46,9 @@
 | [027-pick-cases.md](cases/027-pick-cases.md) | `browser_pick` 页内点选：人点图标按钮/重复行/canvas 拿到 `loc`，页面收不到点击（计数 0），随后 `browser_click {loc}` 真点到；超时/面板取消/接管拒绝都是明确回执；五个验收期缺陷（漏打包、秒取消、点击泄漏、loc 前缀、Esc 焦点） |
 | [026-drag-cases.md](cases/026-drag-cases.md) | `browser_drag` 拖拽：loc→loc、`dx`/`dy`、`toX`/`toY` 三种落点都触发页面 pointer 处理器；写动作确认条覆盖拖拽（超时 `approval_timeout`）；越界/失效地址在派发前拒绝；三个验收期发现 |
 | [024-tabs-cases.md](cases/024-tabs-cases.md) | 面板标签页：`newTab` 开第二张、`list` 标题与真实 URL、切换后页面状态保留、关最后一个回落空白页、`tab_not_found`/`tab_limit`；三个验收期发现（URL 缓存、空白页标题、客户端 bundle 缓存） |
+| [028-box-select-cases.md](cases/028-box-select-cases.md) | `browser_pick {mode:"box"}` 框选：人拉框拿到框内元素列表，框选不向页面派发事件（计数不变、无文字选区），用返回的 `css:[data-testid="row-export"]` 真点一次计数 +1；limit/截断、空框、超时、element 模式对照 |
+| [029-visible-feedback-cases.md](cases/029-visible-feedback-cases.md) | 页面内可见反馈（`feedback`）：click 涟漪+点、hover 光标点、scroll/type 元素高亮、drag 连线+双点都在页面里画出来；页面收不到事件；配置诊断（`source` 长度、`drawn`）、五个验收期问题（点映射、type 无 rect、`inject/feedback.js` 漏打包 → check-docs 第 7 项、bundle 缓存、截图时延） |
+| [030-action-timeline-cases.md](cases/030-action-timeline-cases.md) | 动作时间线与截图证据（`browser_timeline`）：open/click/screenshot/失败都被记录，截图带 `file` 与字节数，写动作带 `(committed)`，页面级拒绝保留 `[stale_loc]`；`failedOnly`/`tool`/`limit` 过滤；读日志不记账、重装清空；面板「动作 N 条」；五个验收期问题（漏 COPY、漏 package files、summary `undefined`、error 码、读入账） |
 | [cases/shots/](cases/shots/) | 案例截图原图 |
 | [cases/outputs/](cases/outputs/) | 案例执行产物：R4/R8/S1–S6 的记录、素材与报告 |
 
@@ -55,12 +58,9 @@
 | --- | --- |
 | [2026-11-24-browser-automation-competitive-report.md](research/2026-11-24-browser-automation-competitive-report.md) | 5 个同类项目（BrowserSkill / browserpaw / browser-mcp / browser-automation / dsh-browser-cdp）的横评，与我们护城河和短板的对照，P0–P2 建议与两周清单 |
 
-| [029-visible-feedback-cases.md](cases/029-visible-feedback-cases.md) | 页面内可见反馈（`feedback`）：click 涟漪+点、hover 光标点、scroll/type 元素高亮、drag 连线+双点都在页面里画出来；页面收不到事件；配置诊断（`source` 长度、`drawn`）、五个验收期问题（点映射、type 无 rect、`inject/feedback.js` 漏打包 → check-docs 第 7 项、bundle 缓存、截图时延） |
-| [028-box-select-cases.md](cases/028-box-select-cases.md) | `browser_pick {mode:"box"}` 框选：人拉框拿到框内元素列表，框选不向页面派发事件（计数不变、无文字选区），用返回的 `css:[data-testid="row-export"]` 真点一次计数 +1；limit/截断、空框、超时、element 模式对照 |
+## tickets/ —— 56 张工单
 
-## tickets/ —— 55 张工单
-
-按时间编号，每张记录一个失败模式、根因与验收证据（`034-screenshot-large-capture-hang.md` 是截图大载荷修复，`037`–`039` 是「首次写动作确认」的实现拆分：host 判定/门 → 面板确认条 → 配置与夹具，`040`–`043` 是「阶段 A 边界收口」：白屏根因 → JS 弹窗 → 写动作三态 → F7/F8 真机验收；`044` 是「阶段 B1 第一个能力」：`browser_wait` 等待条件——纯读、零审批、`needs_human`/`taken_over` 下可用；`045` 是「阶段 B2 观察增强」：快照 `loc="css:…"` 稳定定位符，ref 换新后仍可寻址，`bad_loc`/`stale_loc` 分型；`046` 是「阶段 B2 观察增强」：快照被预算截断时返回 `cursor`，带 `cursor` 再调用续读下一段，页面变化返回 `stale_cursor`；`047` 是「阶段 B1 操作补全」：`browser_upload` 把工作区文件合成 `File` 放进 `<input type=file>`——首个不可逆写动作，接 `upload` 审批类与 `upload_rejected`（19 码）；`048` 是「阶段 B1 操作补全」：`browser_scroll` 支持按 `ref`/`loc`/`selector` 把元素滚进视口，回执带元素 `rect` 与 `visible`/`fullyVisible`；`049` 是「阶段 B2 观察增强」：快照末尾附页面 console 尾巴；`050` 是「阶段 B3 面板能力」：面板标签页 `browser_tabs` 与 `browser_open.newTab`，多标签共享登录态、切换保状态；`051` 是「阶段 B2 观察增强」：快照末尾附页面 network 失败尾巴；`052` 是「阶段 B4 操作补全」：`browser_drag` 页面侧合成 pointer/mouse 事件序列拖拽，新增第六类写动作 `drag`；`053` 是「阶段 B4 人机协作」：`browser_pick` 请人点选元素拿到 `loc`/`info`/`rect`/`point`，点选不触发页面、纯读零审批、人工相位 `taken_over` 拒绝）。
+按时间编号，每张记录一个失败模式、根因与验收证据（`034-screenshot-large-capture-hang.md` 是截图大载荷修复，`037`–`039` 是「首次写动作确认」的实现拆分：host 判定/门 → 面板确认条 → 配置与夹具，`040`–`043` 是「阶段 A 边界收口」：白屏根因 → JS 弹窗 → 写动作三态 → F7/F8 真机验收；`044` 是「阶段 B1 第一个能力」：`browser_wait` 等待条件——纯读、零审批、`needs_human`/`taken_over` 下可用；`045` 是「阶段 B2 观察增强」：快照 `loc="css:…"` 稳定定位符，ref 换新后仍可寻址，`bad_loc`/`stale_loc` 分型；`046` 是「阶段 B2 观察增强」：快照被预算截断时返回 `cursor`，带 `cursor` 再调用续读下一段，页面变化返回 `stale_cursor`；`047` 是「阶段 B1 操作补全」：`browser_upload` 把工作区文件合成 `File` 放进 `<input type=file>`——首个不可逆写动作，接 `upload` 审批类与 `upload_rejected`（19 码）；`048` 是「阶段 B1 操作补全」：`browser_scroll` 支持按 `ref`/`loc`/`selector` 把元素滚进视口，回执带元素 `rect` 与 `visible`/`fullyVisible`；`049` 是「阶段 B2 观察增强」：快照末尾附页面 console 尾巴；`050` 是「阶段 B3 面板能力」：面板标签页 `browser_tabs` 与 `browser_open.newTab`，多标签共享登录态、切换保状态；`051` 是「阶段 B2 观察增强」：快照末尾附页面 network 失败尾巴；`052` 是「阶段 B4 操作补全」：`browser_drag` 页面侧合成 pointer/mouse 事件序列拖拽，新增第六类写动作 `drag`；`053` 是「阶段 B4 人机协作」：`browser_pick` 请人点选元素拿到 `loc`/`info`/`rect`/`point`，点选不触发页面、纯读零审批、人工相位 `taken_over` 拒绝；`054` 是「阶段 B4 人机协作」：`browser_pick {mode:"box"}` 框选一片区域，返回框内元素列表（`loc`/`info`/`rect`/`point`）与 `limit`/`truncated`；`055` 是「阶段 B2 可核对」：`feedback` 配置组把每个动作的落点痕迹画在页面里（点击涟漪、悬停光标、滚动/输入高亮、拖拽连线），纯覆盖层不派发事件；`056` 是「阶段 B2 可核对」：`browser_timeline` 回读宿主进程内最近 200 条动作记录（成败/`effect`/错误码/参数摘要/截图文件路径），面板底部也有「动作 N 条」条）。
 
 ## release/ —— 上线与发布
 
@@ -69,7 +69,7 @@
 | [launch-test-plan.md](release/launch-test-plan.md) | G0–G5 上线门禁与逐项执行结果 |
 | [launch-report-1.4.13.md](release/launch-report-1.4.13.md) | 1.4.13 Windows 首发的上线报告与签字 |
 | [release-notes-1.4.md](release/release-notes-1.4.md) | 1.4.x 的产物、行为变化、未验证项与回滚 |
-| [release-notes-1.5.md](release/release-notes-1.5.md) | 1.5.x 累积发布说明：1.5.0 信任闸门版（验证墙漏报修复 + 首次写动作确认）、1.5.4 写动作三态、1.5.5–1.5.12 阶段 B 能力（wait/loc/cursor/upload/寻址滚动/console 尾巴/标签页） |
+| [release-notes-1.5.md](release/release-notes-1.5.md) | 1.5.x 累积发布说明：1.5.0 信任闸门版（验证墙漏报修复 + 首次写动作确认）、1.5.4 写动作三态、1.5.5–1.5.23 阶段 B 能力（wait/loc/cursor/upload/寻址滚动/console 与 network 尾巴/标签页/拖拽/点选与框选/可见反馈/动作时间线） |
 | [g3-ptc-prompt.md](release/g3-ptc-prompt.md) / [g3-ptc-result.md](release/g3-ptc-result.md) | G3 PTC 冒烟门的提示词与执行结果 |
 | [profile-install-baseline.txt](release/profile-install-baseline.txt) | 装机事故前的依赖基线快照 |
 

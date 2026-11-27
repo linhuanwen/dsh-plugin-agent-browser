@@ -42,6 +42,7 @@ const COPY = [
   'navigation.js',
   'search-fallback.js',
   'client.js',
+  'timeline.js',
   'cordis.patch.yml',
   'inject/snapshot.js',
   'inject/actions.js',

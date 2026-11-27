@@ -8,7 +8,7 @@
  *
  * 检查项：
  *   1. 用户 README 的「完整字段表」↔ plugin/index.js 的 Config 键（双向差集为空）
- *   2. 用户 README 的「十六个工具」表 ↔ plugin/tools.js 实际注册的工具名（双向差集为空）
+ *   2. 用户 README 的「十七个工具」表 ↔ plugin/tools.js 实际注册的工具名（双向差集为空）
  *   3. 用户 README 的配置示例 YAML ↔ plugin/config.js 的 DEFAULTS（结构与默认值一致）
  *   4. docs/decisions/README.md 索引 ↔ docs/decisions/NNN-*.md 文件（双向）
  *   5. 仓库 README 与用户 README 都引用 docs/design/web-tools-and-agent-browser.md（SPEC-002 B11 验收项）
@@ -117,8 +117,8 @@ function readToolNames() {
 
 function readReadmeToolNames() {
   const source = read('dist/dsh-plugin-agent-browser/README.md')
-  const section = source.split('## 十六个工具')[1]
-  if (!section) throw new Error('用户 README: cannot find `## 十六个工具`')
+  const section = source.split('## 十七个工具')[1]
+  if (!section) throw new Error('用户 README: cannot find `## 十七个工具`')
   const body = section.split('\n## ')[0]
   const names = []
   for (const line of body.split('\n')) {
@@ -137,8 +137,8 @@ function checkTools() {
   if (missing.length) fail(`工具：代码注册了、README 没写 → ${missing.join(', ')}`)
   if (extra.length) fail(`工具：README 写了、代码没有 → ${extra.join(', ')}`)
   if (duplicated.length) fail(`工具：README 重复列出 → ${duplicated.join(', ')}`)
-  if (code.length !== 16) fail(`工具：应为 16 个，实际 ${code.length} 个`)
-  if (!missing.length && !extra.length && !duplicated.length && code.length === 16) {
+  if (code.length !== 17) fail(`工具：应为 17 个，实际 ${code.length} 个`)
+  if (!missing.length && !extra.length && !duplicated.length && code.length === 17) {
     ok(`工具 ${code.length} 个，README 与 plugin/tools.js 双向一致`)
   }
 }
@@ -322,7 +322,28 @@ function checkPackCopy() {
   const extra = [...listed].filter((name) => name.startsWith('inject/') && !shipped.includes(name.slice('inject/'.length)))
   if (missing.length) fail(`打包清单：plugin/inject 里有、tools/pack.mjs COPY 没列 → ${missing.join(', ')}`)
   if (extra.length) fail(`打包清单：COPY 列了、plugin/inject 里没有 → ${extra.join(', ')}`)
-  if (!missing.length && !extra.length) ok(`打包清单：${shipped.length} 个 inject 脚本都已列入 COPY`)
+
+  // TICKET-056: the same miss hit `timeline.js` (a host module, not an inject
+  // script), so the check now also covers every top-level plugin module. Tests
+  // and docs live below this level and are not shipped.
+  const hostModules = fs.readdirSync(path.join(ROOT, 'plugin')).filter((name) => name.endsWith('.js'))
+  const missingHost = hostModules.filter((name) => !listed.has(name))
+  const extraHost = [...listed].filter((name) => !name.startsWith('inject/') && name.endsWith('.js') && !hostModules.includes(name))
+  if (missingHost.length) fail(`打包清单：plugin/ 顶层模块里有、tools/pack.mjs COPY 没列 → ${missingHost.join(', ')}`)
+  if (extraHost.length) fail(`打包清单：COPY 列了顶层模块、plugin/ 里没有 → ${extraHost.join(', ')}`)
+
+  // npm pack honours `files`, so a module can be copied into dist/ and still be
+  // absent from the tgz (the timeline.js incident). Pin that list too.
+  const distPkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'dist/dsh-plugin-agent-browser/package.json'), 'utf8'))
+  const packaged = new Set(Array.isArray(distPkg.files) ? distPkg.files : [])
+  const missingFromPackage = hostModules.filter((name) => !packaged.has(name))
+  if (missingFromPackage.length) {
+    fail(`打包清单：dist/package.json files 没列 → ${missingFromPackage.join(', ')}（npm pack 不会带上它们）`)
+  }
+
+  if (!missing.length && !extra.length && !missingHost.length && !extraHost.length && !missingFromPackage.length) {
+    ok(`打包清单：${shipped.length} 个 inject 脚本 + ${hostModules.length} 个宿主模块都已列入 COPY 与 dist/package.json files`)
+  }
 }
 
 // --- 入口 -------------------------------------------------------------------

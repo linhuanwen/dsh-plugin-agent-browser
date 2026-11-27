@@ -560,7 +560,7 @@ test('the pick card names the box mode', () => {
   assert.match(tool.presentResult({}, { picked: true, mode: 'box', elements: [1, 2] }).title, /Box picked \(2 element\(s\)\)/)
 })
 
-test('the pick tool is registered with the other fifteen tools (sixteen now)', () => {
+test('the pick tool is registered with the other sixteen tools (seventeen now)', () => {
   const bridge = {
     async request() {
       return { ok: true }
@@ -574,7 +574,7 @@ test('the pick tool is registered with the other fifteen tools (sixteen now)', (
   }
   const names = createTools({}, bridge, sites, {}).map((tool) => tool.name)
   assert.ok(names.includes('browser_pick'))
-  assert.equal(names.length, 16)
+  assert.equal(names.length, 17)
 })
 
 void pickSource

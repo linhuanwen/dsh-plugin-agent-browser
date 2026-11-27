@@ -203,7 +203,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 
 > 如果页面底部显示"这个 profile 不能保存插件配置"，说明宿主没有给它 config editor（多见于只读或内置 profile）——此时表单只读，改配置请用 YAML。
 
-## 十六个工具
+## 十七个工具
 
 | 工具 | 作用 |
 |---|---|
@@ -223,6 +223,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 | `browser_upload` | 把工作区里的文件放进页面的 `<input type=file>`（`ref` / `loc` / `selector` 定位，`files` 是工作区相对路径数组）。写动作、站点首次确认；单文件 2 MiB、合计 4 MiB、最多 5 个，路径出工作区会被拒（`upload_rejected`） |
 | `browser_eval` | 在页面里求值（不够用时才用，永远不要用它绕过登录或验证）；可用 `evalEnabled: false` 整体关掉 |
 | `browser_download` | 把一个附件（PDF/Word/Excel/zip）下到工作区 `downloads/`，返回路径、字节数与 sha256；重名自动加 `-1`，不覆盖旧文件。可执行类扩展名会被拒（`download_rejected`） |
+| `browser_timeline` | 回读这台宿主上最近执行过的动作（工具、成败/错误码、参数摘要、截图与下载的文件路径），纯读、零审批，面板关着也能查；最多 200 条，插件重载清空 |
 
 ## 接管
 

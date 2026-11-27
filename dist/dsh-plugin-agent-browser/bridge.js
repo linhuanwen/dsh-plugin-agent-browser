@@ -134,6 +134,14 @@ export class Bridge {
   #starting = null
   /** Page-side sources the panel may request by name (`snapshot`, …). */
   #sources = {}
+
+  /**
+   * TICKET-056: the host-side action recorder, or null when `apply` did not
+   * hand one in (bare test bridges). The panel strip reads it through
+   * `GET /timeline`; the model-facing tool holds the same object.
+   * @type {{ list: Function, size: number } | null}
+   */
+  #timeline = null
   /**
    * The settings page's read/write path, when the host can edit the row.
    *
@@ -236,6 +244,20 @@ export class Bridge {
   setDiagnostics(fields) {
     if (fields === null || typeof fields !== 'object') return
     this.#diagnostics = { ...this.#diagnostics, ...fields }
+  }
+
+  /**
+   * Hand the bridge the recorder the tools write into (TICKET-056).
+   *
+   * Optional on purpose: tests and the panel-only path start a bridge without a
+   * timeline, and `GET /timeline` must answer "nothing recorded" rather than
+   * fail the whole settings/panel boot.
+   * @param {{ list: Function, size: number } | null} timeline - the recorder.
+   */
+  setTimeline(timeline) {
+    this.#timeline = timeline !== undefined && timeline !== null && typeof timeline.list === 'function'
+      ? timeline
+      : null
   }
 
   /**
@@ -938,6 +960,33 @@ export class Bridge {
 
     if (route === '/logs' && req.method === 'GET') {
       send(res, 200, { ok: true, mark: BRIDGE_MARK, logs: this.#logs })
+      return
+    }
+
+    // TICKET-056: the panel's action strip. A plain read of the host recorder,
+    // so it answers even with no tool call in flight. The model has the same
+    // data through `browser_timeline`; this route only saves the human from
+    // asking. When no recorder was injected (bare bridge) the answer is an
+    // empty table instead of an error, so an old panel cannot break the boot.
+    if (route === '/timeline' && req.method === 'GET') {
+      const rawLimit = Number(url.searchParams.get('limit') ?? 10)
+      const limit = Number.isFinite(rawLimit) ? Math.min(50, Math.max(1, Math.floor(rawLimit))) : 10
+      const tool = url.searchParams.get('tool') ?? ''
+      const failedOnly = url.searchParams.get('failedOnly') === 'true'
+      if (this.#timeline === null) {
+        send(res, 200, { ok: true, mark: BRIDGE_MARK, total: 0, entries: [] })
+        return
+      }
+      try {
+        const entries = this.#timeline.list({
+          limit,
+          ...(tool === '' ? {} : { tool }),
+          failedOnly,
+        })
+        send(res, 200, { ok: true, mark: BRIDGE_MARK, total: this.#timeline.size, entries })
+      } catch (error) {
+        send(res, 500, { ok: false, mark: BRIDGE_MARK, error: String(error?.message ?? error) })
+      }
       return
     }
 

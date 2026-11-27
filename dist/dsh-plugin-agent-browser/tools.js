@@ -29,6 +29,7 @@ import { classifyNavigationFailure, navigationFailureText } from './navigation.j
 import { createPolicy } from './policy.js'
 import { createSearchFallback, enrichOpenFailure } from './search-fallback.js'
 import { urlForPath } from './static.js'
+import { createTimeline, summarizeArgs } from './timeline.js'
 
 /**
  * TICKET-013: turn the panel's raw navigation crash into a classified error.
@@ -761,6 +762,18 @@ const REF_HELP = 'Take a new browser_snapshot and use the refs from that answer.
  * @returns {Error} the error to throw.
  */
 function actionFailure(result, mode = 'click') {
+  const error = actionFailureError(result, mode)
+  // TICKET-056: page-level refusals are plain messages on purpose (the model reads
+  // the text), but the timeline needs the stable code. Tag the error without
+  // touching its message; bridge/approval errors already carry their own code.
+  if (error !== null && typeof error === 'object' && error.code === undefined
+    && typeof result?.error === 'string' && result.error !== '') {
+    error.code = result.error
+  }
+  return error
+}
+
+function actionFailureError(result, mode = 'click') {
   const ref = typeof result?.ref === 'string' ? result.ref : ''
   switch (result?.error) {
     case 'stale_ref':
@@ -3144,6 +3157,139 @@ export function browserZoomTool(bridge) {
 }
 
 /**
+ * TICKET-056: let the model re-read its own recent actions.
+ *
+ * The recorder lives in the host process, so this tool works even while the
+ * panel is closed or the conversation was compacted: it is the only place where
+ * "which calls happened, did they take effect, which error code came back, and
+ * where did that screenshot go" survives without context. Pure read: it never
+ * touches the page and never asks the human.
+ *
+ * @param {ReturnType<typeof createTimeline>} timeline - the host-side recorder.
+ */
+export function browserTimelineTool(timeline) {
+  const renderEntry = (entry) => {
+    const millis = Number.isFinite(entry.at) ? entry.at : Date.parse(String(entry.at ?? ''))
+    const at = Number.isFinite(millis) ? new Date(millis) : null
+    const clock = at === null
+      ? '??:??:??'
+      : `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}:${String(at.getSeconds()).padStart(2, '0')}`
+    const mark = entry.ok === true ? 'ok' : 'FAILED'
+    const effect = entry.ok === true && typeof entry.effect === 'string' && entry.effect !== '' ? ` (${entry.effect})` : ''
+    const code = entry.ok === false && typeof entry.code === 'string' ? ` [${entry.code}]` : ''
+    const took = Number.isFinite(entry.ms) ? ` ${entry.ms}ms` : ''
+    const summary = typeof entry.summary === 'string' && entry.summary.trim() !== '' ? ` — ${entry.summary}` : ''
+    const evidence = typeof entry.file === 'string' && entry.file !== ''
+      ? `\n    file: ${entry.file}${Number.isInteger(entry.bytes) ? ` (${entry.bytes} B)` : ''}`
+      : ''
+    return `#${entry.seq} ${clock} ${mark} ${entry.tool}${code}${effect}${took}${summary}${evidence}`
+  }
+
+  return {
+    name: 'browser_timeline',
+    description:
+      'Read back the browser actions this plugin has already executed, newest first — which tool ran, whether it took '
+      + 'effect (effect: committed/unknown) or failed (with the stable error code), its arguments summary, and the file '
+      + 'path of screenshots/downloads written along the way. The record lives in the DSH host process, so it keeps '
+      + 'working while the browser panel is closed and after the conversation was compacted. Read-only: it never touches '
+      + 'the page and needs no approval. The buffer holds the most recent 200 calls and is cleared when the plugin reloads.',
+    parameters: {
+      type: 'object',
+      properties: {
+        limit: { type: 'integer', description: 'How many entries, newest first. Default 10, 1–50.' },
+        tool: { type: 'string', description: 'Only entries for this tool name, e.g. "browser_click".' },
+        failedOnly: { type: 'boolean', description: 'Only failed calls (this is the way to answer "did anything fail?").' },
+      },
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          total: { type: 'integer', description: 'Entries currently in the buffer.' },
+          entries: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                seq: { type: 'integer' },
+                at: { type: 'string', description: 'ISO timestamp.' },
+                tool: { type: 'string' },
+                ok: { type: 'boolean' },
+                effect: { type: 'string' },
+                code: { type: 'string' },
+                summary: { type: 'string' },
+                url: { type: 'string' },
+                file: { type: 'string' },
+                bytes: { type: 'integer' },
+                ms: { type: 'integer' },
+              },
+              required: ['seq', 'at', 'tool', 'ok'],
+            },
+          },
+        },
+        required: ['total', 'entries'],
+      },
+      render(_args, value) {
+        const entries = Array.isArray(value?.entries) ? value.entries : []
+        if (entries.length === 0) {
+          return [{
+            type: 'text',
+            text: 'No browser actions have been recorded yet in this host process. The record is filled by tool calls, so this is expected before the first one.',
+          }]
+        }
+        const failed = entries.filter((entry) => entry.ok !== true).length
+        const header = `${entries.length} recent action(s) (newest first), ${failed} failed; ${value.total} in the buffer.`
+        const lines = entries.map(renderEntry)
+        const hint = value.total > entries.length
+          ? '\nPass a larger limit (up to 50) to see more.'
+          : ''
+        return [{ type: 'text', text: `${header}\n${lines.join('\n')}${hint}` }]
+      },
+    },
+    async execute(args) {
+      const requested = args?.limit
+      if (requested !== undefined && (Number.isInteger(requested) === false || requested < 1 || requested > 50)) {
+        throw new Error('limit must be an integer between 1 and 50')
+      }
+      const tool = typeof args?.tool === 'string' && args.tool !== '' ? args.tool : undefined
+      const entries = timeline.list({
+        limit: requested ?? 10,
+        ...(tool === undefined ? {} : { tool }),
+        failedOnly: args?.failedOnly === true,
+      })
+      return {
+        total: timeline.size,
+        entries: entries.map((entry) => ({
+          seq: entry.seq,
+          at: new Date(Number.isFinite(entry.at) ? entry.at : Date.now()).toISOString(),
+          tool: entry.tool,
+          ok: entry.ok,
+          ...(typeof entry.effect === 'string' && entry.effect !== '' ? { effect: entry.effect } : {}),
+          ...(typeof entry.code === 'string' && entry.code !== '' ? { code: entry.code } : {}),
+          ...(entry.summary === '' ? {} : { summary: entry.summary }),
+          ...(typeof entry.url === 'string' && entry.url !== '' ? { url: entry.url } : {}),
+          ...(typeof entry.file === 'string' && entry.file !== '' ? { file: entry.file } : {}),
+          ...(Number.isInteger(entry.bytes) ? { bytes: entry.bytes } : {}),
+          ...(Number.isInteger(entry.ms) ? { ms: entry.ms } : {}),
+        })),
+      }
+    },
+    isConcurrencySafe() {
+      return true
+    },
+    presentCall(args) {
+      const scope = args?.failedOnly === true ? 'failed actions' : (typeof args?.tool === 'string' ? `${args.tool} calls` : 'recent actions')
+      return { card: 'generic', title: `Read ${scope}`, kind: 'read', rawInput: args }
+    },
+    presentResult(_args, value) {
+      const count = Array.isArray(value?.entries) ? value.entries.length : 0
+      return { card: 'generic', title: `${count} action(s) in the timeline` }
+    },
+  }
+}
+
+/**
  * Wrap the bridge so every command carries the current display policy, and a
  * write waits for the human the first time it touches a site.
  *
@@ -3429,6 +3575,10 @@ export function createGate(bridge, policy = {}) {
  */
 export function createTools(ctx, bridge, sites, policy = {}) {
   const gate = createGate(bridge, policy)
+  // TICKET-056: the recorder is created with the tools so a single call can see
+  // every action (they share this array), and `apply.js` can hand the same object
+  // to the bridge for the panel strip.
+  const timeline = createTimeline()
   const limits = policy?.limits ?? {}
   const downloads = policy?.downloads ?? {}
   const rules = policy?.rules ?? createPolicy({
@@ -3476,6 +3626,7 @@ export function createTools(ctx, bridge, sites, policy = {}) {
     browserUploadTool(ctx, gate),
     browserEvalTool(gate, { maxChars: limits.evalMaxChars, rules }),
     browserDownloadTool(ctx, gate, { dir: downloads.dir, maxBytes: downloads.maxBytes, rules }),
+    browserTimelineTool(timeline),
   ]
   // `exec.signal` is per call and the gate is shared, so the signal is carried in
   // async context instead of every tool parameter list. One wrapper here covers
@@ -3492,7 +3643,7 @@ export function createTools(ctx, bridge, sites, policy = {}) {
   // success results stamp `committed` themselves; anything thrown before the
   // command left the host is `none`; `action_unknown` already carries `unknown`.
   const writes = new Set(['browser_click', 'browser_drag', 'browser_type', 'browser_press', 'browser_upload', 'browser_eval', 'browser_download'])
-  return wrapped.map((tool) => {
+  const typed = wrapped.map((tool) => {
     if (writes.has(tool.name) === false) return tool
     const execute = tool.execute
     return {
@@ -3506,4 +3657,66 @@ export function createTools(ctx, bridge, sites, policy = {}) {
       },
     }
   })
+  // TICKET-056: one recorder pass over the final execute of every tool. It runs
+  // after `notSent` so the entry shows the code the model actually received, and
+  // it never changes the result (or swallows the error): the timeline is an
+  // observer, not a middleware decision.
+  const recorded = typed.map((tool) => {
+    const execute = tool.execute
+    if (typeof execute !== 'function') return tool
+    return {
+      ...tool,
+      async execute(args, exec) {
+        // Reading the log must not append to it, or every look would grow the
+        // buffer by one and the "how many actions happened" answer would drift.
+        const silent = tool.name === 'browser_timeline'
+        const startedAt = Date.now()
+        let session = ''
+        try {
+          session = sessionOf(exec)
+        } catch {
+          session = ''
+        }
+        const summary = summarizeArgs(args)
+        try {
+          const value = await execute(args, exec)
+          if (!silent) {
+            timeline.record({
+              tool: tool.name,
+              session,
+              ok: true,
+              effect: typeof value?.effect === 'string' && value.effect !== '' ? value.effect : null,
+              code: null,
+              summary,
+              url: typeof value?.url === 'string' && value.url !== '' ? value.url : null,
+              file: typeof value?.path === 'string' && value.path !== ''
+                ? value.path
+                : (typeof value?.file === 'string' && value.file !== '' ? value.file : null),
+              bytes: Number.isInteger(value?.bytes) ? value.bytes : null,
+              ms: Date.now() - startedAt,
+            })
+          }
+          return value
+        } catch (error) {
+          if (!silent) {
+            timeline.record({
+              tool: tool.name,
+              session,
+              ok: false,
+              effect: typeof error?.details?.effect === 'string' ? error.details.effect : null,
+              code: typeof error?.code === 'string' && error.code !== '' ? error.code : 'error',
+              summary,
+              url: null,
+              file: null,
+              bytes: null,
+              ms: Date.now() - startedAt,
+            })
+          }
+          throw error
+        }
+      },
+    }
+  })
+  recorded.timeline = timeline
+  return recorded
 }

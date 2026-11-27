@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
      * The renderer caches `client.js` aggressively, and a stale half looks
      * exactly like a bug in the host half.
      */
-    const CLIENT_REV = 64
+    const CLIENT_REV = 65
     /** The panel talks to the host half over loopback; both sides carry this mark. */
     const BRIDGE_PREFIX = '/dsh-agent-browser'
     const BRIDGE_MARK = 'dsh-plugin-agent-browser/1'
@@ -1105,6 +1105,14 @@ window.__ModuleLoader__.load({
     function short(sessionId) {
       const text = String(sessionId ?? '')
       return text.length <= 8 ? text : `${text.slice(0, 8)}…`
+    }
+
+    /** HH:MM:SS for one timeline entry (the panel strip only needs the clock). */
+    function clockOf(at) {
+      const millis = Number.isFinite(at) ? at : Date.parse(String(at ?? ''))
+      if (Number.isFinite(millis) === false) return '--:--:--'
+      const date = new Date(millis)
+      return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`
     }
 
     // ---------------------------------------------------------------- the guest
@@ -3216,6 +3224,34 @@ window.__ModuleLoader__.load({
        * harmless (the click is a no-op), a stale `false` would be annoying.
        */
       const [nav, setNav] = React.useState({ back: false, forward: false })
+      /**
+       * TICKET-056: the last few actions, read from the host recorder through
+       * `GET /timeline`. Polled rather than pushed because the same channel already
+       * carries the phase badge, and a 3s tick is cheaper than another push loop.
+       * `open` is local UI state: the strip starts folded and remembers only until
+       * the panel remounts.
+       */
+      const [timeline, setTimeline] = React.useState({ entries: [], total: 0 })
+      const [timelineOpen, setTimelineOpen] = React.useState(false)
+      React.useEffect(() => {
+        let live = true
+        const load = () => {
+          void callHost('/timeline?limit=8')
+            .then((answer) => {
+              if (!live) return
+              const entries = Array.isArray(answer?.entries) ? answer.entries.filter((entry) => entry !== null && typeof entry === 'object') : []
+              const total = Number.isFinite(answer?.total) ? Number(answer.total) : entries.length
+              setTimeline({ entries, total })
+            })
+            .catch(() => undefined)
+        }
+        load()
+        const timer = setInterval(load, 3_000)
+        return () => {
+          live = false
+          clearInterval(timer)
+        }
+      }, [sessionId])
 
       // The badge clock: `since` comes from the host, so a rebuild or a session
       // switch never restarts the count. Repaint once a second, and skip ticks
@@ -3625,6 +3661,12 @@ window.__ModuleLoader__.load({
                 },
               }, '取消点选')
             : null,
+          h('button', {
+            type: 'button',
+            style: timelineOpen === true ? { ...S.timelineButton, ...S.timelineButtonOn } : S.timelineButton,
+            title: '最近通过工具执行的动作（宿主记录，点开查看）',
+            onClick: () => setTimelineOpen((value) => value !== true),
+          }, `动作 ${timeline.total} 条`),
           h('div', { style: S.zoom },
             h('button', {
               type: 'button',
@@ -3646,6 +3688,23 @@ window.__ModuleLoader__.load({
             }, '＋'),
           ),
         ),
+        timelineOpen === true
+          ? h('div', { style: S.timelinePanel, role: 'log', 'aria-label': '最近的动作' },
+              timeline.entries.length === 0
+                ? h('div', { style: S.timelineEmpty }, '这台宿主上还没有动作记录。')
+                : timeline.entries.map((entry) => h('div', { key: `timeline-${entry.seq}`, style: S.timelineRow },
+                    h('span', {
+                      style: entry.ok === true
+                        ? { ...S.timelineMark, color: '#15803d' }
+                        : { ...S.timelineMark, color: '#b91c1c' },
+                    }, entry.ok === true ? '✓' : '✗'),
+                    h('span', { style: S.timelineMain },
+                      `${entry.tool}${typeof entry.code === 'string' && entry.code !== '' ? ` [${entry.code}]` : ''}`),
+                    h('span', { style: S.timelineMeta },
+                      `${clockOf(entry.at)}${Number.isFinite(entry.ms) ? ` · ${entry.ms}ms` : ''}`),
+                  )),
+            )
+          : null,
         approval === null
           ? null
           : h('div', { style: S.approval, role: 'alertdialog', 'aria-label': '写操作确认' },
@@ -3739,6 +3798,14 @@ window.__ModuleLoader__.load({
       zoomButton: { width: 22, height: 20, lineHeight: '18px', padding: 0, fontSize: 12, borderRadius: 4, border: '1px solid #d0d5dd', background: '#fff', color: '#344054', cursor: 'pointer' },
       zoomLabel: { minWidth: 40, height: 20, padding: '0 4px', fontSize: 11, borderRadius: 4, border: '1px solid #eaecf0', background: '#f9fafb', color: '#475467', cursor: 'pointer', whiteSpace: 'nowrap' },
       pickCancel: { height: 20, padding: '0 8px', fontSize: 11, lineHeight: '18px', borderRadius: 4, border: '1px solid #f04438', background: '#fef3f2', color: '#b42318', cursor: 'pointer', whiteSpace: 'nowrap' },
+      timelineButton: { height: 20, padding: '0 8px', fontSize: 11, lineHeight: '18px', borderRadius: 4, border: '1px solid #d0d5dd', background: '#fff', color: '#475467', cursor: 'pointer', whiteSpace: 'nowrap', flex: '0 0 auto' },
+      timelineButtonOn: { border: '1px solid #84adff', background: '#eff4ff', color: '#175cd3' },
+      timelinePanel: { maxHeight: 150, overflowY: 'auto', padding: '4px 10px', borderBottom: '1px solid #f2f4f7', background: '#fcfcfd', display: 'flex', flexDirection: 'column', gap: 2 },
+      timelineEmpty: { fontSize: 11, color: '#667085', padding: '2px 0' },
+      timelineRow: { display: 'flex', gap: 6, alignItems: 'baseline', fontSize: 11, lineHeight: '16px', minWidth: 0 },
+      timelineMark: { flex: '0 0 auto', fontWeight: 700 },
+      timelineMain: { flex: '1 1 auto', minWidth: 0, color: '#344054', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+      timelineMeta: { flex: '0 0 auto', color: '#98a2b3', fontVariantNumeric: 'tabular-nums' },
       hostWrap: { position: 'relative', flex: '1 1 auto', minHeight: 0, display: 'flex' },
       host: { position: 'relative', flex: '1 1 auto', minHeight: 0, display: 'flex', background: '#fff' },
       detectNote: { position: 'absolute', right: 8, top: 8, fontSize: 11, padding: '2px 8px', borderRadius: 999, background: '#fffaeb', color: '#b54708', border: '1px solid #fec84b', pointerEvents: 'none' },
