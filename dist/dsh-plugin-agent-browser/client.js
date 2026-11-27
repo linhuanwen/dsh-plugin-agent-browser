@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
      * The renderer caches `client.js` aggressively, and a stale half looks
      * exactly like a bug in the host half.
      */
-    const CLIENT_REV = 60
+    const CLIENT_REV = 61
     /** The panel talks to the host half over loopback; both sides carry this mark. */
     const BRIDGE_PREFIX = '/dsh-agent-browser'
     const BRIDGE_MARK = 'dsh-plugin-agent-browser/1'
@@ -2123,25 +2123,34 @@ window.__ModuleLoader__.load({
       }
 
       /**
-       * Let the person point at an element (TICKET-053).
+       * Let the person point at one element, or drag a box over many (TICKET-053/054).
        *
        * The page-side picker (`inject/pick.js`) installs a highlight overlay and
-       * consumes the next click; this loop polls it every 150ms, so a cancel
-       * frame or a user takeover can stop picking between probes, and the
+       * consumes the press/drag/click; this loop polls it every 150ms, so a
+       * cancel frame or a user takeover can stop picking between probes, and the
        * overlay is always removed afterwards. Picking never dispatches input:
-       * the answer is "which element", and the caller acts on it afterwards.
-       * @param {{timeoutMs?: number, source?: string}} params
+       * the answer is "which element(s)", and the caller acts on them afterwards.
+       * @param {{timeoutMs?: number, mode?: 'element'|'box', limit?: number, source?: string}} params
        * @param {() => boolean} [isCancelled]
-       * @returns {Promise<object>} { ok, picked, loc?, info?, rect?, point?, cancelled?, timedOut?, waitedMs }
+       * @returns {Promise<object>} element mode: { ok, picked, loc?, info?, rect?, point?, cancelled?, timedOut?, waitedMs }
+       *   box mode: { ok, picked, mode:'box', box, elements, total, truncated, cancelled?, timedOut?, waitedMs }
        */
       async pick(params, isCancelled) {
         const source = typeof params?.source === 'string' ? params.source : ''
         if (source === '') throw new Error('pick needs its page-side picker source')
+        const mode = params?.mode === 'box' ? 'box' : 'element'
+        const limit = Number.isFinite(params?.limit)
+          ? Math.max(1, Math.min(100, Math.floor(params.limit)))
+          : 20
         const timeoutMs = Number.isFinite(params?.timeoutMs)
           ? Math.max(3_000, Math.min(120_000, params.timeoutMs))
           : 60_000
         const intervalMs = 150
         const started = Date.now()
+        const startCommand = { action: 'start', mode, ...(mode === 'box' ? { limit } : {}) }
+        const note = mode === 'box'
+          ? 'Drag a box over the page (Esc, or the cancel button, to stop)'
+          : 'Point at an element in the page (Esc, or the cancel button, to stop)'
         let installed = false
         const stop = async () => {
           try {
@@ -2154,7 +2163,7 @@ window.__ModuleLoader__.load({
           installed = false
         }
         try {
-          const start = await this.evaluate(`(${source})({action:'start'})`)
+          const start = await this.evaluate(`(${source})(${JSON.stringify(startCommand)})`)
           if (start === null || typeof start !== 'object' || start.ok !== true) {
             throw new Error('the page refused to start picking')
           }
@@ -2166,13 +2175,26 @@ window.__ModuleLoader__.load({
           } catch (error) {
             // Focus is best effort; the panel button can always cancel instead.
           }
-          setState({ note: 'Point at an element in the page (Esc, or the cancel button, to stop)', picking: true })
+          setState({ note, picking: true })
           for (;;) {
             const probe = await this.evaluate(`(${source})({action:'poll'})`)
             const waitedMs = Date.now() - started
             if (probe?.picked) {
               const picked = probe.picked
               await stop()
+              if (mode === 'box') {
+                return {
+                  ok: true,
+                  picked: true,
+                  mode: 'box',
+                  box: picked.box ?? { x: 0, y: 0, width: 0, height: 0 },
+                  elements: Array.isArray(picked.elements) ? picked.elements : [],
+                  total: Number.isInteger(picked.total) ? picked.total : 0,
+                  truncated: picked.truncated === true,
+                  url: picked.url ?? '',
+                  waitedMs,
+                }
+              }
               return { ok: true, picked: true, ...picked, waitedMs }
             }
             if (probe?.cancelled === true) {

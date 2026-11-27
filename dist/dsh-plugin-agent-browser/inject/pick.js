@@ -76,6 +76,13 @@ function dshPick(input) {
       } catch (error) {
         // Styles are best effort.
       }
+      try {
+        if (doc.body && doc.body.style && typeof state.previousUserSelect === 'string') {
+          doc.body.style.userSelect = state.previousUserSelect
+        }
+      } catch (error) {
+        // Styles are best effort.
+      }
     }
     if (typeof state.releaseSwallow === 'function') {
       var release = state.releaseSwallow
@@ -277,9 +284,151 @@ function dshPick(input) {
     if (swallowClick === true) swallowNextClick(state)
   }
 
+  /**
+   * Every distinct rendered element whose box the sample grid touches inside
+   * `box`. Grid sampling (12px) keeps a big box from walking thousands of
+   * points; it can miss targets smaller than the step, which is documented.
+   */
+  function collectInBox(state, box) {
+    var limit = state.limit
+    var step = 12
+    var elements = []
+    var total = 0
+    var seen = []
+    var right = box.x + box.width
+    var bottom = box.y + box.height
+    var overlay = state.overlay
+    for (var x = box.x + 1; x < right; x += step) {
+      for (var y = box.y + 1; y < bottom; y += step) {
+        var element = null
+        try {
+          element = doc.elementFromPoint(x, y)
+        } catch (error) {
+          element = null
+        }
+        if (element === null || element === doc.body || element === doc.documentElement) continue
+        if (element === overlay) continue
+        if (element.__dshPicked === true) continue
+        if (rendered(element) !== true) continue
+        if (seen.indexOf(element) !== -1) continue
+        seen.push(element)
+        total += 1
+        if (elements.length >= limit) continue
+        var box2 = rectOf(element)
+        elements.push({
+          loc: pickLoc(element),
+          info: describe(element),
+          rect: box2,
+          point: {
+            x: Math.round(box2.x + box2.width / 2),
+            y: Math.round(box2.y + box2.height / 2),
+          },
+        })
+      }
+    }
+    return { elements: elements, total: total, truncated: total > elements.length }
+  }
+
+  /**
+   * Box mode: press, drag a rectangle, release. The page never sees the press,
+   * the moves or the click that follows; only a floating rectangle is drawn.
+   */
+  function installBoxListeners(state) {
+    var overlay = state.overlay
+    var anchor = null
+    var dragging = false
+    function clampPoint(event) {
+      var x = Math.round(Number(event && event.clientX) || 0)
+      var y = Math.round(Number(event && event.clientY) || 0)
+      var width = win.innerWidth || (doc.documentElement && doc.documentElement.clientWidth) || 0
+      var height = win.innerHeight || (doc.documentElement && doc.documentElement.clientHeight) || 0
+      if (x < 0) x = 0
+      if (y < 0) y = 0
+      if (width > 0 && x > width) x = width
+      if (height > 0 && y > height) y = height
+      return { x: x, y: y }
+    }
+    function draw(from, to) {
+      if (overlay === null) return
+      var left = Math.min(from.x, to.x)
+      var top = Math.min(from.y, to.y)
+      var width = Math.abs(from.x - to.x)
+      var height = Math.abs(from.y - to.y)
+      overlay.style.left = left + 'px'
+      overlay.style.top = top + 'px'
+      overlay.style.width = width + 'px'
+      overlay.style.height = height + 'px'
+      overlay.style.display = 'block'
+      return { x: left, y: top, width: width, height: height }
+    }
+    function swallow(event) {
+      if (event && typeof event.preventDefault === 'function') event.preventDefault()
+      if (event && typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation()
+      if (event && typeof event.stopPropagation === 'function') event.stopPropagation()
+    }
+    listen(state, win, 'pointermove', function (event) {
+      if (dragging !== true || anchor === null) return
+      swallow(event)
+      state.hover = clampPoint(event)
+      draw(anchor, state.hover)
+    })
+    listen(state, win, 'pointerdown', function (event) {
+      if (event && typeof event.button === 'number' && event.button !== 0) return
+      swallow(event)
+      anchor = clampPoint(event)
+      dragging = true
+      state.hover = anchor
+      draw(anchor, anchor)
+    })
+    listen(state, win, 'pointerup', function (event) {
+      if (dragging !== true || anchor === null) return
+      swallow(event)
+      dragging = false
+      var end = clampPoint(event)
+      var box = draw(anchor, end)
+      anchor = null
+      if (box === undefined || box.width < 4 || box.height < 4) {
+        finish(state, {
+          mode: 'box',
+          box: box === undefined ? { x: end.x, y: end.y, width: 0, height: 0 } : box,
+          elements: [],
+          total: 0,
+          truncated: false,
+          url: url(),
+        }, true)
+        return
+      }
+      var collected = collectInBox(state, box)
+      finish(state, {
+        mode: 'box',
+        box: box,
+        elements: collected.elements,
+        total: collected.total,
+        truncated: collected.truncated,
+        url: url(),
+      }, true)
+    })
+    // A click that somehow escapes the drag (synthetic) must not reach the page.
+    listen(state, win, 'click', function (event) {
+      if (state.cleaned === true) return
+      swallow(event)
+    })
+    listen(state, win, 'keydown', function (event) {
+      if (event && (event.key === 'Escape' || event.key === 'Esc')) {
+        state.cancelled = true
+        cleanup(state)
+      }
+    })
+  }
+
   function start() {
     var existing = current()
     if (existing !== null && existing.cleaned !== true) return { ok: true, installed: true, already: true }
+    var mode = input && input.mode === 'box' ? 'box' : 'element'
+    var limit = Number(input && input.limit)
+    if (!Number.isFinite(limit) || limit < 1) limit = 20
+    if (limit > 100) limit = 100
+    limit = Math.floor(limit)
     var state = {
       picked: null,
       cancelled: false,
@@ -288,6 +437,9 @@ function dshPick(input) {
       listeners: [],
       cleaned: false,
       previousCursor: '',
+      previousUserSelect: '',
+      mode: mode,
+      limit: limit,
       startedAt: Date.now(),
     }
     win.__dshPick = state
@@ -309,6 +461,19 @@ function dshPick(input) {
       }
     } catch (error) {
       // Best effort.
+    }
+
+    if (mode === 'box') {
+      try {
+        if (doc.body && doc.body.style) {
+          state.previousUserSelect = doc.body.style.userSelect || ''
+          doc.body.style.userSelect = 'none'
+        }
+      } catch (error) {
+        // Styles are best effort.
+      }
+      installBoxListeners(state)
+      return { ok: true, installed: true, mode: 'box', limit: limit }
     }
 
     listen(state, win, 'pointermove', function (event) {
@@ -368,7 +533,7 @@ function dshPick(input) {
         cleanup(state)
       }
     })
-    return { ok: true, installed: true }
+    return { ok: true, installed: true, mode: 'element' }
   }
 
   function poll() {

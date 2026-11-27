@@ -87,8 +87,8 @@ function withPage(run) {
       const index = docListeners.findIndex((entry) => entry.type === type && entry.fn === fn && entry.capture === capture)
       if (index !== -1) docListeners.splice(index, 1)
     },
-    elementFromPoint() {
-      return page.hit
+    elementFromPoint(x = 0, y = 0) {
+      return typeof page.hitAt === 'function' ? page.hitAt(x, y) : page.hit
     },
     querySelector(selector) {
       return page.lookup(selector)
@@ -281,6 +281,85 @@ test('a second start is a no-op while a pick is already running', () => {
   })
 })
 
+test('a box drag collects every distinct element under it once', () => {
+  withPage(({ page, body, fire, event }) => {
+    const first = element('input', { attrs: { id: 'first-check' }, rect: { left: 10, top: 10, width: 20, height: 20 } })
+    const second = element('button', { attrs: { id: 'second-check' }, text: '导出', rect: { left: 60, top: 60, width: 30, height: 30 } })
+    page.lookup = (selector) => (selector === '#first-check' ? first : selector === '#second-check' ? second : null)
+    page.hitAt = (x, y) => (x < 50 && y < 50 ? first : second)
+    const started = dshPick({ action: 'start', mode: 'box', limit: 10 })
+    assert.equal(started.ok, true)
+    assert.equal(started.mode, 'box')
+    assert.equal(started.limit, 10)
+    assert.equal(body.style.userSelect, 'none', 'a drag must not select page text')
+    fire('pointerdown', event({ clientX: 5, clientY: 5 }))
+    assert.equal(page.overlay.style.display, 'block', 'the rectangle is drawn while dragging')
+    fire('pointermove', event({ clientX: 100, clientY: 100 }))
+    fire('pointerup', event({ clientX: 100, clientY: 100 }))
+    const poll = dshPick({ action: 'poll' })
+    assert.equal(poll.ok, true)
+    assert.equal(poll.picked.mode, 'box')
+    assert.deepEqual(poll.picked.box, { x: 5, y: 5, width: 95, height: 95 })
+    assert.equal(poll.picked.total, 2)
+    assert.equal(poll.picked.truncated, false)
+    assert.equal(poll.picked.elements.length, 2)
+    assert.deepEqual(poll.picked.elements[0].info, { tag: 'input', role: 'textbox', name: '' })
+    assert.equal(poll.picked.elements[0].loc, 'css:#first-check')
+    assert.deepEqual(poll.picked.elements[0].rect, { x: 10, y: 10, width: 20, height: 20 })
+    assert.deepEqual(poll.picked.elements[0].point, { x: 20, y: 20 })
+    assert.equal(poll.picked.elements[1].loc, 'css:#second-check')
+    assert.equal(body.children.length, 0, 'the rectangle is removed when the drag ends')
+    assert.equal(body.style.userSelect, '', 'text selection is restored')
+    dshPick({ action: 'stop' })
+  })
+})
+
+test('a box smaller than a few pixels is a normal empty answer', () => {
+  withPage(({ page, body, fire, event }) => {
+    dshPick({ action: 'start', mode: 'box' })
+    fire('pointerdown', event({ clientX: 10, clientY: 10 }))
+    fire('pointerup', event({ clientX: 12, clientY: 12 }))
+    const poll = dshPick({ action: 'poll' })
+    assert.equal(poll.picked.mode, 'box')
+    assert.equal(poll.picked.total, 0)
+    assert.equal(poll.picked.elements.length, 0)
+    assert.equal(poll.picked.truncated, false)
+    assert.equal(body.style.userSelect, '')
+    dshPick({ action: 'stop' })
+  })
+})
+
+test('the box limit truncates the list but not the total', () => {
+  withPage(({ page, fire, event }) => {
+    const first = element('input', { attrs: { id: 'a' }, rect: { left: 10, top: 10, width: 10, height: 10 } })
+    const second = element('input', { attrs: { id: 'b' }, rect: { left: 40, top: 10, width: 10, height: 10 } })
+    const third = element('input', { attrs: { id: 'c' }, rect: { left: 70, top: 10, width: 10, height: 10 } })
+    page.lookup = (selector) => ({ '#a': first, '#b': second, '#c': third })[selector] ?? null
+    page.hitAt = (x) => (x < 40 ? first : x < 70 ? second : third)
+    dshPick({ action: 'start', mode: 'box', limit: 1 })
+    fire('pointerdown', event({ clientX: 5, clientY: 5 }))
+    fire('pointerup', event({ clientX: 95, clientY: 100 }))
+    const poll = dshPick({ action: 'poll' })
+    assert.equal(poll.picked.elements.length, 1)
+    assert.equal(poll.picked.total, 3)
+    assert.equal(poll.picked.truncated, true)
+    dshPick({ action: 'stop' })
+  })
+})
+
+test('Esc cancels a box drag and restores the page', () => {
+  withPage(({ body, fire, event }) => {
+    dshPick({ action: 'start', mode: 'box' })
+    fire('pointerdown', event({ clientX: 5, clientY: 5 }))
+    fire('keydown', event({ key: 'Escape' }))
+    const poll = dshPick({ action: 'poll' })
+    assert.equal(poll.picked, null)
+    assert.equal(poll.cancelled, true)
+    assert.equal(body.style.userSelect, '', 'cancelling restores text selection')
+    dshPick({ action: 'stop' })
+  })
+})
+
 // --- tool --------------------------------------------------------------------
 
 function fakeBridge(answer) {
@@ -357,7 +436,7 @@ test('a timeout is a normal answer, not an error', async () => {
   assert.equal(value.timedOut, true)
   assert.equal(value.cancelled, undefined)
   const text = tool.output.render({}, value)[0].text
-  assert.match(text, /did not click an element within the time budget/)
+  assert.match(text, /did not finish picking within the time budget/)
   assert.match(text, /page was not touched/)
 })
 
@@ -378,6 +457,107 @@ test('a pick without a stable loc still returns the point to act on', async () =
   const text = tool.output.render({}, value)[0].text
   assert.match(text, /point: \(320, 240\)/)
   assert.match(text, /No stable path was found/)
+})
+
+function boxAnswer(extra = {}) {
+  return {
+    ok: true,
+    picked: true,
+    mode: 'box',
+    box: { x: 10, y: 20, width: 300, height: 200 },
+    elements: [
+      {
+        loc: 'css:#first-check',
+        info: { tag: 'input', role: 'checkbox', name: '' },
+        rect: { x: 12, y: 24, width: 16, height: 16 },
+        point: { x: 20, y: 32 },
+      },
+      {
+        loc: 'css:#second-check',
+        info: { tag: 'input', role: 'checkbox', name: '同意条款' },
+        rect: { x: 40, y: 24, width: 16, height: 16 },
+        point: { x: 48, y: 32 },
+      },
+    ],
+    total: 2,
+    truncated: false,
+    waitedMs: 900,
+    url: 'https://example.com/list',
+    ...extra,
+  }
+}
+
+test('a box answer maps the elements and renders a loc list', async () => {
+  const bridge = fakeBridge(boxAnswer())
+  const tool = browserPickTool(bridge)
+  const value = await tool.execute({ mode: 'box', limit: 5 }, EXEC)
+  const call = bridge.calls[0]
+  assert.equal(call.type, 'pick')
+  assert.equal(call.params.mode, 'box')
+  assert.equal(call.params.limit, 5)
+  assert.equal(call.timeoutMs, 68_000, 'the request budget leaves room for a drag')
+  assert.equal(value.picked, true)
+  assert.equal(value.mode, 'box')
+  assert.deepEqual(value.box, { x: 10, y: 20, width: 300, height: 200 })
+  assert.equal(value.total, 2)
+  assert.equal(value.truncated, false)
+  assert.equal(value.elements.length, 2)
+  assert.equal(value.elements[0].loc, 'css:#first-check')
+  assert.deepEqual(value.elements[0].point, { x: 20, y: 32 })
+  const text = tool.output.render({}, value)[0].text
+  assert.match(text, /The person drew a box over \(10, 20\) 300×200 and it holds 2 element\(s\)/)
+  assert.match(text, /\* css:#first-check — checkbox/)
+  assert.match(text, /Move one at a time with browser_click \{ loc \}/)
+  assert.match(text, /Picking itself did not click the page/)
+})
+
+test('element mode stays the default and sends no limit', async () => {
+  const bridge = fakeBridge(pickedAnswer())
+  await browserPickTool(bridge).execute({}, EXEC)
+  assert.equal(bridge.calls[0].params.mode, 'element')
+  assert.equal('limit' in bridge.calls[0].params, false, 'limit is a box-only knob')
+})
+
+test('an empty box says nothing actionable was under it', async () => {
+  const bridge = fakeBridge(boxAnswer({ elements: [], total: 0, truncated: false }))
+  const tool = browserPickTool(bridge)
+  const value = await tool.execute({ mode: 'box' }, EXEC)
+  assert.deepEqual(value.elements, [])
+  const text = tool.output.render({}, value)[0].text
+  assert.match(text, /Nothing actionable was under the box/)
+  assert.match(text, /The page state is unchanged/)
+})
+
+test('a truncated box says some elements were not collected', async () => {
+  const bridge = fakeBridge(boxAnswer({ total: 40, truncated: true }))
+  const tool = browserPickTool(bridge)
+  const value = await tool.execute({ mode: 'box' }, EXEC)
+  const text = tool.output.render({}, value)[0].text
+  assert.match(text, /some were not collected/)
+  assert.match(text, /holds 40 element\(s\)/)
+})
+
+test('a bad limit is refused before the page is asked', async () => {
+  const bridge = fakeBridge(boxAnswer())
+  const tool = browserPickTool(bridge)
+  await assert.rejects(() => tool.execute({ mode: 'box', limit: 2.5 }, EXEC), /limit must be an integer/)
+  await assert.rejects(() => tool.execute({ mode: 'box', limit: 'many' }, EXEC), /limit must be an integer/)
+  assert.equal(bridge.calls.length, 0)
+})
+
+test('the box limit is clamped into 1..100', async () => {
+  const bridge = fakeBridge(boxAnswer())
+  const tool = browserPickTool(bridge)
+  await tool.execute({ mode: 'box', limit: 999 }, EXEC)
+  assert.equal(bridge.calls[0].params.limit, 100)
+  await tool.execute({ mode: 'box', limit: 0 }, EXEC)
+  assert.equal(bridge.calls[1].params.limit, 1)
+})
+
+test('the pick card names the box mode', () => {
+  const tool = browserPickTool(fakeBridge(boxAnswer()))
+  assert.match(tool.presentCall({ mode: 'box' }).title, /box of elements/)
+  assert.match(tool.presentResult({}, { picked: true, mode: 'box', elements: [1, 2] }).title, /Box picked \(2 element\(s\)\)/)
 })
 
 test('the pick tool is registered with the other fifteen tools (sixteen now)', () => {

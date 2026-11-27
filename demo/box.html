@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>框选夹具</title>
+<style>
+  body { margin: 0; padding: 28px; font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif; background: #f6f7f9; color: #1f2430; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  p.lead { margin: 0 0 18px; color: #5b6472; }
+  .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; max-width: 620px; margin-bottom: 22px; }
+  .cell { display: flex; align-items: center; gap: 8px; padding: 10px 12px; background: #fff; border: 1px solid #dfe3ea; border-radius: 8px; }
+  .cell input { width: 16px; height: 16px; }
+  .rows { max-width: 620px; margin-bottom: 22px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; background: #fff; border: 1px solid #dfe3ea; border-radius: 8px; margin-bottom: 8px; }
+  .row .who { color: #5b6472; }
+  .card { max-width: 620px; padding: 18px; background: #fff; border: 1px solid #dfe3ea; border-radius: 10px; margin-bottom: 22px; }
+  .card h2 { font-size: 16px; margin: 0 0 6px; }
+  .card .meta { color: #5b6472; margin: 0 0 12px; }
+  #status { max-width: 620px; padding: 12px 16px; background: #eef2f8; border: 1px solid #d5dcea; border-radius: 8px; }
+  #status b { font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+  <h1>框选夹具</h1>
+  <p class="lead">用 browser_pick { mode: "box" } 框住一片区域，拿到里面每个元素的可操作 loc；pick 的按下、拖动和松手页面都收不到，计数不会动。</p>
+
+  <div class="grid" aria-label="同意条款复选框">
+    <label class="cell"><input type="checkbox" id="agree-1" name="agree-1"> 条款一</label>
+    <label class="cell"><input type="checkbox" id="agree-2" name="agree-2"> 条款二</label>
+    <label class="cell"><input type="checkbox" id="agree-3" name="agree-3"> 条款三</label>
+    <label class="cell"><input type="checkbox" id="agree-4" name="agree-4"> 条款四</label>
+    <label class="cell"><input type="checkbox" id="agree-5" name="agree-5"> 条款五</label>
+    <label class="cell"><input type="checkbox" id="agree-6" name="agree-6"> 条款六</label>
+    <label class="cell"><input type="checkbox" id="agree-7" name="agree-7"> 条款七</label>
+    <label class="cell"><input type="checkbox" id="agree-8" name="agree-8"> 条款八</label>
+    <label class="cell"><input type="checkbox" id="agree-9" name="agree-9"> 条款九</label>
+    <label class="cell"><input type="checkbox" id="agree-10" name="agree-10"> 条款十</label>
+  </div>
+
+  <div class="rows" aria-label="导出报表列表">
+    <div class="row"><span>导出 2025 年 11 月报表</span><button type="button" data-testid="row-export" data-row="1">导出</button></div>
+    <div class="row"><span>导出 2025 年 10 月报表</span><button type="button" data-testid="row-export" data-row="2">导出</button></div>
+    <div class="row"><span>导出 2025 年 9 月报表</span><button type="button" data-testid="row-export" data-row="3">导出</button></div>
+  </div>
+
+  <div class="card" aria-label="订单卡片">
+    <h2>订单 #2026-0042</h2>
+    <p class="meta">2026-11-27 · 已付款</p>
+    <button type="button" id="card-open">查看订单</button>
+    <button type="button" id="card-again">再次购买</button>
+  </div>
+
+  <div id="status">页面收到的点击：<b>0</b>　最后一次：<b>（还没有）</b></div>
+
+  <script>
+    (function () {
+      var count = 0
+      var last = '（还没有）'
+      var status = document.getElementById('status')
+      function render() {
+        status.innerHTML = '页面收到的点击：<b>' + count + '</b>　最后一次：<b>' + last + '</b>'
+      }
+      document.addEventListener('click', function (event) {
+        var target = event.target
+        var label = ''
+        if (target) {
+          label = target.id || target.getAttribute('data-testid') || target.textContent || target.tagName
+          label = String(label).replace(/\s+/g, ' ').trim().slice(0, 40)
+        }
+        count += 1
+        last = (target && target.tagName ? target.tagName.toLowerCase() : '?') + '「' + label + '」'
+        render()
+      }, true)
+    })()
+  </script>
+</body>
+</html>

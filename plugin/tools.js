@@ -1147,36 +1147,55 @@ export function pickSource() {
 }
 
 /**
- * `browser_pick` — ask the person in front of the panel to click one element.
+ * `browser_pick` — ask the person in front of the panel to point at the page.
  *
- * The fast, accurate answer to "which element?" when a snapshot cannot tell
- * targets apart (icon-only buttons, repeated rows, canvas controls). Picking is
- * read-only: the page never sees the click and nothing is submitted; the answer
- * is a stable `loc` (plus role/name/rect/point) that the agent then uses with
- * the normal action tools. A timeout or Esc is a normal answer, not an error.
- * TICKET-053 / SPEC-004 stage B4.
+ * Two modes. `element` (default) asks them to click one element — the fast,
+ * accurate answer to "which element?" when a snapshot cannot tell targets apart
+ * (icon-only buttons, repeated rows, canvas controls). `box` asks them to drag a
+ * rectangle and returns every distinct element under it, capped by `limit` —
+ * the answer to "these ten checkboxes" or "this card region". Picking is
+ * read-only: the page never sees the press or click and nothing is submitted;
+ * the answer is a stable `loc` (plus role/name/rect/point) for each pick, which
+ * the agent then uses with the normal action tools. A timeout or Esc is a
+ * normal answer, not an error.
+ * TICKET-053 / TICKET-054 / SPEC-004 stage B4.
  * @param {import('./bridge.js').Bridge} bridge - host half of the channel.
  */
 export function browserPickTool(bridge) {
   const DEFAULT_TIMEOUT_MS = 60_000
   const MAX_TIMEOUT_MS = 120_000
+  const DEFAULT_LIMIT = 20
+  const MAX_LIMIT = 100
   return {
     name: 'browser_pick',
     description:
-      'Ask the person in front of the panel to click one element in the page, then return what they picked: '
-      + 'a stable loc, a readable role/name, its rect and a viewport point. Use it when a snapshot cannot tell '
-      + 'targets apart (icon-only buttons, ten identical "delete" rows, canvas controls) or when you would only '
-      + 'be guessing coordinates. Picking is read-only: the page never receives the click, so nothing is '
-      + 'submitted or navigated — follow it with browser_click { loc } / browser_type { loc } to actually act. '
-      + 'No approval is needed. Returns picked:false with timedOut:true when the person does not click in time '
-      + '(default 60000ms, max 120000) or cancelled:true when they pressed Esc or took the panel over; the page '
-      + 'was not touched in either case.',
+      'Ask the person in front of the panel to point at the page, then return structured references. '
+      + 'mode "element" (default): they click one element; returns its stable loc, readable role/name, rect and '
+      + 'viewport point. mode "box": they drag a rectangle; returns every distinct element under it (loc + '
+      + 'role/name + rect + point each, at most `limit`, default 20, max 100) plus the box and the total hit '
+      + 'count — use it for a group of checkboxes, a repeated list, or a canvas/region target. Pick one when a '
+      + 'snapshot cannot tell targets apart (icon-only buttons, ten identical "delete" rows, canvas controls) or '
+      + 'when you would only be guessing coordinates. Picking is read-only: the page never receives the press or '
+      + 'click, so nothing is submitted, navigated or scrolled and the DOM is unchanged — follow it with '
+      + 'browser_click { loc } / browser_type { loc } to actually act. No approval is needed. Returns '
+      + 'picked:false with timedOut:true when the person does not finish in time (default 60000ms, max 120000) or '
+      + 'cancelled:true when they pressed Esc, used the panel cancel button, or took the panel over; the page was '
+      + 'not touched in either case.',
     parameters: {
       type: 'object',
       properties: {
         timeoutMs: {
           type: 'integer',
-          description: `How long to wait for the person to click, in milliseconds. Defaults to ${DEFAULT_TIMEOUT_MS}; max ${MAX_TIMEOUT_MS}.`,
+          description: `How long to wait for the person to point at the page, in milliseconds. Defaults to ${DEFAULT_TIMEOUT_MS}; max ${MAX_TIMEOUT_MS}.`,
+        },
+        mode: {
+          type: 'string',
+          enum: ['element', 'box'],
+          description: 'What to collect: "element" (one click, default) or "box" (drag a rectangle over many elements).',
+        },
+        limit: {
+          type: 'integer',
+          description: `Only for mode "box": the most elements to return. Defaults to ${DEFAULT_LIMIT}; clamped to 1–${MAX_LIMIT}.`,
         },
       },
       additionalProperties: false,
@@ -1188,6 +1207,49 @@ export function browserPickTool(bridge) {
           picked: { type: 'boolean' },
           timedOut: { type: 'boolean' },
           cancelled: { type: 'boolean' },
+          mode: { type: 'string' },
+          box: {
+            type: 'object',
+            properties: {
+              x: { type: 'integer' },
+              y: { type: 'integer' },
+              width: { type: 'integer' },
+              height: { type: 'integer' },
+            },
+            required: ['x', 'y', 'width', 'height'],
+          },
+          elements: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                loc: { type: 'string' },
+                info: {
+                  type: 'object',
+                  properties: { tag: { type: 'string' }, role: { type: 'string' }, name: { type: 'string' } },
+                  required: ['tag', 'role', 'name'],
+                },
+                rect: {
+                  type: 'object',
+                  properties: {
+                    x: { type: 'integer' },
+                    y: { type: 'integer' },
+                    width: { type: 'integer' },
+                    height: { type: 'integer' },
+                  },
+                  required: ['x', 'y', 'width', 'height'],
+                },
+                point: {
+                  type: 'object',
+                  properties: { x: { type: 'integer' }, y: { type: 'integer' } },
+                  required: ['x', 'y'],
+                },
+              },
+              required: ['loc', 'info', 'rect', 'point'],
+            },
+          },
+          total: { type: 'integer' },
+          truncated: { type: 'boolean' },
           loc: { type: 'string' },
           info: {
             type: 'object',
@@ -1217,12 +1279,45 @@ export function browserPickTool(bridge) {
       render(_args, value) {
         if (value?.picked !== true) {
           const reason = value?.timedOut === true
-            ? 'The person did not click an element within the time budget'
-            : 'Picking was cancelled (Esc or the panel was taken over)'
+            ? 'The person did not finish picking within the time budget'
+            : 'Picking was cancelled (Esc, the panel cancel button, or the panel was taken over)'
           return [{
             type: 'text',
             text: `${reason}; the page was not touched. Make sure the browser panel is visible, then ask again — `
               + 'or fall back to browser_snapshot and a ref/loc.',
+          }]
+        }
+        if (value?.mode === 'box') {
+          const elements = Array.isArray(value.elements) ? value.elements : []
+          const total = Number.isInteger(value.total) ? value.total : elements.length
+          const box = value.box !== null && typeof value.box === 'object' ? value.box : {}
+          const head = `The person drew a box over (${Math.round(Number(box.x) || 0)}, ${Math.round(Number(box.y) || 0)}) `
+            + `${Math.round(Number(box.width) || 0)}×${Math.round(Number(box.height) || 0)} and it holds ${total} element(s).`
+          if (elements.length === 0) {
+            return [{
+              type: 'text',
+              text: `${head} Nothing actionable was under the box (empty space, or only the page background) — `
+                + 'ask again and drag a box over the controls themselves. The page state is unchanged.',
+            }]
+          }
+          const lines = elements.slice(0, 10).map((element) => {
+            const elementInfo = element?.info !== null && typeof element.info === 'object' ? element.info : {}
+            const elementRole = String(elementInfo.role ?? '').trim() !== '' ? String(elementInfo.role) : String(elementInfo.tag ?? 'element')
+            const elementName = String(elementInfo.name ?? '').trim()
+            const elementRect = element?.rect !== null && typeof element.rect === 'object' ? element.rect : {}
+            return `* ${String(element?.loc ?? '')} — ${elementRole}${elementName === '' ? '' : ` "${elementName}"`} `
+              + `(${Math.round(Number(elementRect.x) || 0)}, ${Math.round(Number(elementRect.y) || 0)} `
+              + `${Math.round(Number(elementRect.width) || 0)}×${Math.round(Number(elementRect.height) || 0)})`
+          })
+          const shown = elements.slice(0, 10).length
+          const notes = []
+          if (shown < elements.length) notes.push(`${elements.length - shown} more element(s) are listed in the result; raise \`limit\` to get up to 100.`)
+          if (value.truncated === true) notes.push('The box held more elements than the limit, so some were not collected.')
+          return [{
+            type: 'text',
+            text: `${head} Move one at a time with browser_click { loc } / browser_type { loc }:\n${lines.join('\n')}`
+              + `${notes.length === 0 ? '' : `\n${notes.join(' ')}`}`
+              + '\nPicking itself did not click the page, and the page state is unchanged.',
           }]
         }
         const info = value.info && typeof value.info === 'object' ? value.info : {}
@@ -1243,15 +1338,72 @@ export function browserPickTool(bridge) {
     },
     async execute(args, exec) {
       const sessionId = sessionOf(exec)
+      const mode = args?.mode === 'box' ? 'box' : 'element'
       let timeoutMs = DEFAULT_TIMEOUT_MS
       if (args?.timeoutMs !== undefined) {
         const raw = Number(args.timeoutMs)
         if (!Number.isFinite(raw) || !Number.isInteger(raw)) throw new Error('timeoutMs must be an integer number of milliseconds')
         timeoutMs = Math.min(MAX_TIMEOUT_MS, Math.max(3_000, raw))
       }
-      const result = await bridge.request(sessionId, 'pick', { timeoutMs, source: pickSource() }, timeoutMs + 8_000)
+      let limit = DEFAULT_LIMIT
+      if (args?.limit !== undefined) {
+        const raw = Number(args.limit)
+        if (!Number.isFinite(raw) || !Number.isInteger(raw)) throw new Error('limit must be an integer')
+        limit = Math.min(MAX_LIMIT, Math.max(1, raw))
+      }
+      const result = await bridge.request(sessionId, 'pick', {
+        timeoutMs,
+        mode,
+        ...(mode === 'box' ? { limit } : {}),
+        source: pickSource(),
+      }, timeoutMs + 8_000)
       if (result?.ok !== true) throw actionFailure(result, 'pick')
       const waitedMs = Math.round(Number(result?.waitedMs) || 0)
+      if (result?.picked === true && (mode === 'box' || result?.mode === 'box')) {
+        const box = result.box !== null && typeof result.box === 'object' ? result.box : {}
+        const rawElements = Array.isArray(result.elements) ? result.elements : []
+        const elements = rawElements
+          .filter((element) => element !== null && typeof element === 'object')
+          .slice(0, MAX_LIMIT)
+          .map((element) => {
+            const info = element.info !== null && typeof element.info === 'object' ? element.info : {}
+            const rect = element.rect !== null && typeof element.rect === 'object' ? element.rect : {}
+            const point = element.point !== null && typeof element.point === 'object' ? element.point : {}
+            return {
+              loc: String(element.loc ?? ''),
+              info: {
+                tag: String(info.tag ?? ''),
+                role: String(info.role ?? ''),
+                name: String(info.name ?? ''),
+              },
+              rect: {
+                x: Math.round(Number(rect.x) || 0),
+                y: Math.round(Number(rect.y) || 0),
+                width: Math.round(Number(rect.width) || 0),
+                height: Math.round(Number(rect.height) || 0),
+              },
+              point: {
+                x: Math.round(Number(point.x) || 0),
+                y: Math.round(Number(point.y) || 0),
+              },
+            }
+          })
+        return {
+          picked: true,
+          mode: 'box',
+          box: {
+            x: Math.round(Number(box.x) || 0),
+            y: Math.round(Number(box.y) || 0),
+            width: Math.round(Number(box.width) || 0),
+            height: Math.round(Number(box.height) || 0),
+          },
+          elements,
+          total: Number.isInteger(result.total) ? result.total : elements.length,
+          truncated: result.truncated === true,
+          waitedMs,
+          ...(typeof result.url === 'string' && result.url !== '' ? { url: result.url } : {}),
+        }
+      }
       if (result?.picked === true) {
         const info = result.info !== null && typeof result.info === 'object' ? result.info : {}
         const rect = result.rect !== null && typeof result.rect === 'object' ? result.rect : {}
@@ -1289,10 +1441,18 @@ export function browserPickTool(bridge) {
     isConcurrencySafe() {
       return false
     },
-    presentCall(_args) {
-      return { card: 'generic', title: 'Ask the person to pick an element', kind: 'read' }
+    presentCall(args) {
+      return {
+        card: 'generic',
+        title: args?.mode === 'box' ? 'Ask the person to pick a box of elements' : 'Ask the person to pick an element',
+        kind: 'read',
+      }
     },
     presentResult(_args, value) {
+      if (value?.mode === 'box' && value?.picked === true) {
+        const count = Array.isArray(value.elements) ? value.elements.length : 0
+        return { card: 'generic', title: `Box picked (${count} element(s))` }
+      }
       return {
         card: 'generic',
         title: value?.picked === true ? 'Element picked' : 'Nothing picked',

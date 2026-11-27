@@ -55,7 +55,9 @@
 | --- | --- |
 | [2026-11-24-browser-automation-competitive-report.md](research/2026-11-24-browser-automation-competitive-report.md) | 5 个同类项目（BrowserSkill / browserpaw / browser-mcp / browser-automation / dsh-browser-cdp）的横评，与我们护城河和短板的对照，P0–P2 建议与两周清单 |
 
-## tickets/ —— 53 张工单
+| [028-box-select-cases.md](cases/028-box-select-cases.md) | `browser_pick {mode:"box"}` 框选：人拉框拿到框内元素列表，框选不向页面派发事件（计数不变、无文字选区），用返回的 `css:[data-testid="row-export"]` 真点一次计数 +1；limit/截断、空框、超时、element 模式对照 |
+
+## tickets/ —— 54 张工单
 
 按时间编号，每张记录一个失败模式、根因与验收证据（`034-screenshot-large-capture-hang.md` 是截图大载荷修复，`037`–`039` 是「首次写动作确认」的实现拆分：host 判定/门 → 面板确认条 → 配置与夹具，`040`–`043` 是「阶段 A 边界收口」：白屏根因 → JS 弹窗 → 写动作三态 → F7/F8 真机验收；`044` 是「阶段 B1 第一个能力」：`browser_wait` 等待条件——纯读、零审批、`needs_human`/`taken_over` 下可用；`045` 是「阶段 B2 观察增强」：快照 `loc="css:…"` 稳定定位符，ref 换新后仍可寻址，`bad_loc`/`stale_loc` 分型；`046` 是「阶段 B2 观察增强」：快照被预算截断时返回 `cursor`，带 `cursor` 再调用续读下一段，页面变化返回 `stale_cursor`；`047` 是「阶段 B1 操作补全」：`browser_upload` 把工作区文件合成 `File` 放进 `<input type=file>`——首个不可逆写动作，接 `upload` 审批类与 `upload_rejected`（19 码）；`048` 是「阶段 B1 操作补全」：`browser_scroll` 支持按 `ref`/`loc`/`selector` 把元素滚进视口，回执带元素 `rect` 与 `visible`/`fullyVisible`；`049` 是「阶段 B2 观察增强」：快照末尾附页面 console 尾巴；`050` 是「阶段 B3 面板能力」：面板标签页 `browser_tabs` 与 `browser_open.newTab`，多标签共享登录态、切换保状态；`051` 是「阶段 B2 观察增强」：快照末尾附页面 network 失败尾巴；`052` 是「阶段 B4 操作补全」：`browser_drag` 页面侧合成 pointer/mouse 事件序列拖拽，新增第六类写动作 `drag`；`053` 是「阶段 B4 人机协作」：`browser_pick` 请人点选元素拿到 `loc`/`info`/`rect`/`point`，点选不触发页面、纯读零审批、人工相位 `taken_over` 拒绝）。
 

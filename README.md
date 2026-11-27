@@ -9,10 +9,10 @@
 `dsh-plugin-agent-browser` · DSH 桌面端插件
 
 <p>
-  <img alt="version 1.5.15" src="https://img.shields.io/badge/version-1.5.15-2563eb?style=flat-square" />
+  <img alt="version 1.5.16" src="https://img.shields.io/badge/version-1.5.16-2563eb?style=flat-square" />
   <img alt="DSH 0.2.2 - 0.3.0" src="https://img.shields.io/badge/DSH-0.2.2%20~%200.3.0-1d4ed8?style=flat-square" />
   <img alt="14 tools" src="https://img.shields.io/badge/tools-14-0f766e?style=flat-square" />
-  <img alt="375 tests passed" src="https://img.shields.io/badge/tests-375%20passed-16a34a?style=flat-square" />
+  <img alt="386 tests passed" src="https://img.shields.io/badge/tests-386%20passed-16a34a?style=flat-square" />
   <img alt="platform Windows and macOS" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-475569?style=flat-square" />
   <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-0284c7?style=flat-square" />
 </p>
@@ -78,7 +78,7 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 | **失败不毁现场** | 导航失败自动退回上一页，错误里带 `nav_dns` / `nav_cert` / `nav_blocked` 等具体原因；错误页上不会返回空树假成功 |
 | **过程看得见** | Web 端为截图 / 打开 / 下载各出一张工具卡片，模型调了什么、页面长什么样，一眼可查 |
 | **设置就在 DSH 里** | 装好后「设置」左侧多一页 **浏览器面板**：行为、预算、下载、搜索兜底、会话白名单、本地文件服务六组表单，改完保存即可，不用手改 YAML |
-| **工程化底座** | 动态端口 + 每进程令牌、21 个稳定错误码、取消、策略接缝、375 个单测 |
+| **工程化底座** | 动态端口 + 每进程令牌、21 个稳定错误码、取消、策略接缝、386 个单测 |
 
 ## 快速开始
 
@@ -97,7 +97,7 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 
 ```text
 plugin_manager action: install_bundle
-                target: dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.15.tgz
+                target: dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.16.tgz
 ```
 
 ### 3. 打开面板
@@ -121,7 +121,7 @@ Agent 会自己走完 `browser_open` → `browser_snapshot` → 按 `ref` 点搜
 | 工具 | 作用 |
 |---|---|
 | `browser_open` | 打开 http(s) 地址；或传 `path` 打开工作区里的 HTML（自动起只读本地服务）；`newTab:true` 时在面板里另开一个标签，当前页留在后面不丢 |
-| `browser_pick` | 请人直接在页面上点一个元素，把这一个点变成结构化引用（`loc` + 可读名 + `rect` + 落点坐标），之后用 `browser_click {loc}` 等既有工具操作。点选期间页面**收不到**这次点击（捕获后吞掉，不派发输入），不需要确认条；`timeoutMs` 默认 60000（夹 3000–120000），超时或 Esc 是正常回执不是错误；图标按钮、重复行、canvas 控件这些快照读不出的目标最适合先 pick |
+| `browser_pick` | 请人直接在页面上指路：`mode:"element"`（默认）点一个元素，`mode:"box"` 拉一个框拿走框里每个元素，都变成结构化引用（`loc` + 可读名 + `rect` + 落点坐标；框选还带框的坐标、`total` 与 `truncated`），之后用 `browser_click {loc}` 等既有工具逐个操作。点选/框选期间页面**收不到**按下、拖动和松手（捕获后吞掉，不派发输入），不需要确认条；`timeoutMs` 默认 60000（夹 3000–120000）、`limit` 默认 20（夹 1–100），超时或 Esc 是正常回执不是错误；图标按钮、重复行、一组复选框、canvas 控件这些快照读不出的目标最适合先 pick |
 | `browser_tabs` | 列出、切换、关闭面板里的标签页（`action: "list"` / `"switch"` / `"close"`，`tab` 传标签 id）；切换保留每个标签的页面状态，关最后一个会先开一张空白页 |
 | `browser_snapshot` | 读当前页面的无障碍树（带 `[ref=eN]`；能算出稳定路径时紧跟 `[loc="css:…"]`）+ 一张截图；`includeImage:false` 可省掉截图；被字符预算截断时返回 `cursor`，带 `cursor` 再调用可续读下一段（页面变了会返回 `stale_cursor`）；页面自己打印的 console/未捕获错误也会附在末尾（最多 10 条，每次快照清空），页面自己发出的 fetch/XHR 失败同样附在末尾（最多 10 条，带状态/耗时/错误与请求总数） |
 | `browser_wait` | 等某个 CSS 选择器或页面文字出现（`gone:true` 等它消失），超时返回 `timedOut`；纯读、无需确认，异步加载先等再快照 |
@@ -294,7 +294,7 @@ screenshots/    运行截图 —— 案例证据与复跑留档
 仓库是纯 JS，**没有构建步骤**；插件源码在 `plugin/`，发布产物在 `dist/`。
 
 ```bash
-# 单测（375 例）
+# 单测（386 例）
 node --test --test-timeout=60000 plugin/test/*.test.mjs
 
 # 打包 tgz
