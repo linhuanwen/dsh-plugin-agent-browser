@@ -636,6 +636,130 @@ test('drag: a covered handle is occluded, never a silent drag on the banner', as
   assert.equal(handleEvents.length, 0)
 })
 
+
+// --- filling a batch (TICKET-059) --------------------------------------------
+// `fill` resolves every address before the first keystroke, so a stale locator
+// in field 2 must leave field 1 untouched. The tests below pin that atomicity,
+// the password refusal, the select-by-label path, and the optional submit.
+
+/** Two text inputs and a form with a submit button, all reachable by loc. */
+function fillStub() {
+  const emailEvents = []
+  const email = element({
+    tagName: 'INPUT',
+    attrs: { id: 'email' },
+    events: emailEvents,
+    rect: { left: 10, top: 10, width: 200, height: 30 },
+  })
+  email.type = 'text'
+  email.value = ''
+  email.focus = () => {}
+  const name = element({ tagName: 'INPUT', attrs: { id: 'name' }, rect: { left: 10, top: 60, width: 200, height: 30 } })
+  name.type = 'text'
+  name.value = ''
+  name.focus = () => {}
+  const submit = element({ tagName: 'BUTTON', text: '保存', attrs: { id: 'save' } })
+  submit.type = 'submit'
+  let submitted = 0
+  submit.click = () => { submitted += 1 }
+  const form = {
+    tagName: 'FORM',
+    querySelector: (selector) => (selector.startsWith('button') ? submit : null),
+    requestSubmit: () => { submitted += 1 },
+  }
+  email.form = form
+  name.form = form
+  return { email, name, submit, form, submitted: () => submitted, emailEvents }
+}
+
+test('fill: two loc fields are written and echo input+change events', async () => {
+  const fixture = fillStub()
+  const stub = dom({
+    find: (selector) => {
+      if (selector === '#email') return fixture.email
+      if (selector === '#name') return fixture.name
+      return null
+    },
+  })
+  const result = await run('fill', {
+    fields: [
+      { loc: 'css:#email', value: 'a@b.c' },
+      { loc: 'css:#name', value: '林焕文' },
+    ],
+  }, stub)
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.equal(result.fields.length, 2)
+  assert.equal(result.fields[0].value, 'a@b.c')
+  assert.equal(result.fields[0].length, 5)
+  assert.equal(result.fields[1].value, '林焕文')
+  assert.equal(fixture.email.value, 'a@b.c')
+  assert.equal(fixture.name.value, '林焕文')
+  assert.deepEqual(fixture.emailEvents.map((event) => event.type), ['input', 'change'])
+  assert.equal(result.submit, null)
+})
+
+test('fill: a stale loc in field 2 fails before any keystroke (atomic)', async () => {
+  const fixture = fillStub()
+  const stub = dom({
+    find: (selector) => {
+      if (selector === '#email') return fixture.email
+      return null
+    },
+  })
+  const result = await run('fill', {
+    fields: [
+      { loc: 'css:#email', value: 'a@b.c' },
+      { loc: 'css:#gone', value: 'x' },
+    ],
+  }, stub)
+  assert.equal(result.ok, false)
+  assert.equal(result.error, 'stale_loc')
+  assert.equal(result.index, 1)
+  assert.deepEqual(result.filled, [])
+  assert.equal(fixture.email.value, '')
+  assert.equal(fixture.emailEvents.length, 0)
+})
+
+test('fill: a password field is refused, nothing is written', async () => {
+  const fixture = fillStub()
+  fixture.email.type = 'password'
+  const stub = dom({ find: (selector) => (selector === '#email' ? fixture.email : null) })
+  const result = await run('fill', { fields: [{ loc: 'css:#email', value: 'secret' }] }, stub)
+  assert.equal(result.ok, false)
+  assert.equal(result.error, 'needs_human')
+  assert.equal(result.index, 0)
+  assert.equal(fixture.email.value, '')
+})
+
+test('fill: submit:true clicks the form submit control after writing', async () => {
+  const fixture = fillStub()
+  const stub = dom({ find: (selector) => (selector === '#email' ? fixture.email : null) })
+  const result = await run('fill', {
+    fields: [{ loc: 'css:#email', value: 'a@b.c' }],
+    submit: true,
+  }, stub)
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.equal(result.submit.method, 'click')
+  assert.equal(result.submit.info.name, '保存')
+  assert.equal(fixture.submitted(), 1)
+})
+
+test('fill: a select is matched by option label, unknown values are bad_option', async () => {
+  const select = element({ tagName: 'SELECT', attrs: { id: 'city' } })
+  select.options = [{ value: 'sh', textContent: '上海' }, { value: 'bj', textContent: '北京' }]
+  select.value = 'sh'
+  select.focus = () => {}
+  const stub = dom({ find: (selector) => (selector === '#city' ? select : null) })
+  const hit = await run('fill', { fields: [{ loc: 'css:#city', value: '上海' }] }, stub)
+  assert.equal(hit.ok, true, JSON.stringify(hit))
+  assert.equal(hit.fields[0].selected.label, '上海')
+  assert.equal(select.value, 'sh')
+  const miss = await run('fill', { fields: [{ loc: 'css:#city', value: '广州' }] }, stub)
+  assert.equal(miss.ok, false)
+  assert.equal(miss.error, 'bad_option')
+  assert.equal(miss.index, 0)
+})
+
 test('drag: a zero-size drop target is out_of_view with target:true', async () => {
   const { stub } = dragStub({ laneRect: { left: 300, top: 100, width: 0, height: 0 } })
   const result = await run('drag', { loc: 'css:#handle', toLoc: 'css:#lane' }, stub)

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>表单批量填写夹具</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; padding: 24px; font: 14px/1.5 system-ui, sans-serif; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  p.hint { margin: 0 0 20px; color: #666; }
+  form { display: grid; gap: 12px; max-width: 460px; }
+  label { display: grid; gap: 4px; font-size: 13px; color: #555; }
+  input, select { font: inherit; padding: 6px 8px; border: 1px solid #bbb; border-radius: 6px; }
+  button { font: inherit; padding: 7px 14px; border-radius: 6px; border: 1px solid #444; background: #f3f3f3; cursor: pointer; }
+  #out { margin-top: 20px; padding: 12px; border-radius: 8px; background: #f6f7f9; border: 1px solid #e1e3e7; white-space: pre-wrap; }
+  #out strong { color: #1d4ed8; }
+</style>
+</head>
+<body>
+  <h1>表单批量填写夹具</h1>
+  <p class="hint">用 <code>browser_fill</code> 一次填多个字段并提交；页面只在真正提交后显示收到的值。</p>
+
+  <form id="profile" autocomplete="off">
+    <label>姓名 <input id="name" name="name" value="" placeholder="你的名字" /></label>
+    <label>邮箱 <input id="email" name="email" value="" placeholder="you@example.com" /></label>
+    <label>城市
+      <select id="city" name="city">
+        <option value="bj">北京</option>
+        <option value="sh">上海</option>
+        <option value="sz">深圳</option>
+      </select>
+    </label>
+    <label>备注（可空） <input id="note" name="note" value="" /></label>
+    <label>密码（夹具：填了也会被拒） <input id="secret" name="secret" type="password" value="" /></label>
+    <button type="submit" id="save">保存资料</button>
+  </form>
+
+  <div id="out">还没有提交。</div>
+
+  <script>
+    const out = document.querySelector('#out')
+    const form = document.querySelector('#profile')
+    document.querySelector('#save').addEventListener('click', () => {
+      // The page only reacts when the submit button is really clicked.
+      out.textContent = '提交事件：click'
+    })
+    form.addEventListener('submit', (event) => {
+      event.preventDefault()
+      const data = new FormData(form)
+      const rows = ['name', 'email', 'city', 'note'].map((key) => `${key} = ${JSON.stringify(data.get(key) ?? '')}`)
+      out.textContent = '已提交：\n' + rows.join('\n')
+    })
+  </script>
+</body>
+</html>

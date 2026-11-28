@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
      * The renderer caches `client.js` aggressively, and a stale half looks
      * exactly like a bug in the host half.
      */
-    const CLIENT_REV = 65
+    const CLIENT_REV = 66
     /** The panel talks to the host half over loopback; both sides carry this mark. */
     const BRIDGE_PREFIX = '/dsh-agent-browser'
     const BRIDGE_MARK = 'dsh-plugin-agent-browser/1'
@@ -589,7 +589,7 @@ window.__ModuleLoader__.load({
 
 
     /** Command types that can let a page show a JS dialog (TICKET-041). */
-    const DIALOG_TYPES = new Set(['open', 'snapshot', 'wait', 'click', 'drag', 'type', 'press', 'eval'])
+    const DIALOG_TYPES = new Set(['open', 'snapshot', 'wait', 'click', 'drag', 'fill', 'type', 'press', 'eval'])
 
     /**
      * Read the configured dialog policy.
@@ -847,6 +847,11 @@ window.__ModuleLoader__.load({
           // the pointer/mouse sequence; no native input is involved, so the
           // panel does not have to fake a held mouse button.
           result = await guest.drag(command.params)
+        } else if (command.type === 'fill') {
+          // TICKET-059: one page-side batch writes every field after validating
+          // all addresses; an optional submit click may navigate, so the guest
+          // compares the address afterwards and reports `navigated`.
+          result = await guest.fill(command.params)
         } else if (command.type === 'inspect') {
           // Classification for the permission gate: read-only, no input events.
           result = await guest.act('inspect', command.params)
@@ -1906,6 +1911,8 @@ window.__ModuleLoader__.load({
           toY: params?.toY,
           dx: params?.dx,
           steps: params?.steps,
+          fields: params?.fields,
+          submit: params?.submit,
         }
         return this.evaluate(`(${source}\n)(${JSON.stringify(op)}, ${JSON.stringify(args)})`)
       }
@@ -1985,6 +1992,38 @@ window.__ModuleLoader__.load({
           target: action.target ?? null,
           matched: action.matched,
           steps: action.steps,
+        }
+      }
+
+      /**
+       * Fill several fields (and optionally submit) with one page-side batch.
+       *
+       * The page-side helper validates every address before the first keystroke,
+       * so a stale locator or a password field fails without a half-filled form.
+       * A submit that was clicked may navigate; comparing the address afterwards
+       * tells the model whether the page actually moved.
+       */
+      async fill(params) {
+        const expectsNavigation = params?.submit !== undefined && params.submit !== false
+        const before = expectsNavigation ? await this.url() : ''
+        const action = await this.act('fill', params)
+        if (action === null || typeof action !== 'object') throw new Error('the page returned no answer')
+        if (action.ok !== true) return action
+        let navigated
+        if (expectsNavigation && action.submit !== null) {
+          await new Promise((resolve) => setTimeout(resolve, 350))
+          try {
+            navigated = (await this.url()) !== before
+          } catch {
+            navigated = undefined
+          }
+        }
+        report('fill', { fields: Array.isArray(action.fields) ? action.fields.length : 0, submitted: action.submit !== null })
+        return {
+          ok: true,
+          fields: Array.isArray(action.fields) ? action.fields : [],
+          submit: action.submit ?? null,
+          ...(typeof navigated === 'boolean' ? { navigated } : {}),
         }
       }
 

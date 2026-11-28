@@ -592,8 +592,265 @@ function dshAction(op, params) {
     })
   }
 
+  /**
+   * Resolve one field of a `fill` batch. Each field carries its own address
+   * (`loc`, `ref` or `selector`), so this mirrors the top-level resolution
+   * above instead of borrowing its single `element`.
+   * @param {object} field - `{ loc?, ref?, selector?, strict? }`.
+   * @returns {{element?: Element, doc?: Document, frame?: string, error?: string, extra?: object}}
+   */
+  function resolveFillField(field) {
+    var spec = field !== null && typeof field === 'object' ? field : {}
+    if (typeof spec.loc === 'string' && spec.loc !== '') {
+      var anchored = resolveLoc(spec.loc)
+      if (anchored.error) {
+        var locExtra = { loc: String(spec.loc || '') }
+        if (anchored.frame) locExtra.frame = anchored.frame
+        return { error: anchored.error, extra: locExtra }
+      }
+      return { element: anchored.element, doc: anchored.doc, frame: anchored.frame }
+    }
+    if (typeof spec.selector === 'string' && spec.selector !== '') {
+      var picked = pickSelector(spec.selector, spec.strict === true ? true : input.strict)
+      if (picked.error) {
+        if (picked.error === 'multiple') {
+          return { error: 'multiple', extra: { matched: picked.matched, selector: picked.selector, candidates: picked.candidates } }
+        }
+        var selectorExtra = { matched: picked.matched, selector: picked.selector }
+        if (typeof picked.message === 'string') selectorExtra.message = picked.message
+        return { error: picked.error, extra: selectorExtra }
+      }
+      return { element: picked.element, doc: document, frame: '' }
+    }
+    var found = resolve(spec.ref)
+    if (found.error) return { error: found.error, extra: { ref: String(spec.ref || '') } }
+    return { element: found.element, doc: found.doc, frame: found.frame }
+  }
+
+  /**
+   * @param {Element} element - a form control.
+   * @returns {''|'text'|'select'|'password'} what `fill` can do with it.
+   */
+  function fillKindOf(element) {
+    if (!element) return ''
+    if (element.tagName === 'SELECT') return 'select'
+    if (element.isContentEditable === true) return 'text'
+    if (element.tagName === 'TEXTAREA') return 'text'
+    if (element.tagName === 'INPUT'
+      && !/^(checkbox|radio|file|submit|button|image|reset|range|color)$/i.test(element.type)) {
+      return element.type === 'password' ? 'password' : 'text'
+    }
+    return ''
+  }
+
+  /** The native setter controlled frameworks actually listen to. */
+  function setFieldValue(element, value) {
+    try {
+      var proto = element.tagName === 'TEXTAREA'
+        ? HTMLTextAreaElement.prototype
+        : element.tagName === 'SELECT'
+          ? HTMLSelectElement.prototype
+          : HTMLInputElement.prototype
+      var setter = Object.getOwnPropertyDescriptor(proto, 'value')
+      if (setter && setter.set) {
+        setter.set.call(element, value)
+        return true
+      }
+    } catch (error) {
+      // Fall through to the plain assignment.
+    }
+    try {
+      element.value = value
+      return true
+    } catch (error) {
+      return false
+    }
+  }
+
+  /**
+   * Write one value into one already-resolved field.
+   * @param {Element} element - the control.
+   * @param {string} kind - from `fillKindOf`.
+   * @param {string} value - the text (or option value/label for select).
+   * @param {boolean} clear - replace the current value (default).
+   * @returns {object} `{ok:true,…}` or `{error,…}`.
+   */
+  function fillOneValue(element, kind, value, clear) {
+    try {
+      element.focus({ preventScroll: true })
+    } catch (error) {
+      try { element.focus() } catch (ignored) { /* detached element */ }
+    }
+    if (kind === 'select') {
+      var options = element.options || []
+      var chosen = null
+      for (var i = 0; i < options.length; i += 1) {
+        var option = options[i]
+        var optionValue = String(option.value == null ? '' : option.value)
+        var optionText = String(option.textContent == null ? '' : option.textContent).replace(/\s+/g, ' ').trim()
+        if (optionValue === value || optionText === value
+          || optionValue.toLowerCase() === value.toLowerCase()
+          || optionText.toLowerCase() === value.toLowerCase()) {
+          chosen = option
+          break
+        }
+      }
+      if (chosen === null) return { error: 'bad_option' }
+      var chosenValue = String(chosen.value == null ? '' : chosen.value)
+      if (!setFieldValue(element, chosenValue)) return { error: 'not_editable' }
+      element.dispatchEvent(new Event('input', { bubbles: true }))
+      element.dispatchEvent(new Event('change', { bubbles: true }))
+      return {
+        ok: true,
+        selected: {
+          value: chosenValue,
+          label: String(chosen.textContent == null ? '' : chosen.textContent).replace(/\s+/g, ' ').trim(),
+        },
+      }
+    }
+    var inserted = false
+    if (clear !== false && element.isContentEditable !== true) setFieldValue(element, '')
+    if (element.isContentEditable === true) {
+      if (clear !== false) element.textContent = ''
+      try { inserted = document.execCommand('insertText', false, value) } catch (error) { inserted = false }
+      if (!inserted) element.textContent = (element.textContent || '') + value
+    } else {
+      try { inserted = document.execCommand('insertText', false, value) } catch (error) { inserted = false }
+      if (!inserted) {
+        var current = clear === false ? String(element.value || '') : ''
+        setFieldValue(element, current + value)
+      }
+      element.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+    element.dispatchEvent(new Event('change', { bubbles: true }))
+    return { ok: true, inserted: inserted, length: value.length }
+  }
+
+  /**
+   * `fill` — write several fields (and optionally submit) in one command.
+   *
+   * Every address and every editable/disabled check runs *before* the first
+   * keystroke, so a stale locator or a password field fails without leaving a
+   * half-filled form behind. The submit target is resolved up front for the
+   * same reason.
+   */
+  function doFill() {
+    var fields = Array.isArray(input.fields) ? input.fields : []
+    if (fields.length === 0) return fail('no_fields', {})
+    if (fields.length > 50) return fail('too_many_fields', { count: fields.length })
+    var resolved = []
+    for (var index = 0; index < fields.length; index += 1) {
+      var field = fields[index] !== null && typeof fields[index] === 'object' ? fields[index] : {}
+      var found = resolveFillField(field)
+      if (found.error) {
+        var failExtra = found.extra || {}
+        failExtra.index = index
+        failExtra.filled = []
+        return fail(found.error, failExtra)
+      }
+      var kind = fillKindOf(found.element)
+      var info = describe(found.element, found.doc)
+      if (kind === '') return fail('not_editable', { index: index, info: info, filled: [] })
+      if (kind === 'password') return fail('needs_human', { index: index, info: info, filled: [] })
+      if (isDisabled(found.element)) return fail('disabled', { index: index, info: info, filled: [] })
+      resolved.push({ field: field, element: found.element, doc: found.doc, kind: kind })
+    }
+
+    var submit = input.submit === undefined ? null : input.submit
+    var submitTarget = null
+    var submitMethod = ''
+    if (submit !== null && submit !== false) {
+      if (submit === true) {
+        var form = resolved[resolved.length - 1].element.form || null
+        if (form !== null) {
+          var control = null
+          try {
+            control = form.querySelector('button[type="submit"], input[type="submit"], button:not([type])')
+          } catch (error) {
+            control = null
+          }
+          if (control !== null) {
+            submitTarget = control
+            submitMethod = 'click'
+          } else if (typeof form.requestSubmit === 'function') {
+            submitTarget = form
+            submitMethod = 'request-submit'
+          }
+        }
+      } else if (typeof submit === 'object') {
+        var targetFound = resolveFillField(submit)
+        if (targetFound.error) {
+          var targetExtra = targetFound.extra || {}
+          targetExtra.index = -1
+          targetExtra.filled = []
+          return fail(targetFound.error, targetExtra)
+        }
+        submitTarget = targetFound.element
+        submitMethod = 'click'
+      }
+      if (submitMethod === '') return fail('no_submit_target', { filled: [] })
+      if (submitMethod === 'click' && isDisabled(submitTarget)) {
+        return fail('disabled', { index: -1, info: describe(submitTarget, document), filled: [], submit: true })
+      }
+    }
+
+    var written = []
+    for (var step = 0; step < resolved.length; step += 1) {
+      var entry = resolved[step]
+      var value = typeof entry.field.value === 'string'
+        ? entry.field.value
+        : String(entry.field.value == null ? '' : entry.field.value)
+      try {
+        entry.element.scrollIntoView({ block: 'center', inline: 'center' })
+      } catch (error) {
+        // Detached/fixed elements still have a rect.
+      }
+      var write = fillOneValue(entry.element, entry.kind, value, entry.field.clear !== false)
+      if (write.error) {
+        return fail(write.error, {
+          index: step,
+          info: describe(entry.element, entry.doc),
+          value: value,
+          filled: written,
+        })
+      }
+      written.push({
+        index: step,
+        info: describe(entry.element, entry.doc),
+        value: value,
+        length: write.length,
+        inserted: write.inserted,
+        selected: write.selected,
+        rect: rectOf(entry.element),
+      })
+    }
+
+    var submitted = null
+    if (submitTarget !== null) {
+      var submitInfo = describe(submitTarget, document)
+      try {
+        if (submitMethod === 'request-submit') submitTarget.requestSubmit()
+        else submitTarget.click()
+      } catch (error) {
+        return fail('submit_failed', {
+          message: String((error && error.message) || error),
+          filled: written,
+          submit: submitInfo,
+        })
+      }
+      submitted = { info: submitInfo, method: submitMethod }
+    }
+    return JSON.stringify({
+      ok: true,
+      fields: written,
+      submit: submitted,
+      url: String(location.href || ''),
+    })
+  }
+
   installGuards()
   if (op === 'scroll') return doScroll()
+  if (op === 'fill') return doFill()
 
   // `inspect` answers "what is this address?" before a write is approved. With
   // no ref/selector/locator it describes the focused control, which is what an

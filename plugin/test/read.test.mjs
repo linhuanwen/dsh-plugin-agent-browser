@@ -355,7 +355,7 @@ test('reading is not refused during a verification wall either', async () => {
   }
 })
 
-test('the read tool is registered with the other eighteen tools (nineteen now)', () => {
+test('the read tool is registered with the other nineteen tools (twenty now)', () => {
   const bridge = {
     async request() {
       return { ok: true }
@@ -369,7 +369,7 @@ test('the read tool is registered with the other eighteen tools (nineteen now)',
   }
   const names = createTools({}, bridge, sites, {}).map((tool) => tool.name)
   assert.ok(names.includes('browser_read'), 'browser_read must be registered')
-  assert.equal(names.length, 19)
+  assert.equal(names.length, 20)
 })
 
 void readSource

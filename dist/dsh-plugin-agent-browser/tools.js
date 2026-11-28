@@ -2018,6 +2018,225 @@ export function browserDragTool(bridge) {
 }
 
 /**
+ * Turn one page-side `fill` refusal into an error the model can act on. The
+ * message says exactly how much was written before the failure — a batch that
+ * stopped halfway is *not* the same as one that never ran.
+ * @param {Record<string, unknown>} result - the page's `{ ok:false, error, … }`.
+ * @returns {AgentBrowserError} the error to throw.
+ */
+function fillFailure(result) {
+  const error = result?.error
+  const filled = Array.isArray(result?.filled) ? result.filled.length : 0
+  const index = Number.isInteger(result?.index) && result.index >= 0 ? `field ${result.index + 1} ` : ''
+  const partial = filled > 0 ? `The first ${filled} field(s) were already filled; ` : 'Nothing was filled: '
+  const messages = {
+    stale_loc: `the loc ${JSON.stringify(String(result?.loc ?? ''))} no longer matches anything in the page. Take a new browser_snapshot and use a fresh loc.`,
+    bad_loc: `the loc ${JSON.stringify(String(result?.loc ?? ''))} is not a css: locator.`,
+    stale_ref: `ref ${JSON.stringify(String(result?.ref ?? ''))} is no longer in the page. Take a new browser_snapshot.`,
+    bad_ref: `ref ${JSON.stringify(String(result?.ref ?? ''))} is not a ref.`,
+    not_found: `no element matched selector ${JSON.stringify(String(result?.selector ?? ''))}.`,
+    multiple: `selector ${JSON.stringify(String(result?.selector ?? ''))} matched ${String(result?.matched ?? 'several')} element(s); pass strict:false or narrow it.`,
+    not_editable: `${index}is not a text field, a textarea or a select.`,
+    needs_human: `${index}is a password field. Credentials stay with the human: ask the user to type it in the panel, then continue.`,
+    disabled: `${index}is disabled.`,
+    bad_option: `${index}does not have an option with that value or label.`,
+    no_submit_target: 'submit:true was requested but the last field\'s form has no submit control. Name one with submit:{ loc } or click it with browser_click.',
+    submit_failed: `the submit click threw ${String(result?.message ?? 'an error')}.`,
+    no_fields: 'no fields were given.',
+    too_many_fields: 'at most 50 fields can be filled in one call.',
+  }
+  const message = `${partial}${messages[error] ?? `the page refused the fill (${String(error ?? 'unknown')}).`}`
+  const failure = new Error(message)
+  if (typeof error === 'string' && error !== '') failure.code = error
+  return failure
+}
+
+/**
+ * `browser_fill` — write several form fields in one command, optionally submit.
+ *
+ * Values are typed the way `browser_type` types them (native setters plus
+ * input/change events), but the page-side helper resolves *every* address before
+ * the first keystroke: a stale locator or a password field fails without leaving
+ * a half-filled form behind. One prompt covers the whole batch, because a form
+ * is submitted or not submitted as a unit.
+ * @param {import('./bridge.js').Bridge} bridge - host half of the channel.
+ */
+export function browserFillTool(bridge) {
+  return {
+    name: 'browser_fill',
+    description:
+      'Fill several form fields in one call: each field carries its own stable `loc` (preferred), a `ref` from the '
+      + 'latest browser_snapshot, or a CSS `selector`. Every address is checked before the first keystroke, so a stale '
+      + 'locator or a password field fails without filling anything. Pass submit:true to click the last field\'s form '
+      + 'submit control afterwards, or submit:{ loc } to name one. One confirmation covers the whole batch; password '
+      + 'fields are refused — ask the user to type those in the panel.',
+    parameters: {
+      type: 'object',
+      properties: {
+        fields: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              loc: { type: 'string', description: 'Stable locator from a snapshot line, e.g. css:#email.' },
+              ref: { type: 'string', description: 'Ref from the latest browser_snapshot, e.g. e3.' },
+              selector: { type: 'string', description: 'CSS selector, when you already know one.' },
+              value: { type: 'string', description: 'Text to put in the field (or the option value/label for a select).' },
+              clear: { type: 'boolean', description: 'Replace the current value. Defaults to true; false appends.' },
+            },
+            required: ['value'],
+            additionalProperties: false,
+          },
+          description: 'Fields to fill, in order. Each needs exactly one of loc / ref / selector.',
+        },
+        strict: { type: 'boolean', description: 'With selector: fail when it matches more than one element.' },
+        submit: {
+          description: 'true = click the form submit control; { loc|ref|selector } = click that control; omit = do not submit.',
+          oneOf: [
+            { type: 'boolean' },
+            {
+              type: 'object',
+              properties: {
+                loc: { type: 'string', description: 'Stable locator of the submit control, e.g. css:#save.' },
+                ref: { type: 'string', description: 'Ref of the submit control.' },
+                selector: { type: 'string', description: 'CSS selector of the submit control.' },
+              },
+              additionalProperties: false,
+            },
+          ],
+        },
+      },
+      required: ['fields'],
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          filled: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                tag: { type: 'string' },
+                role: { type: 'string' },
+                name: { type: 'string' },
+                value: { type: 'string' },
+                length: { type: 'integer' },
+                selected: { type: 'string' },
+              },
+            },
+          },
+          submitted: { type: 'boolean' },
+          navigated: { type: 'boolean' },
+          effect: { type: 'string', enum: ['none', 'committed', 'unknown'] },
+        },
+        required: ['filled'],
+      },
+      render(_args, value) {
+        const filled = Array.isArray(value?.filled) ? value.filled : []
+        const lines = filled.map((field) => {
+          const target = field?.role ? `${field.role} "${field?.name ?? ''}"` : 'field'
+          const written = typeof field?.selected === 'string' && field.selected !== ''
+            ? ` = ${JSON.stringify(field.selected)}`
+            : typeof field?.value === 'string' ? ` = ${JSON.stringify(field.value)}` : ''
+          return `* ${target}${written}`
+        })
+        let tail = ''
+        if (value?.submitted === true) {
+          tail = typeof value?.navigated === 'boolean'
+            ? (value.navigated ? ' Submitted; the page navigated.' : ' Submitted (the address did not change).')
+            : ' Submitted.'
+        }
+        return [{ type: 'text', text: `Filled ${filled.length} field(s):\n${lines.join('\n')}${tail}${dialogNote(value)}` }]
+      },
+    },
+    async execute(args, exec) {
+      const sessionId = sessionOf(exec)
+      const fields = Array.isArray(args?.fields) ? args.fields : []
+      if (fields.length === 0) throw new Error('fields must contain at least one field')
+      if (fields.length > 50) throw new Error('fields must contain at most 50 fields')
+      const normalized = fields.map((field, index) => {
+        if (field === null || typeof field !== 'object') throw new Error(`fields[${index}] must be an object`)
+        const loc = typeof field.loc === 'string' && field.loc.trim() !== '' ? field.loc.trim() : ''
+        const ref = typeof field.ref === 'string' && field.ref.trim() !== '' ? field.ref.trim() : ''
+        const selector = typeof field.selector === 'string' && field.selector.trim() !== '' ? field.selector.trim() : ''
+        if ([loc, ref, selector].filter((value) => value !== '').length !== 1) {
+          throw new Error(`fields[${index}] needs exactly one of loc, ref or selector`)
+        }
+        if (loc !== '' && !loc.startsWith('css:')) throw new Error(`fields[${index}].loc must be a css: locator, e.g. "css:#email"`)
+        if (typeof field.value !== 'string') throw new Error(`fields[${index}].value must be a string`)
+        return {
+          ...(loc === '' ? {} : { loc }),
+          ...(ref === '' ? {} : { ref }),
+          ...(selector === '' ? {} : { selector }),
+          value: field.value,
+          clear: field.clear !== false,
+        }
+      })
+      let submit
+      if (args?.submit === true) {
+        submit = true
+      } else if (args?.submit !== undefined && args?.submit !== null && typeof args?.submit === 'object') {
+        const loc = typeof args.submit.loc === 'string' && args.submit.loc.trim() !== '' ? args.submit.loc.trim() : ''
+        const ref = typeof args.submit.ref === 'string' && args.submit.ref.trim() !== '' ? args.submit.ref.trim() : ''
+        const selector = typeof args.submit.selector === 'string' && args.submit.selector.trim() !== '' ? args.submit.selector.trim() : ''
+        if ([loc, ref, selector].filter((value) => value !== '').length !== 1) {
+          throw new Error('submit needs exactly one of loc, ref or selector')
+        }
+        if (loc !== '' && !loc.startsWith('css:')) throw new Error('submit.loc must be a css: locator, e.g. "css:#save"')
+        submit = { ...(loc === '' ? {} : { loc }), ...(ref === '' ? {} : { ref }), ...(selector === '' ? {} : { selector }) }
+      } else if (args?.submit !== undefined) {
+        throw new Error('submit must be a boolean or an address object')
+      }
+      const result = await bridge.request(
+        sessionId,
+        'fill',
+        {
+          fields: normalized,
+          ...(args?.strict === true ? { strict: true } : {}),
+          ...(submit === undefined ? {} : { submit }),
+          source: actionSource(),
+        },
+        60_000,
+      )
+      if (result?.ok !== true) throw fillFailure(result)
+      const filled = (Array.isArray(result.fields) ? result.fields : []).map((field, index) => {
+        const source = normalized[index] ?? {}
+        const info = field?.info !== null && typeof field?.info === 'object' ? field.info : {}
+        return {
+          tag: String(info.tag ?? ''),
+          role: String(info.role ?? ''),
+          name: String(info.name ?? ''),
+          value: typeof source.value === 'string' ? source.value : '',
+          length: Number.isInteger(field?.length)
+            ? field.length
+            : (typeof source.value === 'string' ? source.value.length : 0),
+          ...(typeof field?.selected?.label === 'string' && field.selected.label !== ''
+            ? { selected: field.selected.label }
+            : {}),
+        }
+      })
+      return committed(withDialogs({
+        filled,
+        submitted: result.submit !== null && result.submit !== undefined,
+        ...(typeof result.navigated === 'boolean' ? { navigated: result.navigated } : {}),
+      }, result))
+    },
+    isConcurrencySafe() {
+      return false
+    },
+    presentCall(args) {
+      const count = Array.isArray(args?.fields) ? args.fields.length : 0
+      return { card: 'generic', title: `Fill ${count} field(s)`, kind: 'edit', rawInput: args }
+    },
+    presentResult() {
+      return { card: 'generic', title: 'Filled' }
+    },
+  }
+}
+
+/**
  * `browser_hover` — move the pointer over something without pressing it.
  *
  * Stacked controls (3D map cards, fly-out menus) only expose their buttons after
@@ -3945,6 +4164,32 @@ export function createGate(bridge, policy = {}) {
       })
       return
     }
+    if (type === 'fill') {
+      // A batch is one form action: the prompt covers every field and names the
+      // first one (the rest are listed by the tool's own result). The first
+      // address answers the same questions `type` asks — is it resolvable, is it
+      // a password box — and a batch that cannot be resolved fails on its own
+      // precise error instead of asking about a guaranteed failure.
+      const first = Array.isArray(params?.fields) && params.fields.length > 0 ? params.fields[0] : null
+      if (first === null || typeof first !== 'object') return
+      const where = typeof first.loc === 'string' && first.loc !== ''
+        ? { loc: first.loc }
+        : typeof first.ref === 'string' && first.ref !== ''
+          ? { ref: first.ref }
+          : { selector: first.selector, strict: params?.strict }
+      const seen = await inspect(sessionId, where)
+      if (seen.addressError !== '') return
+      if (seen.known === true && seen.target?.role === 'password') return
+      await confirmWrite(sessionId, {
+        // Submitting is classified as `submit`; a fill that only writes stays a
+        // `type` grant, so filling the same form twice asks once, like typing.
+        actionClass: params?.submit !== undefined && params?.submit !== false ? 'submit' : 'type',
+        origin: originOf(seen.url),
+        url: seen.url,
+        target: seen.target,
+      })
+      return
+    }
     if (type === 'eval') {
       // The page is the only reliable witness of its own address. The panel's
       // `/page` telemetry is advisory and may not have landed yet; asking the
@@ -4051,6 +4296,7 @@ export function createTools(ctx, bridge, sites, policy = {}) {
     browserWaitTool(gate),
     browserClickTool(gate),
     browserDragTool(gate),
+    browserFillTool(gate),
     browserScrollTool(gate),
     browserHoverTool(gate),
     browserZoomTool(gate),

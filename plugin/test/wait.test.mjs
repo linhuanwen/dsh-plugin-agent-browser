@@ -215,7 +215,7 @@ test('a page-side invalid probe becomes an actionable error', async () => {
   await assert.rejects(browserWaitTool(bridge).execute({ selector: ':::' }, EXEC), /valid selector or text/)
 })
 
-test('the wait tool is registered with the other eighteen tools (nineteen now)', () => {
+test('the wait tool is registered with the other nineteen tools (twenty now)', () => {
   const bridge = {
     async request() {
       return { ok: true }
@@ -229,7 +229,7 @@ test('the wait tool is registered with the other eighteen tools (nineteen now)',
   }
   const names = createTools({}, bridge, sites, {}).map((tool) => tool.name)
   assert.ok(names.includes('browser_wait'), 'browser_wait must be registered')
-  assert.equal(names.length, 19)
+  assert.equal(names.length, 20)
 })
 
 void waitSource

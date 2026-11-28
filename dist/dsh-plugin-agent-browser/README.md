@@ -203,7 +203,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 
 > 如果页面底部显示"这个 profile 不能保存插件配置"，说明宿主没有给它 config editor（多见于只读或内置 profile）——此时表单只读，改配置请用 YAML。
 
-## 十九个工具
+## 二十个工具
 
 | 工具 | 作用 |
 |---|---|
@@ -215,6 +215,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 | `browser_wait` | 等某个 CSS 选择器或页面文字出现（`gone:true` 等它消失），超时返回 `timedOut`；纯读、无需确认，异步加载先等再快照（默认等 10s，最长 15s） |
 | `browser_click` | 点某个 `ref`；ref 过期时传快照里的 `loc="css:…"`（跨快照有效），没有可用地址时传 CSS `selector`（命中测试失败会分型报告 `not_found` / `multiple` / `occluded` / `disabled`）；canvas 与跨域 iframe 才用坐标（`x`/`y`，CSS 像素）。`target=_blank` 会被改成同视图导航 |
 | `browser_drag` | 拖拽：`from` 按住一个元素，移动指针，在 `to` 松开（`from` / `to` 各传一个 `ref` / `loc` / `selector`；`to` 也可以传视口坐标 `toX`+`toY`，或相对源中心的 `dx`/`dy`）。`steps` 是中间移动步数（2–30，默认 8）。适合滑块、可排序列表、看板卡片、canvas 手柄；页面侧派发 pointer/mouse 事件序列，**原生 HTML5 drag-and-drop（`draggable="true"` 的 dragstart/drop）不覆盖**。失败分型复用 `not_found` / `multiple` / `occluded` / `disabled` / `out_of_view` |
+| `browser_fill` | 表单批量填写：一次传 1–50 个字段（每个字段一个 `loc` / `ref` / `selector` + `value`），可带 `submit: true`（点最后一个字段所在表单的提交控件）或 `submit: { loc }`（点名提交控件）；所有地址在第一次击键前校验完——坏地址 / 密码框 / 非可编辑控件会整批失败且一个字段都不写；整批一次确认 |
 | `browser_scroll` | 滚动页面或某个容器（`dy` 像素 / `to:"top"|"bottom"` / `container` 选择器），或按 `ref` / `loc` / `selector` 把某个元素滚进视口（返回元素 `rect`、`visible` / `fullyVisible`）；返回位置与 `atBottom`，懒加载列表靠它触发 |
 | `browser_hover` | 把指针移到元素上但不按（`ref` / `loc` / `selector` / `x`,`y`），返回落点与 `grew`；叠卡、悬浮菜单这类"悬停才展开"的控件要先 hover 再点 |
 | `browser_zoom` | 缩放页面（25%–300%）：`factor` 绝对值 / `delta` 步进 / `reset:true` 回 100%。缩小会给页面更宽的排版视口，桌面站才塞得进窄侧栏；面板顶部的 `− 100% ＋` 是同一个开关 |
@@ -246,6 +247,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 
 - **不问**（读动作）：`browser_open`、`browser_snapshot`、`browser_read`、`browser_pick`、`browser_wait`、`browser_scroll`、`browser_hover`、`browser_zoom`、`browser_screenshot`、`browser_tabs({action:"list"})`，以及点到普通链接/按钮的 `browser_click`。
 - **要问**（写动作）：`browser_type`（密码框本来就一律拒绝）、`browser_click` 命中提交类控件（`button[type=submit]`、`input[type=submit|image]`、表单里没有 `type` 的按钮）、`browser_drag`（拖拽可能是排序/提交滑块，无法预判，一律按写动作）、表单内的 `browser_press` Enter、`browser_eval`、`browser_download`、`browser_upload`。
+- `browser_fill`：整批字段一次确认；不含提交时按「输入」授权，带 `submit` 时按「提交」授权。
 - 面板顶部会弹一条黄色确认条：`Agent 想在 example.com 点击「提交」提交表单` + 倒计时 +「允许一次」「本会话允许本站」「拒绝」。**Enter = 拒绝**（反射性按键不该等于同意），快捷键 Alt+1 / Alt+2 / Alt+3。
 - 拒绝或超时（默认 30 秒）：动作**不会发出**，Agent 拿到 `approval_denied` / `approval_timeout`。面板没打开或窗口不可见：`approval_required`，Agent 应当先请你打开面板，而不是干等。
 - 粒度是「会话 + 站点」：换个站点重新问，会话结束作废；`approvals.sensitiveSites` 里的站点每次都问。你点「我来接管」时，未作答的确认自动按拒绝处理。
@@ -311,5 +313,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 - 写动作确认按「站点」判断，不是按「这一页是否登录后」：面板读不到 HttpOnly Cookie，无法判断登录状态，所以规则是"每个站点第一次写动作问一次"（见 SPEC-003 / 决策 010）。
 - `browser_read` 只读渲染后的文字（`innerText`）与真 `<table>`：不读几何/样式/HTML 源码，div 伪表格不猜，跨域 iframe 文本不可读；预算 `maxChars`/`maxTables`/`maxRows` 截断时会明说。
 - `browser_timeline` 与面板「动作 N 条」只活在当前宿主进程：DSH 退出、插件重载/重装即清空，最多 200 条，只记工具调用，不落盘。
+- `browser_files` 只列 `screenshots/` 与下载目录（不递归、不读内容、不删除不移动），`since` 以文件 mtime 为准。
+- `browser_fill` 是整批动作：全部字段校验通过后才写第一个字符；`submit` 后只等 350ms 观察地址变化，需要更确切的提交结果请用 `browser_wait` / `browser_snapshot` 核对。
 - `browser_files` 只列 `screenshots/` 与下载目录（不递归、不读内容、不删除不移动），`since` 以文件 mtime 为准。
 - 确认只覆盖四类已知写动作（输入、提交、下载、执行脚本）。页面自己接住的副作用（例如"加入购物车"这类 AJAX 按钮）按普通点击处理，不触发确认。
