@@ -203,7 +203,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 
 > 如果页面底部显示"这个 profile 不能保存插件配置"，说明宿主没有给它 config editor（多见于只读或内置 profile）——此时表单只读，改配置请用 YAML。
 
-## 十八个工具
+## 十九个工具
 
 | 工具 | 作用 |
 |---|---|
@@ -225,6 +225,7 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 | `browser_eval` | 在页面里求值（不够用时才用，永远不要用它绕过登录或验证）；可用 `evalEnabled: false` 整体关掉 |
 | `browser_download` | 把一个附件（PDF/Word/Excel/zip）下到工作区 `downloads/`，返回路径、字节数与 sha256；重名自动加 `-1`，不覆盖旧文件。可执行类扩展名会被拒（`download_rejected`） |
 | `browser_timeline` | 回读这台宿主上最近执行过的动作（工具、成败/错误码、参数摘要、截图与下载的文件路径），纯读、零审批，面板关着也能查；最多 200 条，插件重载清空 |
+| `browser_files` | 列出工作区里这台宿主写下的文件（`screenshots/` 截图与下载目录），可按 `kind` / 路径子串 / `since` 过滤，附带大小与时间；纯读、零审批，面板关着、DSH 重启后仍然能查 |
 
 ## 接管
 
@@ -310,4 +311,5 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 - 写动作确认按「站点」判断，不是按「这一页是否登录后」：面板读不到 HttpOnly Cookie，无法判断登录状态，所以规则是"每个站点第一次写动作问一次"（见 SPEC-003 / 决策 010）。
 - `browser_read` 只读渲染后的文字（`innerText`）与真 `<table>`：不读几何/样式/HTML 源码，div 伪表格不猜，跨域 iframe 文本不可读；预算 `maxChars`/`maxTables`/`maxRows` 截断时会明说。
 - `browser_timeline` 与面板「动作 N 条」只活在当前宿主进程：DSH 退出、插件重载/重装即清空，最多 200 条，只记工具调用，不落盘。
+- `browser_files` 只列 `screenshots/` 与下载目录（不递归、不读内容、不删除不移动），`since` 以文件 mtime 为准。
 - 确认只覆盖四类已知写动作（输入、提交、下载、执行脚本）。页面自己接住的副作用（例如"加入购物车"这类 AJAX 按钮）按普通点击处理，不触发确认。

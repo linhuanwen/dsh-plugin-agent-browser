@@ -6,7 +6,7 @@
  * `<webview>`), so nothing in this file caches a page.
  */
 import { readFileSync, realpathSync, statSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, stat, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { basename, extname, isAbsolute, join, resolve as resolvePath, sep } from 'node:path'
@@ -3524,6 +3524,204 @@ export function browserTimelineTool(timeline) {
   }
 }
 
+const FILES_DEFAULT_LIMIT = 20
+const FILES_MAX_LIMIT = 100
+
+/** Clamp the `limit` argument of `browser_files`, rejecting non-integers. */
+function filesLimit(input) {
+  if (input === undefined || input === null) return FILES_DEFAULT_LIMIT
+  if (Number.isInteger(input) === false || input < 1 || input > FILES_MAX_LIMIT) {
+    throw new Error(`limit must be an integer between 1 and ${FILES_MAX_LIMIT}`)
+  }
+  return input
+}
+
+/** Accept an ISO date or a millisecond timestamp; return epoch ms. */
+function parseSince(input) {
+  if (input === undefined || input === null || input === '') return null
+  if (typeof input === 'number' && Number.isFinite(input)) return input
+  if (typeof input === 'string') {
+    const numeric = Number(input)
+    if (Number.isFinite(numeric) && numeric > 0 && /^\d+$/.test(input.trim())) return numeric
+    const parsed = Date.parse(input)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  throw new Error(`since must be an ISO date or milliseconds, e.g. "2026-11-28T08:00:00Z"`)
+}
+
+/** Short human size for the render. */
+function filesSizeText(bytes) {
+  const value = Number.isFinite(bytes) ? bytes : 0
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/** `YYYY-MM-DD HH:MM` in local time for the render. */
+function filesDateText(iso) {
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return String(iso ?? '')
+  const pad = (value) => String(value).padStart(2, '0')
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`
+}
+
+/**
+ * TICKET-058: list the files this session wrote into the workspace.
+ *
+ * The timeline (TICKET-056) remembers actions for one host process; screenshots
+ * and downloads outlive that process, so the honest index is the disk itself.
+ * This tool reads `screenshots/` and the configured downloads directory each
+ * call — no cache, no bridge, no page. That is why it also answers while the
+ * panel is closed or after DSH restarted.
+ * @param {import('cordis').Context} ctx - host context, for `workingDirectory`.
+ * @param {{ downloadDir?: string }} [options] - configured downloads directory name.
+ */
+export function browserFilesTool(ctx, options = {}) {
+  const downloadDir = typeof options.downloadDir === 'string' && options.downloadDir !== ''
+    ? options.downloadDir
+    : 'downloads'
+  return {
+    name: 'browser_files',
+    description:
+      'List the files this browser work has written into the workspace: screenshots (`<workspace>/screenshots/`) and '
+      + 'downloads (`<workspace>/${downloadDir}/`), newest first, with sizes and timestamps. Pure read: it never touches '
+      + 'the page, works while the panel is closed and survives DSH restarts (it lists the disk, not a memory index). '
+      + 'Filter with kind, match (path substring) or since; `total` says how many matched before the limit. '
+      + 'Use it to find a screenshot you took earlier or to summarise which attachments were downloaded.',
+    parameters: {
+      type: 'object',
+      properties: {
+        kind: {
+          type: 'string',
+          enum: ['all', 'screenshot', 'download'],
+          description: 'Which files to list. Default "all".',
+        },
+        since: {
+          type: 'string',
+          description: 'Only files modified at or after this moment: an ISO date ("2026-11-28T08:00:00Z") or milliseconds as digits.',
+        },
+        match: {
+          type: 'string',
+          description: 'Only paths containing this substring (case-insensitive), e.g. "report" or "screenshots/".',
+        },
+        limit: {
+          type: 'integer',
+          description: `How many entries to return, 1–${FILES_MAX_LIMIT} (default ${FILES_DEFAULT_LIMIT}). total still reports every match.`,
+        },
+      },
+      additionalProperties: false,
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          kind: { type: 'string' },
+          dirs: { type: 'array', items: { type: 'string' } },
+          total: { type: 'integer' },
+          screenshots: { type: 'integer' },
+          downloads: { type: 'integer' },
+          files: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                kind: { type: 'string', enum: ['screenshot', 'download'] },
+                name: { type: 'string' },
+                path: { type: 'string' },
+                bytes: { type: 'integer' },
+                at: { type: 'string' },
+              },
+              required: ['kind', 'name', 'path', 'bytes', 'at'],
+            },
+          },
+        },
+        required: ['total', 'files'],
+      },
+      render(_args, value) {
+        const files = Array.isArray(value?.files) ? value.files : []
+        const dirs = Array.isArray(value?.dirs) && value.dirs.length > 0 ? value.dirs.join(' / ') : 'screenshots/ or downloads/'
+        if (files.length === 0) {
+          return [{
+            type: 'text',
+            text: `No files under ${dirs} yet (nothing matched the filter). browser_screenshot writes screenshots/, browser_download writes downloads/.`,
+          }]
+        }
+        const lines = files.map((file) => `* [${file.kind}] ${file.path} — ${filesSizeText(file.bytes)} · ${filesDateText(file.at)}`)
+        const shown = files.length
+        const total = Number.isInteger(value?.total) ? value.total : shown
+        const older = total > shown ? `\n… ${total - shown} older file(s) not shown; raise limit (up to ${FILES_MAX_LIMIT}).` : ''
+        const parts = []
+        if (Number.isInteger(value?.screenshots)) parts.push(`${value.screenshots} screenshot(s)`)
+        if (Number.isInteger(value?.downloads)) parts.push(`${value.downloads} download(s)`)
+        const breakdown = parts.length > 0 ? ` (${parts.join(', ')})` : ''
+        return [{ type: 'text', text: `${total} file(s) in the workspace, newest first${breakdown}.\n${lines.join('\n')}${older}` }]
+      },
+    },
+    async execute(args, exec) {
+      const kind = args?.kind === 'screenshot' || args?.kind === 'download' ? args.kind : 'all'
+      const limit = filesLimit(args?.limit)
+      const since = parseSince(args?.since)
+      const match = typeof args?.match === 'string' ? args.match.trim().toLowerCase() : ''
+      const root = await workspaceOf(ctx, exec)
+      const dirs = []
+      if (kind !== 'download') dirs.push({ kind: 'screenshot', dir: join(root, 'screenshots') })
+      if (kind !== 'screenshot') dirs.push({ kind: 'download', dir: join(root, downloadDir) })
+      const found = []
+      for (const bucket of dirs) {
+        let entries = []
+        try {
+          entries = await readdir(bucket.dir, { withFileTypes: true })
+        } catch {
+          continue
+        }
+        for (const entry of entries) {
+          if (entry.isFile() !== true) continue
+          const absolute = join(bucket.dir, entry.name)
+          let info
+          try {
+            info = await stat(absolute)
+          } catch {
+            continue
+          }
+          if (since !== null && info.mtimeMs < since) continue
+          const path = relativeFrom(root, absolute)
+          if (match !== '' && path.toLowerCase().includes(match) === false) continue
+          found.push({
+            kind: bucket.kind,
+            name: entry.name,
+            path,
+            bytes: info.size,
+            at: new Date(info.mtimeMs).toISOString(),
+            mtime: info.mtimeMs,
+          })
+        }
+      }
+      found.sort((left, right) => right.mtime - left.mtime || left.path.localeCompare(right.path))
+      const files = found.slice(0, limit).map(({ mtime, ...rest }) => rest)
+      return {
+        kind,
+        dirs: dirs.map((bucket) => relativeFrom(root, bucket.dir)),
+        total: found.length,
+        screenshots: found.filter((file) => file.kind === 'screenshot').length,
+        downloads: found.filter((file) => file.kind === 'download').length,
+        files,
+      }
+    },
+    /** Read-only disk listing: two of these cannot race each other. */
+    isConcurrencySafe() {
+      return true
+    },
+    presentCall(args) {
+      const scope = args?.kind === 'screenshot' ? 'screenshots' : (args?.kind === 'download' ? 'downloads' : 'workspace files')
+      return { card: 'generic', title: `List ${scope}`, kind: 'read', rawInput: args }
+    },
+    presentResult(_args, value) {
+      const count = Number.isInteger(value?.total) ? value.total : 0
+      return { card: 'generic', title: `${count} file(s) in the workspace` }
+    },
+  }
+}
+
 /**
  * Wrap the bridge so every command carries the current display policy, and a
  * write waits for the human the first time it touches a site.
@@ -3863,10 +4061,11 @@ export function createTools(ctx, bridge, sites, policy = {}) {
     browserEvalTool(gate, { maxChars: limits.evalMaxChars, rules }),
     browserDownloadTool(ctx, gate, { dir: downloads.dir, maxBytes: downloads.maxBytes, rules }),
     browserTimelineTool(timeline),
+    browserFilesTool(ctx, { downloadDir: downloads.dir }),
   ]
   // `exec.signal` is per call and the gate is shared, so the signal is carried in
   // async context instead of every tool parameter list. One wrapper here covers
-  // all eighteen tools, which is also why no call site can forget it.
+  // all nineteen tools, which is also why no call site can forget it.
   const wrapped = tools.map((tool) => {
     const execute = tool.execute
     if (typeof execute !== 'function') return tool

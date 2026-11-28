@@ -1,5 +1,5 @@
 /**
- * Contract tests for the eighteen tool definitions.
+ * Contract tests for the nineteen tool definitions.
  *
  * The host is stricter than a tool body suggests:
  *
@@ -36,6 +36,7 @@ const SCALAR_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'null'])
 const OUTPUT_NAMES = [
   'browser_open', 'browser_snapshot', 'browser_read', 'browser_pick', 'browser_tabs', 'browser_wait', 'browser_click', 'browser_drag', 'browser_scroll', 'browser_hover', 'browser_zoom',
   'browser_screenshot', 'browser_type', 'browser_press', 'browser_upload', 'browser_eval', 'browser_download', 'browser_timeline',
+  'browser_files',
 ]
 
 /** A JSON-lossless check: the host rejects values/schemas that do not round-trip. */
@@ -152,7 +153,7 @@ function sampleValue(schema) {
   return null
 }
 
-/** Build the eighteen tools against stubs: no Electron, no HTTP, no filesystem. */
+/** Build the nineteen tools against stubs: no Electron, no HTTP, no filesystem. */
 function buildTools() {
   const bridge = {
     async request() {
@@ -172,7 +173,7 @@ function buildTools() {
   return createTools(ctx, bridge, sites, policy)
 }
 
-test('exposes the eighteen browser tools under their documented names', () => {
+test('exposes the nineteen browser tools under their documented names', () => {
   const names = buildTools().map((tool) => tool.name)
   assert.deepEqual(names, OUTPUT_NAMES)
   assert.equal(new Set(names).size, names.length)
