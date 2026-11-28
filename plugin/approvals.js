@@ -215,7 +215,10 @@ export function summarize(actionClass, origin, target = null) {
   const button = name === '' ? '' : `「${name.slice(0, 32)}」`
   if (actionClass === 'type') return `在 ${site} 的输入框里输入文字`
   if (actionClass === 'submit') return `在 ${site} 点击${button}提交表单`
-  if (actionClass === 'download') return `从 ${site} 下载文件`
+  if (actionClass === 'download') {
+    const count = target !== null && typeof target === 'object' && Number.isInteger(target.count) ? target.count : 0
+    return count > 1 ? `从 ${site} 下载 ${count} 个文件` : `从 ${site} 下载文件`
+  }
   if (actionClass === 'eval') return `在 ${site} 执行页面脚本`
   if (actionClass === 'upload') {
     // File names are the part the human recognises; sizes keep the prompt
@@ -227,7 +230,8 @@ export function summarize(actionClass, origin, target = null) {
       .slice(0, 3)
     const count = files.length
     const listed = names.length === 0 ? `${count} 个文件` : `${names.join('、')}${count > names.length ? ` 等 ${count} 个文件` : ''}`
-    return `向 ${site} 上传 ${listed}`
+    const inputs = target !== null && typeof target === 'object' && Number.isInteger(target.fields) ? target.fields : 0
+    return inputs > 1 ? `向 ${site} 的 ${inputs} 个输入框上传 ${listed}` : `向 ${site} 上传 ${listed}`
   }
   if (actionClass === 'drag') return `在 ${site} 拖拽${button}`
   return `在 ${site} 做一次写操作`

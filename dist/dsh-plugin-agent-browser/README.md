@@ -222,9 +222,9 @@ plugin_manager action: remove_bundle target: dsh-plugin-agent-browser
 | `browser_screenshot` | 把页面存成 PNG 文件到工作区 `screenshots/`（返回路径、尺寸、sha256）。默认**长页拼接成整页图**（自动滚动、重叠裁缝、临时隐藏 fixed/sticky 元素），`mode:"viewport"` 只存当前屏。重名加 `-1`，不覆盖 |
 | `browser_type` | 往某个输入框写文字（`ref` 或 `loc` 定位），`submit:true` 顺带回车；**密码框一律拒绝**，交给人来输 |
 | `browser_press` | 按一个键或组合键；`Alt+Left` / `Alt+Right` / `F5` 会走面板的导航动作 |
-| `browser_upload` | 把工作区里的文件放进页面的 `<input type=file>`（`ref` / `loc` / `selector` 定位，`files` 是工作区相对路径数组）。写动作、站点首次确认；单文件 2 MiB、合计 4 MiB、最多 5 个，路径出工作区会被拒（`upload_rejected`） |
+| `browser_upload` | 把工作区里的文件放进页面的 `<input type=file>`（`ref` / `loc` / `selector` 定位）。单 input 用 `files`；多个 input 用 `fields`（每项自带地址与 `files`，最多 10 个输入 / 20 个文件），整批只弹一次确认。单文件 2 MiB、单 input 合计 4 MiB、批量合计 8 MiB，路径出工作区会被拒（`upload_rejected`） |
 | `browser_eval` | 在页面里求值（不够用时才用，永远不要用它绕过登录或验证）；可用 `evalEnabled: false` 整体关掉 |
-| `browser_download` | 把一个附件（PDF/Word/Excel/zip）下到工作区 `downloads/`，返回路径、字节数与 sha256；重名自动加 `-1`，不覆盖旧文件。可执行类扩展名会被拒（`download_rejected`） |
+| `browser_download` | 把一个或多个附件（PDF/Word/Excel/zip）下到工作区 `downloads/`，返回路径、字节数与 sha256；单文件用 `url`，多个用 `urls`（最多 10 个，整批先校验、一次确认、逐项结果）。重名自动加 `-1`，不覆盖旧文件；可执行类扩展名会被拒（`download_rejected`） |
 | `browser_timeline` | 回读这台宿主上最近执行过的动作（工具、成败/错误码、参数摘要、截图与下载的文件路径），纯读、零审批，面板关着也能查；最多 200 条，插件重载清空 |
 | `browser_files` | 列出工作区里这台宿主写下的文件（`screenshots/` 截图与下载目录），可按 `kind` / 路径子串 / `since` 过滤，附带大小与时间；纯读、零审批，面板关着、DSH 重启后仍然能查 |
 

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>批量上传夹具</title>
+<style>
+  :root { color-scheme: light; }
+  body { margin: 0; padding: 20px; font: 14px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif; background: #f6f7f9; color: #1b2430; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.lead { margin: 0 0 18px; color: #55637a; }
+  .row { background: #fff; border: 1px solid #dfe3ea; border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+  .row label { display: block; font-weight: 600; margin-bottom: 8px; }
+  .hint { color: #7b869a; font-weight: 400; font-size: 12px; margin-left: 6px; }
+  .picked { margin-top: 8px; color: #2b6f43; font-size: 13px; min-height: 18px; }
+  #summary { background: #eef4ff; border: 1px solid #c9d8f5; border-radius: 10px; padding: 12px 16px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+  <h1>批量上传夹具</h1>
+  <p class="lead">两个 file input：`#avatar` 只能选一个文件，`#docs` 可以多选。用 <code>browser_upload { fields: [...] }</code> 一次填两个，确认条只弹一次。</p>
+
+  <div class="row">
+    <label for="avatar">头像<span class="hint">（单文件）</span></label>
+    <input id="avatar" type="file" accept="image/*" />
+    <div class="picked" id="avatar-picked">还没选</div>
+  </div>
+
+  <div class="row">
+    <label for="docs">附件<span class="hint">（可多选）</span></label>
+    <input id="docs" type="file" multiple />
+    <div class="picked" id="docs-picked">还没选</div>
+  </div>
+
+  <div id="summary">页面还没收到任何文件。</div>
+
+<script>
+  var state = { avatar: [], docs: [] }
+  function render() {
+    var avatar = state.avatar.length === 0 ? '还没选' : state.avatar.join(', ')
+    var docs = state.docs.length === 0 ? '还没选' : state.docs.join(', ')
+    document.getElementById('avatar-picked').textContent = avatar
+    document.getElementById('docs-picked').textContent = docs
+    var total = state.avatar.length + state.docs.length
+    document.getElementById('summary').textContent = total === 0
+      ? '页面还没收到任何文件。'
+      : '页面收到 ' + total + ' 个文件（input 还没提交，只是放进了选择器）。'
+  }
+  function names(input) {
+    var out = []
+    for (var i = 0; i < input.files.length; i += 1) out.push(input.files[i].name + '（' + input.files[i].size + ' B）')
+    return out
+  }
+  document.getElementById('avatar').addEventListener('change', function (event) {
+    state.avatar = names(event.target); render()
+  })
+  document.getElementById('docs').addEventListener('change', function (event) {
+    state.docs = names(event.target); render()
+  })
+</script>
+</body>
+</html>

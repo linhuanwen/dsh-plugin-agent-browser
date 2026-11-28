@@ -302,3 +302,122 @@ test('upload page side: a non-file element and multiple-on-single are refusals',
   assert.equal(two.error, 'multiple_not_allowed')
   assert.equal(two.count, 2)
 })
+
+/* ------------------------------------------------------------------------- *
+ * TICKET-060: batch shape — several file inputs, one prompt, nothing sent
+ * before every address has been inspected.
+ * ------------------------------------------------------------------------- */
+
+function batchGate(options = {}) {
+  const calls = { inspections: [], approvals: [], requests: [] }
+  const fallback = { known: true, isSubmit: false, target: INPUT_INFO, url: 'https://example.com/apply', addressError: '', acceptsFiles: true, acceptsMultiple: true }
+  const queue = Array.isArray(options.inspect) ? [...options.inspect] : []
+  return {
+    calls,
+    gate: {
+      inspect: async (sessionId, params) => {
+        calls.inspections.push({ sessionId, params })
+        if (queue.length > 0) return queue.shift()
+        return options.inspectOne ?? fallback
+      },
+      requestApproval: async (sessionId, request) => {
+        calls.approvals.push({ sessionId, request })
+        if (options.approvalError !== undefined) throw options.approvalError
+      },
+      request: async (sessionId, type, params) => {
+        calls.requests.push({ sessionId, type, params })
+        if (options.requestError !== undefined) throw options.requestError
+        return {
+          ok: true,
+          info: { tag: 'input', role: 'button', name: 'input' },
+          files: (Array.isArray(params.files) ? params.files : []).map((file) => ({ name: file.name, size: file.size, type: file.type })),
+          multiple: true,
+          url: 'https://example.com/apply',
+        }
+      },
+    },
+  }
+}
+
+test('upload batch: two inputs cost one prompt and two commands, each with its own address', async () => {
+  const root = workspace()
+  const { gate, calls } = batchGate()
+  const tool = browserUploadTool(ctxFor(root), gate)
+  const result = await tool.execute({
+    fields: [
+      { loc: 'css:#cv', files: ['hello.txt'] },
+      { loc: 'css:#photo', files: ['notes.md'] },
+    ],
+  }, EXEC)
+  assert.equal(result.effect, 'committed')
+  assert.equal(calls.inspections.length, 2)
+  assert.equal(calls.approvals.length, 1, 'one prompt for the whole batch')
+  assert.equal(calls.approvals[0].request.target.fields, 2)
+  assert.equal(calls.approvals[0].request.target.files.length, 2)
+  assert.equal(calls.requests.length, 2)
+  assert.equal(calls.requests[0].params.loc, 'css:#cv')
+  assert.equal(calls.requests[1].params.loc, 'css:#photo')
+  assert.equal(result.files.length, 2)
+  assert.equal(result.fields.length, 2)
+  const text = tool.output.render({}, result)[0].text
+  assert.match(text, /across 2 input\(s\)/)
+})
+
+test('upload batch: a stale address anywhere refuses the whole batch before approval', async () => {
+  const root = workspace()
+  const { gate, calls } = batchGate({
+    inspect: [
+      { known: true, target: INPUT_INFO, url: 'https://example.com/apply', addressError: '', acceptsFiles: true, acceptsMultiple: true },
+      { known: false, target: null, url: '', addressError: 'stale_loc' },
+    ],
+  })
+  const tool = browserUploadTool(ctxFor(root), gate)
+  await assert.rejects(
+    tool.execute({ fields: [{ loc: 'css:#cv', files: ['hello.txt'] }, { loc: 'css:#gone', files: ['notes.md'] }] }, EXEC),
+    /no longer matches anything/,
+  )
+  assert.equal(calls.approvals.length, 0)
+  assert.equal(calls.requests.length, 0)
+})
+
+test('upload batch: a non-file input refuses the batch and names the field index', async () => {
+  const root = workspace()
+  const { gate, calls } = batchGate({
+    inspect: [
+      { known: true, target: INPUT_INFO, url: 'https://example.com/apply', addressError: '', acceptsFiles: true, acceptsMultiple: true },
+      { known: true, target: { tag: 'div', role: 'div', name: '' }, url: 'https://example.com/apply', addressError: '', acceptsFiles: false },
+    ],
+  })
+  const tool = browserUploadTool(ctxFor(root), gate)
+  await assert.rejects(
+    tool.execute({ fields: [{ loc: 'css:#cv', files: ['hello.txt'] }, { loc: 'css:#not-a-file', files: ['notes.md'] }] }, EXEC),
+    (error) => error.code === 'upload_rejected' && error.details.reason === 'not_file_input' && error.details.index === 1,
+  )
+  assert.equal(calls.approvals.length, 0)
+  assert.equal(calls.requests.length, 0)
+})
+
+test('upload batch: field and file counts are capped before anything is read', async () => {
+  const root = workspace()
+  const twelve = Array.from({ length: 11 }, (_, index) => ({ loc: `css:#f${index}`, files: ['hello.txt'] }))
+  await assert.rejects(
+    browserUploadTool(ctxFor(root), batchGate().gate).execute({ fields: twelve }, EXEC),
+    (error) => error.code === 'upload_rejected' && error.details.reason === 'too_many_fields',
+  )
+  const lots = Array.from({ length: 5 }, (_, index) => ({
+    loc: `css:#f${index}`,
+    files: ['hello.txt', 'notes.md', 'hello.txt', 'notes.md', 'hello.txt'],
+  }))
+  await assert.rejects(
+    browserUploadTool(ctxFor(root), batchGate().gate).execute({ fields: lots }, EXEC),
+    (error) => error.code === 'upload_rejected' && error.details.reason === 'too_many_files',
+  )
+})
+
+test('upload batch: each entry needs its own address and files list', async () => {
+  const root = workspace()
+  const tool = browserUploadTool(ctxFor(root), batchGate().gate)
+  await assert.rejects(tool.execute({ fields: [{ files: ['hello.txt'] }] }, EXEC), /exactly one of ref, loc or selector/)
+  await assert.rejects(tool.execute({ fields: [{ loc: 'css:#cv', files: [] }] }, EXEC), /non-empty array of workspace file paths/)
+  await assert.rejects(tool.execute({ fields: [] }, EXEC), /non-empty array of file inputs/)
+})

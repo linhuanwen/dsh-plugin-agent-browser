@@ -9,10 +9,10 @@
 `dsh-plugin-agent-browser` · DSH 桌面端插件
 
 <p>
-  <img alt="version 1.5.26" src="https://img.shields.io/badge/version-1.5.26-2563eb?style=flat-square" />
+  <img alt="version 1.5.27" src="https://img.shields.io/badge/version-1.5.27-2563eb?style=flat-square" />
   <img alt="DSH 0.2.2 - 0.3.0" src="https://img.shields.io/badge/DSH-0.2.2%20~%200.3.0-1d4ed8?style=flat-square" />
   <img alt="17 tools" src="https://img.shields.io/badge/tools-17-0f766e?style=flat-square" />
-  <img alt="440 tests passed" src="https://img.shields.io/badge/tests-440%20passed-16a34a?style=flat-square" />
+  <img alt="453 tests passed" src="https://img.shields.io/badge/tests-453%20passed-16a34a?style=flat-square" />
   <img alt="platform Windows and macOS" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-475569?style=flat-square" />
   <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-0284c7?style=flat-square" />
 </p>
@@ -79,7 +79,7 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 | **失败不毁现场** | 导航失败自动退回上一页，错误里带 `nav_dns` / `nav_cert` / `nav_blocked` 等具体原因；错误页上不会返回空树假成功 |
 | **过程看得见** | Web 端为截图 / 打开 / 下载各出一张工具卡片，模型调了什么、页面长什么样，一眼可查 |
 | **设置就在 DSH 里** | 装好后「设置」左侧多一页 **浏览器面板**：行为、预算、下载、搜索兜底、会话白名单、本地文件服务六组表单，改完保存即可，不用手改 YAML |
-| **工程化底座** | 动态端口 + 每进程令牌、21 个稳定错误码、取消、策略接缝、440 个单测 |
+| **工程化底座** | 动态端口 + 每进程令牌、21 个稳定错误码、取消、策略接缝、453 个单测 |
 
 ## 快速开始
 
@@ -98,7 +98,7 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 
 ```text
 plugin_manager action: install_bundle
-                target: dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.26.tgz
+                target: dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.27.tgz
 ```
 
 ### 3. 打开面板
@@ -136,9 +136,9 @@ Agent 会自己走完 `browser_open` → `browser_snapshot` → 按 `ref` 点搜
 | `browser_screenshot` | 存 PNG 到工作区 `screenshots/`，返回路径、尺寸、sha256；默认长页拼接成整页图 |
 | `browser_type` | 往输入框写文字（`ref` 或 `loc` 定位），`submit:true` 顺带回车；**密码框一律拒绝**，交给人来输 |
 | `browser_press` | 按一个键或组合键；`Alt+Left` / `Alt+Right` / `F5` 会走面板的导航动作 |
-| `browser_upload` | 把工作区里的文件放进页面的 `<input type=file>`：写动作、站点首次确认；单文件 2 MiB / 合计 4 MiB / 最多 5 个，路径不许出工作区 |
+| `browser_upload` | 把工作区里的文件放进页面的 `<input type=file>`：写动作、站点首次确认；单 input 用 `files`，多 input 用 `fields`（最多 10 个输入、20 个文件，一次确认）；单文件 2 MiB、单 input 合计 4 MiB、批量合计 8 MiB，路径不许出工作区 |
 | `browser_eval` | 在页面里求值（不够用时才用，永远不要用它绕过登录或验证）；可整体关闭 |
-| `browser_download` | 把附件下到工作区 `downloads/`，返回路径、字节数、sha256；可执行类扩展名会被拒 |
+| `browser_download` | 把附件下到工作区 `downloads/`，返回路径、字节数、sha256；单文件用 `url`，多个用 `urls`（最多 10 个，整批先校验、一次确认、逐项结果）；可执行类扩展名会被拒 |
 | `browser_timeline` | 回读这台宿主上最近执行过的动作：工具、成败、错误码、参数摘要、截图/下载的文件路径；纯读、零审批，面板关着也能查 |
 | `browser_files` | 列出工作区里这台宿主写下的文件（`screenshots/` 截图与下载目录），可按 `kind` / 路径子串 / `since` 过滤，附带大小与时间；纯读、零审批，面板关着、DSH 重启后仍然能查 |
 
@@ -264,6 +264,7 @@ client 半 · 侧栏 tab / 四态徽章 / 三张工具卡片 / <webview>
 - **写动作确认按站点判断，不按登录态**：面板读不到 HttpOnly Cookie，所以无法区分「登录后的页面」；只好用「站点首次写动作」这个可观测信号代替（[`docs/spec/003`](docs/spec/003-first-touch-approval-spec.md)）。
 - **只覆盖六类写动作**：输入、会提交表单的点击/Enter、下载、脚本、上传、拖拽。非表单按钮的副作用（比如「删除」按钮发 `fetch`）按读处理，不会被拦。
 - **`browser_download` 走宿主侧 `fetch`，不带页面 Cookie**：需要登录态才能下载的链接会拿到登录页而不是文件。
+- **批量上传/下载是「逐项执行、一次确认」**：整批在动手前校验（地址、文件、URL），开跑后个别失败会如实列在结果里，已完成的项不会被回滚。
 - **`target=_blank` 的附件是黑洞**：点了既不导航也不落盘，附件一律用 `browser_download({ url })`。
 - **动作时间线活在当前宿主进程**：最多 200 条，DSH 退出/插件重载即清空、不落盘；只记工具调用（不记页面内部事件或其他插件）；`browser_timeline` 自身读取不记录。
 - **文件索引只看两个产出目录**：`browser_files` 只列 `<workspace>/screenshots/` 与下载目录（不递归、不读内容、不删除不移动）；`since` 用文件 mtime，复制/解压可能保留旧时间。
@@ -305,7 +306,7 @@ screenshots/    运行截图 —— 案例证据与复跑留档
 仓库是纯 JS，**没有构建步骤**；插件源码在 `plugin/`，发布产物在 `dist/`。
 
 ```bash
-# 单测（440 例）
+# 单测（453 例）
 node --test --test-timeout=60000 plugin/test/*.test.mjs
 
 # 打包 tgz

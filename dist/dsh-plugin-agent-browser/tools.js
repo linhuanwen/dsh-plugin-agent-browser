@@ -23,7 +23,7 @@ import {
 } from './approvals.js'
 import { short } from './bridge.js'
 import { readField } from './config.js'
-import { DownloadError, downloadTo } from './downloads.js'
+import { assertDownloadable, DownloadError, downloadTo } from './downloads.js'
 import { AgentBrowserError, isAgentBrowserError } from './errors.js'
 import { classifyNavigationFailure, navigationFailureText } from './navigation.js'
 import { createPolicy } from './policy.js'
@@ -2644,6 +2644,12 @@ export function browserPressTool(bridge) {
 const UPLOAD_MAX_FILES = 5
 const UPLOAD_MAX_FILE_BYTES = 2 * 1024 * 1024
 const UPLOAD_MAX_TOTAL_BYTES = 4 * 1024 * 1024
+/** TICKET-060: a batch fills several inputs in one call, still one prompt. */
+const UPLOAD_MAX_FIELDS = 10
+const UPLOAD_BATCH_MAX_FILES = 20
+const UPLOAD_BATCH_MAX_TOTAL_BYTES = 8 * 1024 * 1024
+/** TICKET-061: one approval can cover this many urls. */
+const DOWNLOAD_MAX_URLS = 10
 /** Extension → MIME. Anything unknown is `application/octet-stream`. */
 const UPLOAD_TYPES = Object.freeze({
   '.txt': 'text/plain',
@@ -2760,18 +2766,75 @@ function uploadTypeOf(name) {
   return UPLOAD_TYPES[extname(String(name ?? '')).toLowerCase()] ?? 'application/octet-stream'
 }
 
+
 /**
- * `browser_upload` — put workspace files into a page's `<input type="file">`.
+ * One upload address from either the single shape or one `fields` entry.
  *
- * TICKET-047 / SPEC-004 stage B1. This is the first *irreversible* write the
- * plugin exposes: once the bytes are in the page, a form submit can send them
- * anywhere, so it is gated exactly like the other writes (site-level first-touch
- * approval, class `upload`) and its failures are `upload_rejected` with a
- * machine-readable `reason` until the moment the command is handed over.
- * There is no native picker: the host reads the file, ships base64, and the page
- * assembles a real `File` through `DataTransfer` — the same handover the
- * browser's own chooser performs. That is what makes hidden/styled file inputs
- * work, and what refuses sites that open a picker through JS.
+ * Shared by both shapes so "exactly one of ref / loc / selector" is one rule,
+ * and a batch entry gets the same `requireRef` normalisation as a top-level call.
+ * @param {object} source - the call arguments or one field entry.
+ * @param {string} [label] - e.g. `fields[1]`, for a readable error.
+ * @returns {{ address: object, loc?: string, ref?: string, selector?: string }}
+ */
+function uploadAddressOf(source, label = '') {
+  const suffix = label === '' ? '' : ` (${label})`
+  const hasLoc = typeof source?.loc === 'string' && source.loc !== ''
+  const hasRef = typeof source?.ref === 'string' && source.ref !== ''
+  const hasSelector = typeof source?.selector === 'string' && source.selector !== ''
+  if ([hasLoc, hasRef, hasSelector].filter(Boolean).length !== 1) {
+    throw new Error(`pass exactly one of ref, loc or selector: which file input to fill${suffix}`)
+  }
+  const address = hasLoc
+    ? { loc: source.loc }
+    : hasRef
+      ? { ref: requireRef(source.ref) }
+      : { selector: source.selector, strict: source?.strict }
+  return { address, loc: source?.loc, ref: source?.ref, selector: source?.selector }
+}
+
+/**
+ * Read one input's files into base64 payloads, with the byte budget.
+ *
+ * Reads happen before the approval prompt (TICKET-047's "nothing was sent" is
+ * only true if the host already knows it can read them), and a batch entry
+ * keeps the single-input wording but names the field that went over.
+ * @param {string} realRoot - real workspace path.
+ * @param {string[]} files - workspace paths.
+ * @param {number} budget - byte ceiling for this call.
+ * @param {number} [index] - field index, for a batch error.
+ * @param {boolean} [batch] - whether this is a batch entry.
+ * @returns {{ payload: object[], bytes: number }}
+ */
+function uploadPayloadOf(realRoot, files, budget, index = 0, batch = false) {
+  const payload = []
+  let total = 0
+  for (const spec of files) {
+    const file = readUploadFile(realRoot, spec.trim())
+    total += file.bytes.length
+    if (total > budget) {
+      throw uploadRejected(
+        'too_large',
+        `${batch ? `fields[${index}]: ` : ''}the files together exceed ${budget} bytes.`,
+        { bytes: total, limit: budget, ...(batch ? { index } : {}) },
+      )
+    }
+    payload.push({
+      name: file.name,
+      type: uploadTypeOf(file.name),
+      size: file.bytes.length,
+      b64: encodeBase64(file.bytes),
+    })
+  }
+  return { payload, bytes: total }
+}
+
+/**
+ * `browser_upload` — put workspace files into one or more `<input type="file">`.
+ *
+ * TICKET-047 / TICKET-060. One input takes `files`; several take `fields`, and
+ * a batch still costs the user exactly one confirmation. Every address is
+ * inspected — and every byte read — before the prompt, so `upload_rejected`
+ * really means "nothing reached the page".
  * @param {import('cordis').Context} ctx - plugin context, for `workingDirectory`.
  * @param {{ request: Function, inspect: Function, requestApproval: Function }} gate - approval seam.
  */
@@ -2779,13 +2842,16 @@ export function browserUploadTool(ctx, gate) {
   return {
     name: 'browser_upload',
     description:
-      'Upload workspace files into a file input on the page (write action: the first use per site asks the user '
-      + 'in the panel). Pass exactly one of ref / loc / selector for the target — it must be an <input type="file">. '
-      + '`files` lists paths relative to the session workspace (absolute paths inside it also work): at most '
-      + '5 files, 2 MiB each, 4 MiB total. The page receives real File objects with names, sizes and MIME types, '
-      + 'and gets the same input/change events a native picker fires. It does not open a native file chooser, so '
-      + 'hidden inputs behind styled buttons work; sites that open a chooser from JS (showOpenFilePicker) are '
-      + 'refused. Refusals carry a reason and nothing is sent.',
+      'Upload workspace files into file inputs on the page (write action: the first use per site asks the user '
+      + 'in the panel, once, even when several inputs are filled). Two shapes: one input with `files` plus exactly '
+      + 'one of ref / loc / selector; or several inputs with `fields`, where each entry carries its own address and '
+      + '`files`. Every address is inspected before a single byte is read (a stale locator or a non-file target '
+      + 'fails without a prompt), and refusals say whether anything reached the page. `files` lists paths relative '
+      + 'to the session workspace (absolute paths inside it also work): at most 5 files per input, 2 MiB each, '
+      + '4 MiB per input and 8 MiB for a batch. The page receives real File objects with names, sizes and MIME '
+      + 'types, and gets the same input/change events a native picker fires. It does not open a native file '
+      + 'chooser, so hidden inputs behind styled buttons work; sites that open a chooser from JS '
+      + '(showOpenFilePicker) are refused.',
     parameters: {
       type: 'object',
       properties: {
@@ -2796,10 +2862,28 @@ export function browserUploadTool(ctx, gate) {
         files: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Workspace paths, e.g. ["tmp/report.pdf"]. At most 5 files, 2 MiB each, 4 MiB total.',
+          description: 'Workspace paths for one input, e.g. ["tmp/report.pdf"]. At most 5 files, 2 MiB each, 4 MiB total.',
+        },
+        fields: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              ref: { type: 'string', description: 'A ref from the latest browser_snapshot.' },
+              loc: { type: 'string', description: 'A stable locator from the latest snapshot.' },
+              selector: { type: 'string', description: 'A CSS selector, used when no ref fits.' },
+              strict: { type: 'boolean', description: 'With selector: false accepts the first match.' },
+              files: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Workspace paths for this input (at most 5).',
+              },
+            },
+            additionalProperties: false,
+          },
+          description: 'Batch shape: fill several file inputs in one call, with at most 10 inputs and 20 files total. Each entry needs exactly one of ref / loc / selector and a non-empty files list.',
         },
       },
-      required: ['files'],
       additionalProperties: false,
     },
     output: {
@@ -2818,6 +2902,35 @@ export function browserUploadTool(ctx, gate) {
               },
             },
           },
+          fields: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                info: {
+                  type: 'object',
+                  properties: {
+                    tag: { type: 'string' },
+                    role: { type: 'string' },
+                    name: { type: 'string' },
+                  },
+                },
+                files: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      name: { type: 'string' },
+                      size: { type: 'integer' },
+                      type: { type: 'string' },
+                    },
+                  },
+                },
+                multiple: { type: 'boolean' },
+                url: { type: 'string' },
+              },
+            },
+          },
           multiple: { type: 'boolean' },
           url: { type: 'string' },
         },
@@ -2825,6 +2938,23 @@ export function browserUploadTool(ctx, gate) {
       },
       render(_args, value) {
         const files = Array.isArray(value?.files) ? value.files : []
+        const fields = Array.isArray(value?.fields) ? value.fields : []
+        if (fields.length > 1) {
+          const lines = fields.map((field, index) => {
+            const info = field !== null && typeof field === 'object' && field.info !== null && typeof field.info === 'object' ? field.info : {}
+            const role = String(info.role ?? info.tag ?? 'input')
+            const named = typeof info.name === 'string' && info.name !== '' ? ` "${info.name}"` : ''
+            const listed = (Array.isArray(field.files) ? field.files : [])
+              .map((file) => `${String(file?.name ?? 'file')} (${Number(file?.size ?? 0)} B)`)
+              .join(', ')
+            return `* ${index + 1}. ${role}${named} ← ${listed}`
+          })
+          return [{
+            type: 'text',
+            text: `Uploaded ${files.length} file${files.length === 1 ? '' : 's'} across ${fields.length} input(s):\n`
+              + `${lines.join('\n')}\nThe page saw change events; snapshot again to see what it shows now.`,
+          }]
+        }
         const listed = files
           .map((file) => `${String(file?.name ?? 'file')} (${Number(file?.size ?? 0)} B)`)
           .slice(0, 5)
@@ -2838,62 +2968,102 @@ export function browserUploadTool(ctx, gate) {
     },
     async execute(args, exec) {
       const sessionId = sessionOf(exec)
-      const files = args?.files
-      if (Array.isArray(files) === false || files.length === 0) {
-        throw new Error('files must be a non-empty array of workspace file paths')
+      const batch = Array.isArray(args?.fields)
+      /** @type {{ address: object, loc?: string, ref?: string, selector?: string, files: string[], index: number, seen?: object }[]} */
+      const plans = []
+      if (batch) {
+        const fields = args.fields
+        if (fields.length === 0) throw new Error('fields must be a non-empty array of file inputs')
+        if (fields.length > UPLOAD_MAX_FIELDS) {
+          throw uploadRejected(
+            'too_many_fields',
+            `browser_upload takes at most ${UPLOAD_MAX_FIELDS} file inputs per call.`,
+            { count: fields.length, limit: UPLOAD_MAX_FIELDS },
+          )
+        }
+        let totalFiles = 0
+        fields.forEach((field, index) => {
+          if (field === null || typeof field !== 'object' || Array.isArray(field)) {
+            throw new Error(`fields[${index}] must be an object with an address and a files list`)
+          }
+          const files = field.files
+          if (Array.isArray(files) === false || files.length === 0) {
+            throw new Error(`fields[${index}].files must be a non-empty array of workspace file paths`)
+          }
+          if (files.length > UPLOAD_MAX_FILES) {
+            throw uploadRejected(
+              'too_many_files',
+              `fields[${index}] lists ${files.length} files; one input takes at most ${UPLOAD_MAX_FILES}.`,
+              { index, count: files.length, limit: UPLOAD_MAX_FILES },
+            )
+          }
+          for (const item of files) {
+            if (typeof item !== 'string' || item.trim() === '') {
+              throw new Error(`each entry of fields[${index}].files must be a non-empty path string`)
+            }
+          }
+          totalFiles += files.length
+          plans.push({ ...uploadAddressOf(field, `fields[${index}]`), files, index })
+        })
+        if (totalFiles > UPLOAD_BATCH_MAX_FILES) {
+          throw uploadRejected(
+            'too_many_files',
+            `browser_upload takes at most ${UPLOAD_BATCH_MAX_FILES} files per call.`,
+            { count: totalFiles, limit: UPLOAD_BATCH_MAX_FILES },
+          )
+        }
+      } else {
+        const files = args?.files
+        if (Array.isArray(files) === false || files.length === 0) {
+          throw new Error('files must be a non-empty array of workspace file paths')
+        }
+        if (files.length > UPLOAD_MAX_FILES) {
+          throw uploadRejected(
+            'too_many_files',
+            `browser_upload takes at most ${UPLOAD_MAX_FILES} files per call.`,
+            { count: files.length, limit: UPLOAD_MAX_FILES },
+          )
+        }
+        for (const item of files) {
+          if (typeof item !== 'string' || item.trim() === '') throw new Error('each entry of files must be a non-empty path string')
+        }
+        plans.push({ ...uploadAddressOf(args ?? {}), files, index: 0 })
       }
-      if (files.length > UPLOAD_MAX_FILES) {
-        throw uploadRejected(
-          'too_many_files',
-          `browser_upload takes at most ${UPLOAD_MAX_FILES} files per call.`,
-          { count: files.length, limit: UPLOAD_MAX_FILES },
-        )
-      }
-      for (const item of files) {
-        if (typeof item !== 'string' || item.trim() === '') throw new Error('each entry of files must be a non-empty path string')
-      }
-      const hasLoc = typeof args?.loc === 'string' && args.loc !== ''
-      const hasRef = typeof args?.ref === 'string' && args.ref !== ''
-      const hasSelector = typeof args?.selector === 'string' && args.selector !== ''
-      if ([hasLoc, hasRef, hasSelector].filter(Boolean).length !== 1) {
-        throw new Error('pass exactly one of ref, loc or selector: which file input to fill')
-      }
-      const address = hasLoc
-        ? { loc: args.loc }
-        : hasRef
-          ? { ref: requireRef(args.ref) }
-          : { selector: args.selector, strict: args?.strict }
       if (typeof gate?.inspect !== 'function') {
         throw new Error('this build cannot inspect a file input before uploading')
       }
-      // Look at the address before reading a single byte: a stale locator or a
+      // Look at every address before reading a single byte: a stale locator or a
       // non-file target should fail instantly, not after the approval prompt.
-      const seen = await gate.inspect(sessionId, address)
-      if (seen.addressError !== '') {
-        throw actionFailure({
-          error: seen.addressError,
-          loc: args?.loc,
-          ref: args?.ref,
-          selector: args?.selector,
-        })
-      }
-      if (seen.known === true && seen.acceptsFiles !== true) {
-        throw uploadRejected(
-          'not_file_input',
-          'that element is not an <input type="file">, so there is no picker to fill. '
-            + 'Snapshot again and point at the file input itself.',
-          { info: seen.target ?? null },
-        )
-      }
-      // A single-file input cannot take a list: refuse before the prompt, the
-      // same way a stale locator does. The page still checks again as a backstop.
-      if (files.length > 1 && seen.known === true && seen.acceptsMultiple !== true) {
-        throw uploadRejected(
-          'multiple_not_allowed',
-          `that file input takes a single file, but ${files.length} were given. `
-            + 'Pass one file, or point at an input that allows multiple files.',
-          { count: files.length },
-        )
+      for (const plan of plans) {
+        const at = batch ? `fields[${plan.index}]: ` : ''
+        const seen = await gate.inspect(sessionId, plan.address)
+        plan.seen = seen
+        if (seen.addressError !== '') {
+          throw actionFailure({
+            error: seen.addressError,
+            loc: plan.loc,
+            ref: plan.ref,
+            selector: plan.selector,
+          })
+        }
+        if (seen.known === true && seen.acceptsFiles !== true) {
+          throw uploadRejected(
+            'not_file_input',
+            `${at}that element is not an <input type="file">, so there is no picker to fill. `
+              + 'Snapshot again and point at the file input itself.',
+            { info: seen.target ?? null, ...(batch ? { index: plan.index } : {}) },
+          )
+        }
+        // A single-file input cannot take a list: refuse before the prompt, the
+        // same way a stale locator does. The page still checks again as a backstop.
+        if (plan.files.length > 1 && seen.known === true && seen.acceptsMultiple !== true) {
+          throw uploadRejected(
+            'multiple_not_allowed',
+            `${at}that file input takes a single file, but ${plan.files.length} were given. `
+              + 'Pass one file, or point at an input that allows multiple files.',
+            { count: plan.files.length, ...(batch ? { index: plan.index } : {}) },
+          )
+        }
       }
       const root = await workspaceOf(ctx, exec)
       let realRoot = ''
@@ -2902,58 +3072,74 @@ export function browserUploadTool(ctx, gate) {
       } catch {
         throw uploadRejected('workspace_unavailable', 'the session workspace is not readable right now.', {})
       }
-      const payload = []
-      let total = 0
-      for (const spec of files) {
-        const file = readUploadFile(realRoot, spec.trim())
-        total += file.bytes.length
-        if (total > UPLOAD_MAX_TOTAL_BYTES) {
-          throw uploadRejected(
-            'too_large',
-            `the files together exceed ${UPLOAD_MAX_TOTAL_BYTES} bytes.`,
-            { bytes: total, limit: UPLOAD_MAX_TOTAL_BYTES },
-          )
-        }
-        payload.push({
-          name: file.name,
-          type: uploadTypeOf(file.name),
-          size: file.bytes.length,
-          b64: encodeBase64(file.bytes),
-        })
+      const budget = batch ? UPLOAD_BATCH_MAX_TOTAL_BYTES : UPLOAD_MAX_TOTAL_BYTES
+      for (const plan of plans) {
+        const read = uploadPayloadOf(realRoot, plan.files, budget, plan.index, batch)
+        plan.payload = read.payload
+        plan.bytes = read.bytes
       }
+      const flattened = plans.flatMap((plan) => plan.payload.map(({ name, size }) => ({ name, size })))
+      const bytes = plans.reduce((sum, plan) => sum + plan.bytes, 0)
       // The first irreversible write per site: same site-level first-touch gate
       // as every other write, with its own class so the prompt can say "upload"
-      // instead of reusing a click's wording.
+      // instead of reusing a click's wording. One prompt covers a whole batch.
       await gate.requestApproval(sessionId, {
         actionClass: 'upload',
-        origin: originOf(seen.url),
-        url: seen.url,
-        target: { files: payload.map(({ name, size }) => ({ name, size })), bytes: total },
+        origin: originOf(plans[0].seen.url),
+        url: plans[0].seen.url,
+        target: { files: flattened, bytes, ...(batch ? { fields: plans.length } : {}) },
       })
-      const result = await gate.request(sessionId, 'upload', { ...address, files: payload, source: actionSource() }, 30_000)
-      if (result?.ok !== true) throw actionFailure(result, 'upload')
-      return committed({
-        files: Array.isArray(result.files)
-          ? result.files.map((file) => ({
-            name: String(file?.name ?? 'file'),
-            size: Number(file?.size) || 0,
-            type: String(file?.type ?? ''),
-          }))
-          : [],
-        multiple: result.multiple === true,
-        ...(typeof result.url === 'string' && result.url !== '' ? { url: result.url } : {}),
-      })
+      const done = []
+      for (const plan of plans) {
+        const result = await gate.request(sessionId, 'upload', { ...plan.address, files: plan.payload, source: actionSource() }, 30_000)
+        if (result?.ok !== true) {
+          const error = actionFailure(result, 'upload')
+          if (batch) error.details = { ...(error.details ?? {}), index: plan.index, uploaded: done.length }
+          throw error
+        }
+        done.push({
+          info: result.info !== null && typeof result.info === 'object' ? result.info : {},
+          files: Array.isArray(result.files)
+            ? result.files.map((file) => ({
+              name: String(file?.name ?? 'file'),
+              size: Number(file?.size) || 0,
+              type: String(file?.type ?? ''),
+            }))
+            : [],
+          multiple: result.multiple === true,
+          ...(typeof result.url === 'string' && result.url !== '' ? { url: result.url } : {}),
+        })
+      }
+      if (batch) {
+        return committed({ files: done.flatMap((field) => field.files), fields: done })
+      }
+      const single = done[0]
+      return committed({ files: single.files, multiple: single.multiple, ...(single.url ? { url: single.url } : {}) })
     },
     isConcurrencySafe() {
       return false
     },
     presentCall(args) {
+      const fields = Array.isArray(args?.fields) ? args.fields : null
+      if (fields !== null) {
+        const count = fields.reduce((sum, field) => sum + (Array.isArray(field?.files) ? field.files.length : 0), 0)
+        return {
+          card: 'generic',
+          title: `Upload ${count} file${count === 1 ? '' : 's'} into ${fields.length} input${fields.length === 1 ? '' : 's'}`,
+          kind: 'edit',
+          rawInput: args,
+        }
+      }
       const count = Array.isArray(args?.files) ? args.files.length : 0
       return { card: 'generic', title: `Upload ${count} file${count === 1 ? '' : 's'}`, kind: 'edit', rawInput: args }
     },
     presentResult(_args, value) {
       const count = Array.isArray(value?.files) ? value.files.length : 0
-      return { card: 'generic', title: `Uploaded ${count} file${count === 1 ? '' : 's'}` }
+      const fields = Array.isArray(value?.fields) ? value.fields.length : 0
+      return {
+        card: 'generic',
+        title: fields > 1 ? `Uploaded ${count} file${count === 1 ? '' : 's'} into ${fields} inputs` : `Uploaded ${count} file${count === 1 ? '' : 's'}`,
+      }
     },
   }
 }
@@ -3374,28 +3560,60 @@ function relativeFrom(root, absolute) {
 }
 
 /**
- * `browser_download` — save a file the page links to into the workspace.
+ * `browser_download` — fetch files from the web into the workspace.
  *
- * The page is not involved: the host fetches the url itself (see `downloads.js`
- * for why). That makes the tool usable on an attachment href that would
- * otherwise open a PDF viewer, and it gives the model a hash it can re-check
- * later. A failed download comes back as `download_failed` rather than a thrown
- * error, because the recovery is a *different* call (`browser_snapshot` the page,
- * `browser_eval` the href again) and the card should still render what happened.
+ * TICKET-023 / TICKET-061 (batch). The host fetches; the panel is not involved
+ * (the guest session's `will-download` is blocked by the host, see
+ * `docs/decisions/005` for why). That makes the tool usable on an attachment
+ * href that would otherwise open a PDF viewer, and it gives the model a hash it
+ * can re-check later. Two shapes: one url with `url`; or up to ten downloads
+ * with `urls`, where each entry is a url string or `{ url, filename?, referer? }`.
+ * A batch is validated up front (a bad url refuses the whole batch before the
+ * prompt) and then runs one approval, with per-item results: one failure does
+ * not hide the files that did arrive. A failed download comes back as
+ * `download_failed` rather than a thrown error, because the recovery is a
+ * *different* call (`browser_snapshot` the page, `browser_eval` the href again)
+ * and the card should still render what happened.
  * @param {import('cordis').Context} ctx - host context, for `workingDirectory`.
  * @param {{ requestApproval?: Function }} gate - the gated bridge, for the first-touch permission check.
- * @param {{ dir?: string, maxBytes?: number, rules?: ReturnType<typeof createPolicy> }} [options] - target directory and size
- *   ceiling, plus the policy object, from config (`downloads.dir` / `downloads.maxBytes`).
+ * @param {{ dir?: string, maxBytes?: number, rules?: ReturnType<typeof createPolicy>, downloadTo?: Function }} [options] - target directory and size
+ *   ceiling, plus the policy object, from config (`downloads.dir` / `downloads.maxBytes`); `downloadTo` is a test seam.
  */
+
 export function browserDownloadTool(ctx, gate, options = {}) {
   const dir = typeof options.dir === 'string' && options.dir !== '' ? options.dir : 'downloads'
   const maxBytes = Number.isInteger(options.maxBytes) && options.maxBytes > 0 ? options.maxBytes : undefined
   const rules = options.rules ?? createPolicy()
+  const fetchOne = typeof options.downloadTo === 'function' ? options.downloadTo : downloadTo
+  const single = {
+    type: 'object',
+    properties: {
+      path: { type: 'string' },
+      bytes: { type: 'integer' },
+      sha256: { type: 'string' },
+      mime: { type: 'string' },
+      finalUrl: { type: 'string' },
+      url: { type: 'string' },
+    },
+  }
+  const failure = {
+    type: 'object',
+    properties: {
+      url: { type: 'string' },
+      code: { type: 'string' },
+      stage: { type: 'string' },
+      reason: { type: 'string' },
+    },
+  }
+  const failedNote = (failed) => `Download failed at ${String(failed.stage)}: ${String(failed.reason)}`
+    + '\n\nNothing was saved. Do not describe the file contents; report the failure instead.'
   return {
     name: 'browser_download',
     description:
-      'Download a file (PDF, Word, Excel, zip) to `<workspace>/downloads/` and return its path, size and sha256. '
+      'Download files (PDF, Word, Excel, zip) to `<workspace>/downloads/` and return path, size and sha256. '
       + 'Pass an absolute http(s) url — resolve a relative href against the page url first (the snapshot prints it). '
+      + 'For several files in one call pass `urls` (up to 10), each a url string or `{ url, filename?, referer? }`; '
+      + 'the whole batch is checked before the single approval, and one failure does not drop the files that worked. '
       + 'Use this for attachments instead of opening them: a PDF opened in the panel only gives you a stub tree. '
       + 'If the result is `download_failed`, tell the user the download failed and why. Never describe the contents '
       + 'of a file you did not receive.',
@@ -3404,7 +3622,7 @@ export function browserDownloadTool(ctx, gate, options = {}) {
       properties: {
         url: {
           type: 'string',
-          description: 'Absolute http(s) URL of the file. Relative hrefs must be resolved against the page first.',
+          description: 'Absolute http(s) URL of one file. Relative hrefs must be resolved against the page first.',
         },
         filename: {
           type: 'string',
@@ -3416,8 +3634,25 @@ export function browserDownloadTool(ctx, gate, options = {}) {
           type: 'string',
           description: 'Optional Referer, for sites that refuse a download that did not come from their page.',
         },
+        urls: {
+          type: 'array',
+          items: {
+            oneOf: [
+              { type: 'string', description: 'An absolute http(s) URL.' },
+              {
+                type: 'object',
+                properties: {
+                  url: { type: 'string', description: 'An absolute http(s) URL.' },
+                  filename: { type: 'string', description: 'Optional local name for this file.' },
+                  referer: { type: 'string', description: 'Optional Referer for this file.' },
+                },
+                additionalProperties: false,
+              },
+            ],
+          },
+          description: 'Download several files in one call (at most 10). Exactly one of url / urls.',
+        },
       },
-      required: ['url'],
       additionalProperties: false,
     },
     output: {
@@ -3430,6 +3665,8 @@ export function browserDownloadTool(ctx, gate, options = {}) {
           mime: { type: 'string' },
           finalUrl: { type: 'string' },
           effect: { type: 'string', enum: ['none', 'committed', 'unknown'] },
+          files: { type: 'array', items: single },
+          failures: { type: 'array', items: failure },
           download_failed: {
             type: 'object',
             properties: {
@@ -3443,13 +3680,30 @@ export function browserDownloadTool(ctx, gate, options = {}) {
         },
       },
       render(_args, value) {
+        const files = Array.isArray(value?.files) ? value.files : []
+        const failures = Array.isArray(value?.failures) ? value.failures : []
+        if (files.length > 0 || failures.length > 0) {
+          const saved = files
+            .map((file) => `* ${String(file?.path)} (${Number(file?.bytes ?? 0)} bytes, sha256 ${String(file?.sha256)})`)
+            .join('\n')
+          const failedLines = failures
+            .map((file) => `* ${String(file?.url ?? '')} — ${String(file?.stage)}: ${String(file?.reason)}`)
+            .join('\n')
+          if (files.length > 1 || failures.length > 0) {
+            const heading = value?.effect === 'none' && files.length === 0
+              ? `Nothing was downloaded: the batch was refused before any transfer (${failures.length} url(s)).`
+              : `Saved ${files.length} of ${files.length + failures.length} file(s):`
+            return [{
+              type: 'text',
+              text: heading
+                + `${saved === '' ? '' : `\n${saved}`}`
+                + `${failedLines === '' ? '' : `\n\nFailed:\n${failedLines}\n\nThose files were not saved; say so instead of describing them.`}`,
+            }]
+          }
+        }
         if (value?.download_failed !== undefined) {
           const failed = value.download_failed
-          return [{
-            type: 'text',
-            text: `Download failed at ${String(failed.stage)}: ${String(failed.reason)}`
-              + '\n\nNothing was saved. Do not describe the file contents; report the failure instead.',
-          }]
+          return [{ type: 'text', text: failedNote(failed) }]
         }
         return [{
           type: 'text',
@@ -3458,6 +3712,17 @@ export function browserDownloadTool(ctx, gate, options = {}) {
       },
       /** Card data for the downloaded-file row (TICKET-023). */
       presentationMeta(_args, value) {
+        if (Array.isArray(value?.files) && value.files.length > 0) {
+          const first = value.files[0]
+          const meta = {
+            path: String(first?.path ?? ''),
+            bytes: Number(first?.bytes ?? 0),
+            sha256: String(first?.sha256 ?? ''),
+            count: value.files.length,
+          }
+          if (typeof first?.mime === 'string' && first.mime !== '') meta.mime = first.mime
+          return meta
+        }
         if (value?.download_failed !== undefined) {
           const failed = value.download_failed
           return {
@@ -3476,44 +3741,135 @@ export function browserDownloadTool(ctx, gate, options = {}) {
       },
     },
     async execute(args, exec) {
-      if (typeof args?.url !== 'string' || args.url.trim() === '') throw new Error('url is required')
+      const sessionId = sessionOf(exec)
+      const batch = Array.isArray(args?.urls)
+      /** @type {{ url: string, filename?: string, referer?: string }[]} */
+      const items = []
+      if (batch) {
+        if (args.urls.length === 0) throw new Error('urls must be a non-empty array of downloads')
+        if (args.urls.length > DOWNLOAD_MAX_URLS) {
+          throw new Error(`browser_download takes at most ${DOWNLOAD_MAX_URLS} urls per call`)
+        }
+        args.urls.forEach((item, index) => {
+          if (typeof item === 'string') {
+            items.push({ url: item })
+            return
+          }
+          if (item === null || typeof item !== 'object' || Array.isArray(item)) {
+            throw new Error(`urls[${index}] must be a URL string or { url, filename?, referer? }`)
+          }
+          items.push({
+            url: item.url,
+            ...(typeof item.filename === 'string' && item.filename.trim() !== '' ? { filename: item.filename.trim() } : {}),
+            ...(typeof item.referer === 'string' && item.referer.trim() !== '' ? { referer: item.referer.trim() } : {}),
+          })
+        })
+        for (const item of items) {
+          if (typeof item.url !== 'string' || item.url.trim() === '') {
+            throw new Error('each entry of urls must carry a non-empty URL string')
+          }
+        }
+        // One doomed url would waste the single prompt and half-run a batch:
+        // check the whole list first, and refuse it as a whole before asking.
+        // Only the offending entry gets its own reason; the rest are reported as
+        // not attempted, so the bar does not blame a fine url for a bad neighbour.
+        for (const [index, item] of items.entries()) {
+          try {
+            assertDownloadable(item.url.trim())
+          } catch (error) {
+            const stage = error instanceof DownloadError ? error.stage : 'validate'
+            const reason = error instanceof Error ? error.message : String(error)
+            const failures = items.map((entry, at) => at === index
+              ? { url: entry.url.trim(), code: 'download_rejected', stage, reason }
+              : {
+                url: entry.url.trim(),
+                code: 'download_rejected',
+                stage: 'validate',
+                reason: 'not attempted: another URL in this batch failed validation, so the whole batch was refused',
+              })
+            return {
+              download_failed: { ...failures[index] },
+              failures,
+              effect: 'none',
+            }
+          }
+        }
+      } else {
+        if (typeof args?.url !== 'string' || args.url.trim() === '') throw new Error('url is required')
+        items.push({
+          url: args.url.trim(),
+          ...(typeof args?.filename === 'string' && args.filename.trim() !== '' ? { filename: args.filename.trim() } : {}),
+          ...(typeof args?.referer === 'string' && args.referer.trim() !== '' ? { referer: args.referer.trim() } : {}),
+        })
+      }
       const root = await workspaceOf(ctx, exec)
       // A download is a write against the site even though the page never sees
       // it, so it takes the same first-touch question as `type` and `submit`.
       // Running it before the fetch is what makes "nothing was sent" true.
-      await gate?.requestApproval?.(sessionOf(exec), { actionClass: 'download', url: args.url.trim() })
-      try {
-        return committed(await downloadTo(root, {
-          url: args.url.trim(),
-          dir,
-          ...(maxBytes === undefined ? {} : { maxBytes }),
-          ...(typeof args?.filename === 'string' && args.filename.trim() !== '' ? { filename: args.filename.trim() } : {}),
-          ...(typeof args?.referer === 'string' && args.referer.trim() !== '' ? { referer: args.referer.trim() } : {}),
-          // The policy sees the final name and byte count, which is the only
-          // point where the extension blacklist and size ceiling are truthful.
-          checkTarget: ({ filename, bytes }) => rules.checkDownload(filename, bytes),
-        }))
-      } catch (error) {
-        if (error instanceof DownloadError) {
-          const where = error.url ?? error.finalUrl
-          const failed = { code: 'download_rejected', stage: error.stage, reason: error.message }
-          if (typeof where === 'string') failed.url = where
-          return { download_failed: failed, effect: 'none' }
+      // One prompt covers a whole batch; the target carries the count so the
+      // bar can say "下载 3 个文件" instead of hiding the size of the ask.
+      await gate?.requestApproval?.(sessionId, {
+        actionClass: 'download',
+        url: items[0].url,
+        ...(batch ? { target: { count: items.length, urls: items.map((item) => item.url) } } : {}),
+      })
+      const files = []
+      const failures = []
+      for (const item of items) {
+        try {
+          const downloaded = await fetchOne(root, {
+            url: item.url,
+            dir,
+            ...(maxBytes === undefined ? {} : { maxBytes }),
+            ...(item.filename === undefined ? {} : { filename: item.filename }),
+            ...(item.referer === undefined ? {} : { referer: item.referer }),
+            // The policy sees the final name and byte count, which is the only
+            // point where the extension blacklist and size ceiling are truthful.
+            checkTarget: ({ filename, bytes }) => rules.checkDownload(filename, bytes),
+          })
+          files.push({
+            path: String(downloaded?.path ?? ''),
+            bytes: Number(downloaded?.bytes ?? 0),
+            sha256: String(downloaded?.sha256 ?? ''),
+            ...(typeof downloaded?.mime === 'string' && downloaded.mime !== '' ? { mime: downloaded.mime } : {}),
+            ...(typeof downloaded?.finalUrl === 'string' && downloaded.finalUrl !== '' ? { finalUrl: downloaded.finalUrl } : {}),
+            url: item.url,
+          })
+        } catch (error) {
+          if (error instanceof DownloadError) {
+            failures.push({ url: item.url, code: 'download_rejected', stage: error.stage, reason: error.message })
+            continue
+          }
+          if (error instanceof AgentBrowserError && error.code === 'download_rejected') {
+            failures.push({ url: item.url, code: 'download_rejected', stage: 'policy', reason: error.message })
+            continue
+          }
+          throw error
         }
-        if (error instanceof AgentBrowserError && error.code === 'download_rejected') {
-          return { download_failed: { code: 'download_rejected', stage: 'policy', reason: error.message }, effect: 'none' }
-        }
-        throw error
       }
+      if (files.length === 0) {
+        const first = failures[0] ?? { url: items[0].url, code: 'download_rejected', stage: 'validate', reason: 'nothing could be downloaded' }
+        return { download_failed: { code: 'download_rejected', stage: first.stage, reason: first.reason, url: first.url }, failures, effect: 'none' }
+      }
+      if (batch) return committed({ files, failures })
+      const saved = files[0]
+      const { url: _url, ...rest } = saved
+      return committed(rest)
     },
     /** No page is touched, so two downloads cannot race each other. */
     isConcurrencySafe() {
       return true
     },
     presentCall(args) {
+      const urls = Array.isArray(args?.urls) ? args.urls : null
+      if (urls !== null) {
+        return { card: 'generic', title: `Download ${urls.length} file${urls.length === 1 ? '' : 's'}`, kind: 'fetch', rawInput: args }
+      }
       return { card: 'generic', title: 'Download file', kind: 'fetch', rawInput: args }
     },
     presentResult(_args, result) {
+      const files = Array.isArray(result?.files) ? result.files : []
+      if (files.length > 1) return { card: 'generic', title: `Saved ${files.length} files` }
       return { card: 'generic', title: result?.isError === true ? 'Download failed' : 'File saved' }
     },
   }
