@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>快照预算夹具</title>
+<style>
+  body { font: 15px/1.7 system-ui, sans-serif; margin: 24px; color: #1f2937; }
+  h1 { margin: 0 0 12px; }
+  article p { max-width: 760px; }
+  .bar { margin-top: 16px; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; }
+  .rows div { padding: 6px 0; border-bottom: 1px dashed #e2e8f0; }
+  button, input { font: inherit; }
+</style>
+</head>
+<body>
+  <h1>快照预算夹具</h1>
+  <article>
+    <p>第一段：快照是 agent 每次行动前都要付的固定税。预算按行号切的时候，页面底部的按钮经常一条都拿不到，而顶部一段长正文却把预算占满了。这个夹具用长正文把交互节点推到预算之外。</p>
+    <p>第二段：交互节点和纯文本不应该同权。按钮、链接、输入框才是能点的东西；段落文字可以用 browser_read 单独读，不必挤在每次行动的固定成本里。</p>
+    <p>第三段：重复结构也要压缩。列表页、表格行、重复卡片会生成大量同构的文本行，一次快照的预算很容易被它们吃掉。</p>
+    <p>第四段：自适应预算的意思是，同样的字符预算里装什么由规划器决定：先保交互节点，再省略正文，最后才按行切并给 cursor 续读。</p>
+    <p>第五段：这段文字存在的意义就是把下面的按钮推到圆外。如果快照切在中间，说明预算规划没有起作用；如果按钮还在、正文带省略标记，说明交互节点优先生效了。</p>
+    <p>第六段：再来一段，确保默认预算之外的测试也能构造出压力。三百字左右的中文段落，在快照里每一行都会被压成一条 text 行。</p>
+  </article>
+  <div class="bar">
+    <label>备注 <input name="note" placeholder="写点什么"></label>
+    <button id="save">保存</button>
+    <button id="cancel">取消</button>
+    <button id="help">帮助</button>
+    <a href="#top">回到顶部</a>
+  </div>
+  <div class="rows" id="rows">
+    <div>列表行 01 — 同构内容同构内容同构内容</div>
+    <div>列表行 02 — 同构内容同构内容同构内容</div>
+    <div>列表行 03 — 同构内容同构内容同构内容</div>
+    <div>列表行 04 — 同构内容同构内容同构内容</div>
+    <div>列表行 05 — 同构内容同构内容同构内容</div>
+    <div>列表行 06 — 同构内容同构内容同构内容</div>
+    <div>列表行 07 — 同构内容同构内容同构内容</div>
+    <div>列表行 08 — 同构内容同构内容同构内容</div>
+    <div>列表行 09 — 同构内容同构内容同构内容</div>
+    <div>列表行 10 — 同构内容同构内容同构内容</div>
+  </div>
+</body>
+</html>

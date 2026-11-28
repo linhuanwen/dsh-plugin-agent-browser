@@ -15,6 +15,10 @@ function dshSnapshot(options) {
   // was measured on, so a page that changed underneath answers `stale` instead
   // of silently returning a shifted slice (TICKET-046).
   var cursor = typeof opts.cursor === 'string' ? opts.cursor.trim() : ''
+  // Planning mode (TICKET-062): hand the whole tree to the host unstripped so
+  // the host can decide what fits the budget (interactive nodes first). The
+  // stamp is still computed here, so cursor validation stays page-side.
+  var raw = opts.raw === true
   var wantText = opts.includeText !== false
   var started = typeof performance !== 'undefined' ? performance.now() : Date.now()
 
@@ -439,6 +443,32 @@ function dshSnapshot(options) {
       visited: visited,
       totalLines: totalLines,
       stale: true,
+      ms: Math.round(elapsed),
+      budget: maxChars,
+    })
+  }
+
+  // TICKET-062: hand the unplanned tree to the host. Transport between the
+  // guest page and the host costs no model tokens, and the host owns the pure
+  // planner (plugin/snapshot-plan.js) which is a lot easier to test than a
+  // DOM walk. `from` is still echoed so the host can resume a cursor.
+  if (raw) {
+    return JSON.stringify({
+      gen: gen,
+      url: location.href,
+      title: title,
+      lines: lines,
+      refCount: refCount,
+      nodeCount: totalLines,
+      visited: visited,
+      truncated: false,
+      more: false,
+      totalLines: totalLines,
+      from: from,
+      nextOffset: totalLines,
+      cursor: '',
+      stamp: stamp,
+      frames: frameIndex,
       ms: Math.round(elapsed),
       budget: maxChars,
     })

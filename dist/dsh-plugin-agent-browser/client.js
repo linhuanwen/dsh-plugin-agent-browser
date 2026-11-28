@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
      * The renderer caches `client.js` aggressively, and a stale half looks
      * exactly like a bug in the host half.
      */
-    const CLIENT_REV = 66
+    const CLIENT_REV = 67
     /** The panel talks to the host half over loopback; both sides carry this mark. */
     const BRIDGE_PREFIX = '/dsh-agent-browser'
     const BRIDGE_MARK = 'dsh-plugin-agent-browser/1'
@@ -1860,8 +1860,9 @@ window.__ModuleLoader__.load({
         const cursor = typeof params?.cursor === 'string' ? params.cursor : ''
         report('snapshot start', { sourceChars: source.length, maxChars, cursor: cursor !== '' })
         // The source is an expression function declaration; call it with our options.
+        // `raw: true` asks for the whole tree (the host plans the budget, TICKET-062).
         const tree = await withTimeout(
-          this.evaluate(`(${source}\n)(${JSON.stringify({ maxChars, cursor })})`),
+          this.evaluate(`(${source}\n)(${JSON.stringify({ maxChars, cursor, raw: params?.raw === true })})`),
           15_000,
           'the page did not answer the tree query',
         )

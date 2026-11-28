@@ -27,6 +27,7 @@ import { assertDownloadable, DownloadError, downloadTo } from './downloads.js'
 import { AgentBrowserError, isAgentBrowserError } from './errors.js'
 import { classifyNavigationFailure, navigationFailureText } from './navigation.js'
 import { createPolicy } from './policy.js'
+import { planSnapshot } from './snapshot-plan.js'
 import { createSearchFallback, enrichOpenFailure } from './search-fallback.js'
 import { urlForPath } from './static.js'
 import { createTimeline, summarizeArgs } from './timeline.js'
@@ -566,7 +567,7 @@ export function browserSnapshotTool(ctx, bridge, options = {}) {
       const result = await bridge.request(
         sessionId,
         'snapshot',
-        { source: snapshotSource(), detect: detectSource(), maxChars, includeImage, cursor },
+        { source: snapshotSource(), detect: detectSource(), maxChars, includeImage, cursor, raw: true },
         30_000,
       )
       if (result?.stale === true) {
@@ -574,19 +575,41 @@ export function browserSnapshotTool(ctx, bridge, options = {}) {
           details: { totalLines: Number.isInteger(result?.totalLines) ? result.totalLines : 0 },
         })
       }
+      // TICKET-062: the page hands back the whole tree plus a stamp; the
+      // planner decides what fits this call's budget (refs first, prose last,
+      // cursor continuation when even that is not enough).
+      let planned = null
+      let planFrom = 0
+      let planStamp = ''
+      if (Array.isArray(result?.lines) && typeof result?.stamp === 'string' && result.stamp !== '') {
+        planStamp = result.stamp
+        if (cursor !== '') {
+          const at = cursor.lastIndexOf('@')
+          const offset = at > 0 ? Number.parseInt(cursor.slice(at + 1), 10) : Number.NaN
+          const stamp = at > 0 ? cursor.slice(0, at) : ''
+          // The page already answered `stale` when the stamp differed; this is
+          // the defensive branch for a malformed cursor that still parsed.
+          if (Number.isInteger(offset) && offset >= 0 && stamp === planStamp) planFrom = offset
+        }
+        planned = planSnapshot(result.lines, { maxChars, from: planFrom })
+      }
       const value = {
         url: typeof result?.url === 'string' ? result.url : '',
         title: typeof result?.title === 'string' ? result.title : '',
         gen: Number.isInteger(result?.gen) ? result.gen : 0,
-        text: typeof result?.text === 'string' ? result.text : '',
+        text: planned !== null ? planned.text : typeof result?.text === 'string' ? result.text : '',
         refCount: Number.isInteger(result?.refCount) ? result.refCount : 0,
-        truncated: result?.truncated === true,
-        cursor: typeof result?.cursor === 'string' ? result.cursor : '',
-        more: result?.more === true,
+        truncated: planned !== null ? planned.truncated === true : result?.truncated === true,
+        cursor: planned !== null
+          ? planned.truncated === true ? `${planStamp}@${planned.nextOffset}` : ''
+          : typeof result?.cursor === 'string' ? result.cursor : '',
+        more: planned !== null ? planned.truncated === true : result?.more === true,
         totalLines: Number.isInteger(result?.totalLines) ? result.totalLines : 0,
-        from: Number.isInteger(result?.from) ? result.from : 0,
-        nextOffset: Number.isInteger(result?.nextOffset) ? result.nextOffset : 0,
-        nodes: Number.isInteger(result?.nodeCount) ? result.nodeCount : 0,
+        from: planned !== null ? planFrom : Number.isInteger(result?.from) ? result.from : 0,
+        nextOffset: planned !== null
+          ? planned.nextOffset
+          : Number.isInteger(result?.nextOffset) ? result.nextOffset : 0,
+        nodes: planned !== null ? result.lines.length : Number.isInteger(result?.nodeCount) ? result.nodeCount : 0,
         visited: Number.isInteger(result?.visited) ? result.visited : 0,
         ms: Number.isInteger(result?.ms) ? result.ms : 0,
         digest: bridge.takeDigest(sessionId),

@@ -41,6 +41,7 @@ const COPY = [
   'policy.js',
   'navigation.js',
   'search-fallback.js',
+  'snapshot-plan.js',
   'client.js',
   'timeline.js',
   'cordis.patch.yml',

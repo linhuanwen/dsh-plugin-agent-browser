@@ -71,6 +71,7 @@
 | TICKET-060 批量上传 | ✅ 2026-11-28 实现并真机通过（1.5.27，阶段 B2 可核对）：`browser_upload` 新增 `fields` 批形状（每项一个地址 + `files`）；先对**所有**地址 `inspect`、所有文件读入内存并校验，全部通过才弹**一次**确认条，然后逐 input 执行、按 input 分组回执；上限 10 input / 20 文件 / 单文件 2 MiB / 单 input 4 MiB / 整批 8 MiB；旧 `files` 单形状不变；确认文案带 input 数量；证据 `docs/cases/034` |
 | TICKET-061 批量下载 | ✅ 2026-11-28 实现并真机通过（1.5.27，阶段 B2 可核对）：`browser_download` 新增 `urls` 批形状（字符串或 `{url,filename?,referer?}`，≤10）；整批先 `assertDownloadable` 预检，任一不合格整批拒绝、不弹确认零传输（不合格项带原因、其余标 not attempted）；通过后一次确认（`target.count` 让确认条说 N 个文件）、串行下载、回执给 `files[]`/`failures[]`，全失败 `effect:none`；证据 `docs/cases/035` |
 | TICKET-056 动作时间线与截图证据 | ✅ 2026-11-27 实现并真机通过（1.5.23，阶段 B2 可核对）：新增第 17 个工具 `browser_timeline({limit?,tool?,failedOnly?})`——回读宿主进程内最近 200 条动作记录（工具/会话/成败/`effect`/错误码/参数摘要/截图或下载的 `file`+`bytes`/耗时），纯读零审批、面板关着也能查；新增 `plugin/timeline.js`（`createTimeline`/`summarizeArgs`）、`createTools` 旁路记录（不改回执，`browser_timeline` 自身读取不记录）、`plugin/bridge.js` 的 `setTimeline`/`GET /timeline`、面板底部「动作 N 条」可展开条（`CLIENT_REV` 65）；`actionFailure` 给页面级拒绝补 `error.code`，时间线里显示稳定码；无新错误码（仍 21），工具 16→17；验收期修四处（`timeline.js` 漏 COPY、漏 dist files、`summary` 显示 `undefined`、读入账），check-docs 第 7 项扩到宿主模块与 dist files；单测新增 `timeline.test.mjs` 7 例，394→**401**；真机证据见 `docs/cases/030` |
+| TICKET-062 快照预算规划 | ✅ 2026-11-28 实现并真机通过（1.5.28，阶段 B2 可核对）：`browser_snapshot` 交付前先过宿主侧纯函数 `planSnapshot`——装得下就逐字交付，装不下按 `TEXT_CAPS` 逐级省略正文（`- text` 行与无 ref/loc 的元素行）取能装下整棵树的最大一档，可交互行永不动；更紧时折叠连续同 role 正文/重复项；折叠后长度计入预算估计；最紧时按行切 + `cursor` 续读（语义不变）。页面侧只回全量 `lines`+`stamp`（`options.raw`），旧 `text` 路径保留；`CLIENT_REV` 67、工具仍 20、错误码 21、默认 8000 行为不变。验收期三修：元素行省略、折叠预算、role 识别。单测 `snapshot-plan.test.mjs` 17 例，453→**470**；check-docs 七项（打包清单 8 inject + 16 宿主 + dist files）；真机 E1–E4（887 B 内 6 个 ref 全在 / 500 预算切 11/26 / 续读 12→22 / 默认 26 行不变），证据 `docs/cases/036-snapshot-budget-cases.md` |
 | TICKET-058 下载与截图索引 `browser_files` | ✅ 2026-11-28 实现并真机通过（1.5.25，阶段 B2 可核对）：新增第 19 个工具 `browser_files({kind?,since?,match?,limit?})`——直接列工作区 `screenshots/` 与 `<downloads.dir>/` 两个产出目录，每条 `{kind,name,path,bytes,at}`（工作区相对 posix），按 mtime 新→旧、`limit` 默认 20 夹 1–100、`total` 报过滤后全量；`kind`/`match`/`since`（ISO 或毫秒）过滤；纯读零审批、不碰桥与相位，面板关着与 DSH 重启后仍可用；空目录返回提示不算错误；无新错误码（仍 21）、`CLIENT_REV` 65 不变、工具 18→19。验收期修 description 嵌套反引号与空目录文案；下载桶真机受 loopback 下载策略限制、由单测覆盖（cases/032）。单测 `files.test.mjs` 8 例、全量 421→**429**，七项门禁全绿；真机证据见 `docs/cases/032`。 |
 | TICKET-057 页面文字与表格抽取 `browser_read` | ✅ 2026-11-27 实现并真机通过（1.5.24，阶段 B2 可核对）：新增第 18 个工具 `browser_read({mode?,loc?,selector?,ref?,strict?,maxChars?,maxTables?,maxRows?})`——`text` 模式给渲染后的正文（`innerText`，隐藏节点不算、空白归一），`table` 模式给每张 `<table>` 的 caption/headers/rows/rowCount；预算 `maxChars` 8000（200–40000）、`maxTables` 10（1–20）、`maxRows` 100（1–500），截断有 `truncated`/`chars`/`totalChars`；纯读零审批，`needs_human`/`taken_over` 放行（`READ_TYPES` 加 `read`），不点击/滚动/聚焦；失败复用 `stale_loc`/`multiple`/`not_found`/`bad_loc`，无新错误码（仍 21）；`CLIENT_REV` 65 不变。单测 `read.test.mjs` 20 例（页面侧 9、工具侧 11，含真实 Bridge 人工相位不拦截），全量 401→**421**；check-docs 七项全绿（配置 23、工具 18、YAML 14、decisions 10、B11、file:line 12、打包清单 8 inject + 15 宿主 + dist files）；验收期修失败回执缺地址一条；真机证据 `docs/cases/031`；tgz 381,295 B / sha `ddb4226e…` |
 | TICKET-046 快照 `cursor` 续读 | ✅ 2026-11-27 实现并真机通过（1.5.7，阶段 B2 观察增强）：`browser_snapshot` 被字符预算截断时返回 `cursor`（`<stamp>@<offset>`，stamp = URL FNV-1a 指纹 + 总行数 + 引用数 + 字符数），带 `cursor` 再调用只取下一段并插 `- continued from line N of M` 抬头；页面在两次快照之间变化 → 第 18 个错误码 `stale_cursor`（`retryable:true`，hint 重拍整棵树）；续读默认不附图（`CLIENT_REV` 53）；新增 `plugin/test/snapshot-cursor.test.mjs` 7 例 → 全量 289→**296**；真机 `demo/long.html`（截断 16/132→续读不重复、追加 10 行后旧 cursor → `stale_cursor`、续读默认不附图 291.5 KB→584 B），证据 `docs/cases/020` |
@@ -125,7 +126,8 @@ docs/cases/
   shots/                           取证截图（`baidu-earth-hangzhou.png` 地球/卫星视图下的杭州（V12 主案例）、`guangzhou-terrain.png` 广州地势图、`baidu-guangzhou-14z.png` 坐标点击到 14z、`baidu-earth-guangzhou.png` 同视图下的广州（历史））
 dist/
   dsh-plugin-agent-browser/         发布产物（扁平结构，纯 JS 无构建）
-    dsh-plugin-agent-browser-1.5.27.tgz 394,177 B / 28 文件，现役版本，`plugin_manager install_bundle` 直接装（sha256 `1db2ad348ab4c8bcd0b9b1c56683461b6c8960e0c10593f851c170922c93edcb`）
+    dsh-plugin-agent-browser-1.5.28.tgz 398,353 B / 33 文件，现役版本，`plugin_manager install_bundle` 直接装（sha256 `98c27b7aa6286c078e85b1258bcc1b807083e42ab5b636cb47c659ec57e1dd79`；相对 1.5.27：TICKET-062 快照预算规划）
+dsh-plugin-agent-browser-1.5.27.tgz 394,177 B / 32 文件，上一个版本，`plugin_manager install_bundle` 直接装（sha256 `1db2ad348ab4c8bcd0b9b1c56683461b6c8960e0c10593f851c170922c93edcb`），`plugin_manager install_bundle` 直接装（sha256 `1db2ad348ab4c8bcd0b9b1c56683461b6c8960e0c10593f851c170922c93edcb`）
     dsh-plugin-agent-browser-1.5.26.tgz 389,988 B / 28 文件，上一个版本，`plugin_manager install_bundle` 直接装（sha256 `ebedd8ad08b854588d9ba48f793ffe8a32d5c18874b33141bea28dcfbc143661`；相对 1.5.25：新增 TICKET-059 表单批量填写 `browser_fill`）
     dsh-plugin-agent-browser-1.5.25.tgz 384,156 B / 28 文件，历史（被 1.5.26 取代），`plugin_manager install_bundle` 直接装（sha256 `c347986c9624b14157a0b1a01a5d59bbff378446e17a256c756854b8925442b7`）
 dsh-plugin-agent-browser-1.5.24.tgz 381,295 B / 28 文件，历史（被 1.5.25 取代），`plugin_manager install_bundle` 直接装（sha256 `ddb4226e412f19583f5bd8775f1fd891d34a5e66caf2a9cb3ee1de7128dcd753`；相对 1.5.23：TICKET-057 页面阅读——`inject/read.js` + `Guest.read` + `browser_read`，`CLIENT_REV` 65 不变，工具 18、单测 421，真机证据 `docs/cases/031`）
@@ -202,8 +204,9 @@ test/timeline.test.mjs            动作时间线单测（7 例：环形容量/s
 test/files.test.mjs               文件索引单测（8 例：两类混排与 mtime 排序、kind/match/since 过滤、limit 截断与 total 口径、空目录提示、render 格式、工具元数据；下载桶由它覆盖）
 test/read.test.mjs                页面阅读单测（20 例：正文归一/截断、loc/ref/selector、隐藏文字不读、表格表头行列、三种稳定码、工具一次请求/预算夹取/渲染/错误文案、真实 Bridge 人工相位不拦截）
 test/fill.test.mjs               表单批量填写单测（6 例：请求形状/committed/render、submit 地址透传与 navigated、页面拒绝保留码与「first N filled」、stale_loc 说 Nothing was filled、畸形参数零请求、工具元数据）
-test/png.test.mjs                 PNG 编解码单测（3 例：按标记切出出厂代码，编码→解码逐像素对拍）——全量 **453 例**
+test/png.test.mjs                 PNG 编解码单测（3 例：按标记切出出厂代码，编码→解码逐像素对拍）——全量 **470 例**
 test/upload.test.mjs              browser_upload 单测（15 例：路径/限额/审批前置/inspect 阈值/页面侧合成 File + 5 例批量 fields：一次确认两条命令、整批拒绝、index、上限、形状）
+test/snapshot-plan.test.mjs       快照预算规划单测（17 例：整页装下、正文省略但 ref 保留、自适应 textCap、极紧预算 cut+nextOffset、ref 行不缩、元素行省略、同 role 折叠、from 续读、非法输入、确定性、工具级 lines 路径与旧 text 路径）
 test/download.test.mjs            browser_download 单测（8 例：单 URL 旧形状、批量一次确认、部分失败逐项、全失败 effect none、坏 URL/loopback 整批拒绝、策略拒绝、形状校验）
 test/scroll.test.mjs              browser_scroll 寻址滚动单测（8 例：工具层 dy/loc 映射、地址互斥与零请求、stale_loc 透传；页面层 scrollIntoView 一次、rect/visible/fullyVisible、stale loc 不动页面、bad_loc）
     test/console.test.mjs             browser_snapshot 的 console 尾巴单测（4 例：映射与 render、无日志时逐字不变、只留 10 条并报隐藏数、畸形条目丢弃）
@@ -275,6 +278,8 @@ docs/tickets/
 - 截图的视觉 token 不便宜，但 `browser_snapshot` **默认每次附图**——这是刻意的取舍（决策 D08），截图缩到 768px 宽、可用 `includeImage:false` 临时关掉
 - 面板 body **跨会话存续**：`keepMounted: true` 让侧栏 tab 在切会话后不卸载，页面与页面内状态都留着（2026-11-20 实测，切回来 `hits` 计数还在）。以后若为省内存改成"只挂当前会话"，必须重新验这条
 - "点了"不等于"页面动了"：需要导航的点击现在会比对 URL 并回 `navigated:false`（1.0.20+），判定任务时先看地址与快照 URL 是否一致
+
+- 进度（2026-11-28，傍晚）：**阶段 B 第十九个能力「快照预算规划」（TICKET-062）已实现并真机通过**——`browser_snapshot` 把「同样字符预算里装什么」交给宿主侧纯函数：`maxChars:900` 在长正文页 887 B 内让 6 个 ref 全在、正文带 `… (+N chars elided)`、列表折叠；`maxChars:500` 切在 11/26 并给 cursor，续读 `continued at line 12/26` 不丢 ref；默认 8000 仍输出 26 行全文。页面侧新增 `options.raw`（只回全量 lines+stamp），`CLIENT_REV` 67，工具 20 不变；三处验收期修复（元素行省略、折叠计入预算、role 识别）。全量 470/470，1.5.28 已装机（398,353 B / sha256 `98c27b7a…`），案例 `docs/cases/036`。
 
 ## 下一步
 

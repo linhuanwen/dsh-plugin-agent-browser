@@ -9,10 +9,10 @@
 `dsh-plugin-agent-browser` · DSH 桌面端插件
 
 <p>
-  <img alt="version 1.5.27" src="https://img.shields.io/badge/version-1.5.27-2563eb?style=flat-square" />
+  <img alt="version 1.5.28" src="https://img.shields.io/badge/version-1.5.28-2563eb?style=flat-square" />
   <img alt="DSH 0.2.2 - 0.3.0" src="https://img.shields.io/badge/DSH-0.2.2%20~%200.3.0-1d4ed8?style=flat-square" />
   <img alt="17 tools" src="https://img.shields.io/badge/tools-17-0f766e?style=flat-square" />
-  <img alt="453 tests passed" src="https://img.shields.io/badge/tests-453%20passed-16a34a?style=flat-square" />
+  <img alt="470 tests passed" src="https://img.shields.io/badge/tests-470%20passed-16a34a?style=flat-square" />
   <img alt="platform Windows and macOS" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-475569?style=flat-square" />
   <img alt="license MIT" src="https://img.shields.io/badge/license-MIT-0284c7?style=flat-square" />
 </p>
@@ -79,7 +79,7 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 | **失败不毁现场** | 导航失败自动退回上一页，错误里带 `nav_dns` / `nav_cert` / `nav_blocked` 等具体原因；错误页上不会返回空树假成功 |
 | **过程看得见** | Web 端为截图 / 打开 / 下载各出一张工具卡片，模型调了什么、页面长什么样，一眼可查 |
 | **设置就在 DSH 里** | 装好后「设置」左侧多一页 **浏览器面板**：行为、预算、下载、搜索兜底、会话白名单、本地文件服务六组表单，改完保存即可，不用手改 YAML |
-| **工程化底座** | 动态端口 + 每进程令牌、21 个稳定错误码、取消、策略接缝、453 个单测 |
+| **工程化底座** | 动态端口 + 每进程令牌、21 个稳定错误码、取消、策略接缝、470 个单测 |
 
 ## 快速开始
 
@@ -98,7 +98,7 @@ DSH 桌面端本来就能开网页：你点开、你操作。这个插件补的�
 
 ```text
 plugin_manager action: install_bundle
-                target: dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.27.tgz
+                target: dist/dsh-plugin-agent-browser/dsh-plugin-agent-browser-1.5.28.tgz
 ```
 
 ### 3. 打开面板
@@ -306,7 +306,7 @@ screenshots/    运行截图 —— 案例证据与复跑留档
 仓库是纯 JS，**没有构建步骤**；插件源码在 `plugin/`，发布产物在 `dist/`。
 
 ```bash
-# 单测（453 例）
+# 单测（470 例）
 node --test --test-timeout=60000 plugin/test/*.test.mjs
 
 # 打包 tgz
